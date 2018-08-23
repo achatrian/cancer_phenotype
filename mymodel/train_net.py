@@ -8,7 +8,7 @@ from pathlib import Path
 from numbers import Integral
 
 import numpy as np
-from torchvision.transforms import ToTensor
+from torchvision.transforms import ToTensor  #NB careful -- this changes the range from 0:255 to 0:1 !!!
 import torchvision.utils as vutils
 from torch import no_grad, cuda
 from tensorboardX import SummaryWriter
@@ -23,6 +23,8 @@ from tqdm import tqdm
 from imageio import imwrite
 from cv2 import cvtColor, COLOR_GRAY2RGB
 #from torchnet.logger import MeterLogger
+
+import warnings
 
 from models import *
 from utils import get_time_stamp, check_mkdir, str2bool, evaluate_multilabel, colorize, MultiLabelSoftDiceLoss, AverageMeter
@@ -44,12 +46,11 @@ def train(train_loader, net, criterion, optimizer, epoch, print_freq):
         inputs, labels = data
         N = inputs.size(0)
         inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
-        labels = Variable(labels).cuda() if cuda.is_available() else Variable(inputs)
+        labels = Variable(labels).cuda() if cuda.is_available() else Variable(labels)
 
         optimizer.zero_grad() #needs to be done at every iteration
         outputs = net(inputs)
 
-        #import pdb; pdb.set_trace()
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -63,36 +64,35 @@ def train(train_loader, net, criterion, optimizer, epoch, print_freq):
 
         curr_iter += 1
         writer.add_scalar('train_loss', train_loss.avg, curr_iter)
-        writer.add_scalar('train_acc', train_loss.avg, acc)
-        writer.add_scalar('train_dice', train_loss.avg, dice)
+        writer.add_scalar('train_acc', acc, curr_iter)
+        writer.add_scalar('train_dice', dice, curr_iter)
         if i % print_freq == 0:
             tqdm.write('epoch: {}, batch: {} - train - loss: {:.5f}, acc: {:.2f}, acc_cls: {}. dice: {:.2f}, dice_cls: {}'.format(
             epoch, i,  train_loss.avg, acc, acc_cls, dice, dice_cls))
 
 
-def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.2, val_save_to_img_file=True):
-    net.eval()
+def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.05, val_save_to_img_file=True):
+    net.eval() #!!
 
     val_loss = AverageMeter()
     inputs_smpl, gts_smpl, predictions_smpl = [], [], []
-    for vi, data in enumerate(val_loader):
+    for vi, data in enumerate(val_loader): #pass over whole validation dataset
         inputs, gts = data
         N = inputs.size(0)
         with no_grad(): #don't track variable history for backprop (to avoid out of memory)
+            #NB @pytorch variables and tensors will be merged in the future
             inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
             gts = Variable(gts).cuda() if cuda.is_available() else Variable(inputs)
             outputs = net(inputs)
-        #predictions = outputs.data.max(1)[1].squeeze_(1).cpu().numpy() #converting to cpu
-        predictions = outputs.data.cpu().numpy()
 
         val_loss.update(criterion(outputs, gts).data.item(), N)
 
-        val_num = int(np.ceil(val_imgs_sample_rate*N))
+        val_num = int(np.floor(val_imgs_sample_rate*N))
         val_idx = random.sample(list(range(N)), val_num)
         for idx in val_idx:
             inputs_smpl.append(inputs[idx,...].data.cpu().numpy())
             gts_smpl.append(gts[idx,...].data.cpu().numpy())
-            predictions_smpl.append(predictions[idx,...])
+            predictions_smpl.append(outputs[idx,...].data.cpu().numpy())
     gts_smpl = np.stack(gts_smpl, axis=0)
     predictions_smpl = np.stack(predictions_smpl, axis=0)
 
@@ -120,13 +120,13 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
 
         val_visual = []
         for idx, (input, gt, pred) in enumerate(zip(inputs_smpl, gts_smpl, predictions_smpl)):
-            gt_clr, pred_clr = colorize(gt), colorize(pred)
+            gt_rgb, pred_rgb = colorize(gt), colorize(pred)
+            input_rgb = input.transpose(1,2,0) if input.shape[0] == 3 else cvtColor(input.transpose(1,2,0) , COLOR_GRAY2RGB)
             if val_save_to_img_file:
-                imwrite(os.path.join(to_save_dir, "{}_input.png".format(idx)), input.transpose(1,2,0) if len(input.shape) > 2 else cvtColor(input, COLOR_GRAY2RGB))
-                imwrite(os.path.join(to_save_dir, "{}_pred.png".format(idx)), pred_clr)
-                imwrite(os.path.join(to_save_dir, "{}_gt.png".format(idx)), gt_clr)
-            import pdb; pdb.set_trace()
-            val_visual.extend([visualize(input.transpose(1,2,0) if len(input.shape) > 2 else cvtColor(input, COLOR_GRAY2RGB)), visualize(gt_clr), visualize(pred_clr)])
+                imwrite(os.path.join(to_save_dir, "{}_input.png".format(idx)), input_rgb)
+                imwrite(os.path.join(to_save_dir, "{}_pred.png".format(idx)), pred_rgb)
+                imwrite(os.path.join(to_save_dir, "{}_gt.png".format(idx)), gt_rgb)
+            val_visual.extend([visualize(input_rgb), visualize(gt_rgb), visualize(pred_rgb)])
         val_visual = stack(val_visual, 0)
         val_visual = vutils.make_grid(val_visual, nrow=3, padding=5)
         writer.add_image(snapshot_name, val_visual)
@@ -147,7 +147,8 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     return val_loss.avg
 
 def main(FLAGS):
-    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters, 'grayscale' : FLAGS.grayscale}
+    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters,
+            'grayscale' : FLAGS.grayscale, 'batchnorm' : FLAGS.batchnorm}
     if FLAGS.network_id == "UNet1":
         net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs) #possible classes are stroma, gland, lumen
     elif FLAGS.network_id == "UNet2":
@@ -172,14 +173,16 @@ def main(FLAGS):
 
     if FLAGS.num_class>1:
         if FLAGS.losstype == 'ce':
-            criterion = MultiLabelSoftMarginLoss(size_average=True, weights=FLAGS.class_weights).cuda() #loss
+            criterion = MultiLabelSoftMarginLoss(size_average=True, weight=FLAGS.class_weights) #loss
         else:
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights).cuda()
+            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
     else:
         if FLAGS.losstype == 'ce':
-            criterion = BCEWithLogitsLoss(size_average=True).cuda()
+            criterion = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
         else:
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights).cuda()
+            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
+
+    if cuda.is_available(): criterion = criterion.cuda()
 
     optimizer = optim.Adam([
         {'params': [param for name, param in net.named_parameters() if name[-4:] == 'bias'],
@@ -196,11 +199,13 @@ def main(FLAGS):
 
     check_mkdir(ckpt_path)
     check_mkdir(os.path.join(ckpt_path, exp_name))
-    open(os.path.join(ckpt_path, exp_name, str(datetime.datetime.now()) + '.txt'), 'w').write(str(FLAGS) + '\n\n')
+    #Save arguments
+    with open(os.path.join(ckpt_path, exp_name, str(timestamp) + '.txt'), 'w') as argsfile:
+        argsfile.write(str(FLAGS) + '\n\n')
 
     #Train
     train_dataset = ProstateDataset(FLAGS.data_dir, "train", out_size=FLAGS.image_size, down=FLAGS.downsample,
-                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale)
+                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale, augment=True)
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, shuffle=True, num_workers=FLAGS.workers)
     val_dataset = ProstateDataset(FLAGS.data_dir, "validate", out_size=FLAGS.image_size, down=FLAGS.downsample,
                     num_class=FLAGS.num_class, grayscale=FLAGS.grayscale)
@@ -210,7 +215,7 @@ def main(FLAGS):
     model_parameters = filter(lambda p: p.requires_grad, net.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
     print("Running on GPUs: {}".format(FLAGS.gpu_ids))
-    print("Memory: Image size: {}, Batch size: {}, Net filter num: {}".format(FLAGS.image_size, FLAGS.batch_size, FLAGS.num_filters))
+    print("Memory: Image size: {}, Batch size: {} (batchnorm: {}),  Net filter num: {}".format(FLAGS.image_size, FLAGS.batch_size, FLAGS.batchnorm, FLAGS.num_filters))
     print("Network has {} parameters".format(params))
     print("Using network {}, {} loss".format(FLAGS.network_id, FLAGS.losstype))
     print("Saving results in {}".format(ckpt_path))
@@ -218,7 +223,7 @@ def main(FLAGS):
 
     for epoch in range(curr_epoch, FLAGS.epochs):
         train(train_loader, net, criterion, optimizer, epoch, FLAGS.print_freq)
-        if epoch % 5 == 1: #so it validates at first epoch too
+        if epoch % 10 == 1: #so it validates at first epoch too
             val_loss = validate(val_loader, net, criterion, optimizer, epoch,
                         best_record, val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=True)
         scheduler.step(val_loss)
@@ -233,20 +238,21 @@ if __name__ == '__main__':
 
     parser.add_argument('--epochs', default=4000, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--batchnorm', default=False, type=str2bool)
 
     parser.add_argument('--network_id', type=str, default="UNet2")
     parser.add_argument('--num_class', type=int, default=3)
     parser.add_argument('-nf', '--num_filters', type=int, default=64, help='mcd number of filters for unet conv layers')
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
-    parser.add_argument('--learning_rate_patience', default=100, type=int)
+    parser.add_argument('--learning_rate_patience', default=50, type=int)
     parser.add_argument('--weight_decay', default=5e-4, type=float)
     #parser.add_argument('--momentum', default=0.95, type=float) #for SGD not ADAM
-    parser.add_argument('--losstype', default='dice', choices=['dice', 'ce'])
+    parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
     parser.add_argument('--class_weights', default=None)
 
     parser.add_argument('--print_freq', default=10, type=int)
     parser.add_argument('--val_batch_size', default=64, type=int)
-    parser.add_argument('--val_imgs_sample_rate', default=0.1, type=float)
+    parser.add_argument('--val_imgs_sample_rate', default=0.05, type=float)
     parser.add_argument('--snapshot', default='')
 
     parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
@@ -255,8 +261,6 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_folder', default='checkpoints', type=str, help='checkpoint folder')
     parser.add_argument('--resume', default='', type=str, help='which checkpoint file to resume the training')
 
-    parser.add_argument('--nf', type=int, default=64, help='max size of the activation maps')
-    parser.add_argument('--nz', type=int, default=512, help='size of the maximum activation maps')
-
     FLAGS, unparsed = parser.parse_known_args()
+    if unparsed: warnings.warn("Unparsed arguments")
     main(FLAGS)

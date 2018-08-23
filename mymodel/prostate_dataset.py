@@ -22,35 +22,60 @@ Example = namedtuple('example', ['img', 'gt'])
 ###Pytorch dataset###
 class ProstateDataset(Dataset):
 
-    def __init__(self, dir, mode, out_size=1024, down=2.0, num_class=1, grayscale=False):
+    def __init__(self, dir, mode, out_size=1024, down=2.0, num_class=1, grayscale=False, augment=None, load_wm=False):
         self.mode = mode
         self.dir = dir
         self.out_size = out_size
+        self.down = down
         self.num_class = num_class
         self.grayscale = grayscale
+        self.augment = augment #set augment, or augment wehn training
         assert(mode in ['train', 'validate', 'test'])
 
         #Read data paths
-        self.gt_files = glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9][0-9][0-9],[0-9][0-9][0-9][0-9].png'), recursive=True)
+        self.gt_files = glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9],[0-9].png'), recursive=True) #for 1,1 patch
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9],[0-9][0-9].png'), recursive=True))
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9][0-9],[0-9][0-9][0-9].png'), recursive=True))
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9][0-9][0-9],[0-9][0-9][0-9][0-9].png'), recursive=True))
         self.img_files = [re.sub('mask', 'img', filename) for filename in self.gt_files]
+        self.weightmap_f = glob.glob('**/_weightmap_[0-9],[0-9].png', recursive=True)
+        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9],[0-9][0-9].png', recursive=True))
+        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9][0-9],[0-9][0-9][0-9].png', recursive=True))
+        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9][0-9][0-9],[0-9][0-9][0-9][0-9].png', recursive=True))
         assert(self.gt_files); r"Cannot be empty"
+        assert(self.img_files);
 
         #Augmentation sequence
-        self.crop_aug = RandomCrop(int(out_size*down))
         self.downsample = Downsample(down, min_size=out_size)
-        if self.mode == 'train':
+        if self.mode == 'train': self.crop_aug = RandomCrop(int(out_size*down))
+        elif self.mode in ['validate', 'test']: self.center_crop = CenterCrop(int(out_size*down))
+
+        if self.augment:
             geom_augs = [iaa.Affine(rotate=45),
                         iaa.Fliplr(0.8),
                         iaa.Flipud(0.8),
-                        iaa.PiecewiseAffine(scale=(0.01, 0.05))]
-            img_augs = [iaa.AdditiveGaussianNoise(scale=0.2*255),
+                        iaa.PiecewiseAffine(scale=(0.01, 0.05)),
+                        ]
+            img_augs = [iaa.AdditiveGaussianNoise(scale=0.05*255),
                             iaa.Add(40, per_channel=True),
                             iaa.Dropout(p=(0, 0.2)),
-                            iaa.ElasticTransformation(alpha=(0, 5.0), sigma=0.25)]
+                            iaa.ElasticTransformation(alpha=(0, 5.0), sigma=0.25),
+                            iaa.AverageBlur(k=(2, 7)),
+                            iaa.MedianBlur(k=(3, 7)),
+                            iaa.Sharpen(alpha=(0.0, 0.5), lightness=(0.75, 1.5)),
+                            iaa.Emboss(alpha=(0.0, 0.5), strength=(0.5, 1.0)),
+                            iaa.EdgeDetect(alpha=(0.0, 0.5))]
+            if not self.grayscale:
+                #Add color modifications
+                img_augs.append(iaa.WithChannels(0, iaa.Add((10, 50))))
+                img_augs.append(iaa.WithChannels(1, iaa.Add((10, 50))))
+                img_augs.append(iaa.WithChannels(3, iaa.Add((10, 50))))
+                img_augs.append(iaa.ContrastNormalization((0.5, 1.5)))
+                img_augs.append(iaa.Multiply((0.5, 1.5)))
+                img_augs.append(iaa.Invert(0.5))
+                img_augs.append(iaa.Grayscale(alpha=(0.0, 1.0)))
             self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
-            self.img_aug_seq = iaa.SomeOf((0, None), img_augs) #only img
-        elif self.mode == 'validate':
-            self.center_crop = CenterCrop(out_size)
+            self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
 
     def __len__(self):
         return len(self.img_files)
@@ -61,15 +86,18 @@ class ProstateDataset(Dataset):
         assert(len(set(gt.flatten())) <= 3); "Number of classes is greater than specified"
 
         #Pad images to desired size (for smaller tiles):
-        if img.shape[0] < self.out_size or img.shape[1] < self.out_size:
-            delta_w = self.out_size - img.shape[0]
-            delta_h = self.out_sizes - img.shape[1]
-            top, bottom = delta_h//2, delta_h-(delta_h//2)
-            left, right = delta_w//2, delta_w-(delta_w//2)
-            img = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT,
-                value=[0,0,0])
-            gt = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT,
-                value=[0])
+        size_b4_down = self.out_size * int(self.down)
+        too_narrow = img.shape[1] < size_b4_down
+        too_short = img.shape[0] < size_b4_down
+        if too_narrow or too_short:
+            delta_w = size_b4_down - img.shape[1] if too_narrow else 0
+            delta_h = size_b4_down - img.shape[0] if too_short else 0
+            top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+            left, right = delta_w // 2, delta_w - (delta_w // 2)
+            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0,0,0])
+            gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
+            assert(img.shape[0] >= size_b4_down and img.shape[1] >= size_b4_down)  #Ensure padded
+            assert(gt.shape[0] >= size_b4_down and gt.shape[1] >= size_b4_down)  #Ensure padded
 
         #Transform gt to desired number of classes
         if self.num_class > 1: gt = self.split_gt(gt)
@@ -80,21 +108,24 @@ class ProstateDataset(Dataset):
 
         if self.mode == 'train':
             #Augment:
-            geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
-            img_aug = self.crop_aug([img], random_state=1)[0]
-            img_aug = self.downsample(img_aug)
-            img_aug = geom_seq_det.augment_image(img_aug)
-            img_aug = self.img_aug_seq.augment_image(img_aug)
-            gt_aug = self.crop_aug([gt], random_state=1)[0]
-            gt_aug = self.downsample(gt_aug)
-            gt_aug = geom_seq_det.augment_image(gt_aug)
-            return self.to_tensor(img_aug, gt_aug)
+            img = self.crop_aug([img], random_state=1)[0] #crop to out_size * downsample
+            img = self.downsample(img) #downsample to size out_sizee
+            gt = self.crop_aug([gt], random_state=1)[0]
+            gt = self.downsample(gt)
         else:
             img = self.center_crop(img) #center crop tiles when testing
             img = self.downsample(img) #downsample like in training
             gt = self.center_crop(gt)
             gt = self.downsample(gt)
-            return self.to_tensor(img, gt)
+
+        if self.augment:
+            geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
+            img = geom_seq_det.augment_image(img)
+            img = self.img_seq.augment_image(img)
+            img.clip(0, 255) #ensure added values don't stray from normal boundaries
+            gt = geom_seq_det.augment_image(gt)
+
+        return self.to_tensor(img, gt)
 
     def split_gt(self, gt, cls_values=[0,2,4], merge_cls={4:2}):
         cls_gts=[]
@@ -127,8 +158,7 @@ class ProstateDataset(Dataset):
         gt = gt.transpose((2, 0, 1))
         img = torch.from_numpy(img.copy()).type(torch.FloatTensor)
         gt = torch.from_numpy(gt.copy()).type(torch.FloatTensor)
-        return Example(img=img,
-        gt=gt)
+        return Example(img=img, gt=gt)
 
 
 class RandomCrop(object):
