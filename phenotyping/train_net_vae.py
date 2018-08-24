@@ -8,12 +8,10 @@ from pathlib import Path
 from numbers import Integral
 
 import numpy as np
+import torch
 from torchvision.transforms import ToTensor  #NB careful -- this changes the range from 0:255 to 0:1 !!!
 import torchvision.utils as vutils
-from torch import no_grad, cuda
 from tensorboardX import SummaryWriter
-from torch import optim
-from torch import save, load, stack
 from torch.autograd import Variable
 from torch.backends import cudnn
 from torch.nn import DataParallel, MultiLabelSoftMarginLoss, CrossEntropyLoss, BCEWithLogitsLoss
@@ -29,9 +27,9 @@ import warnings
 from models import *
 from utils import get_time_stamp, check_mkdir, str2bool, evaluate_multilabel, colorize, MultiLabelSoftDiceLoss, AverageMeter
 
-from prostate_dataset import ProstateDataset
+from gland_dataset import GlandDataset
 
-cudnn.benchmark = True
+torch.cudnn.benchmark = True
 
 timestamp = get_time_stamp()
 ckpt_path = str(Path.home()) + "/ProstateCancer/logs/" + timestamp + "/ckpt"
@@ -39,47 +37,106 @@ exp_name = ''
 writer = SummaryWriter(os.path.join(ckpt_path, exp_name))
 visualize = ToTensor()
 
-def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_freq):
-    train_loss = AverageMeter()
+FAKE_LABEL=0
+
+def train(train_loader, netG, netD, ce, mse, optimizerG, optimizerD, epoch, load_weightmap, print_freq):
+    train_lossD = AverageMeter()
+    train_loss_vae = AverageMeter()
+    train_lossG = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
     for i, data in enumerate(tqdm(train_loader)):
+
+        ### TRAIN D WITH REAL DATA###
         if not load_weightmap:
-            inputs, labels = data
+            inputs = data
         else:
-            inputs, labels, weightmaps = data
+            inputs, weightmaps = data
         N = inputs.size(0)
-        inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
-        labels = Variable(labels).cuda() if cuda.is_available() else Variable(labels)
-        if load_weightmap and cuda.is_available():
-            weightmaps = weightmaps.cuda()
+        inputs = Variable(inputs)
+        labels = Variable((torch.zeros(N) if not FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
+        #TODO check if filling tensors like done in main of dcgan-vae is quicker?
+        if torch.cuda.is_available():
+            inputs = inputs.cuda()
+            labels = label.cuda()
+            if load_weightmap:
+                weightmaps = weightmaps.cuda()
 
-        optimizer.zero_grad() #needs to be done at every iteration
-        outputs = net(inputs)
+        optimizerD.zero_grad() #needs to be done at every iteration
+        outputsD = netD(inputs)
 
-        loss = criterion(outputs, labels)
+        lossD = ce(outputsD, labels)
         if load_weightmap:
             scale = (5*weightmaps + torch.ones_like(weightmaps))
-            loss *= scale
-            loss = loss.mean()
+            lossD *= scale
+            lossD = lossD.mean()
 
-        loss.backward()
-        optimizer.step()
+        lossD.backward()
+        optimizerD.step()
+        train_lossD.update(lossD.data.item(), N)
+        D_x = outputsD.data.mean()
+        ######
 
-        train_loss.update(loss.data.item(), N)
+        ### TRAIN D WITH GENERATED DATA ###
+        noise = torch.normal(torch.zeros_like(inputs), torch.ones_like(inputs))
+        gen_inputs = netG.decoder(noise)
+        labels = Variable((torch.zeros(N) if FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
+        if torch.cuda.is_available():
+            gen_inputs = inputs.cuda()
+            label = label.cuda()
+            if load_weightmap:
+                weightmaps = weightmaps.cuda()
 
-        #Compute training metrics:
-        predictions = outputs.data.cpu().numpy()
-        gts = labels.data.cpu().numpy()
-        acc, acc_cls, dice, dice_cls = evaluate_multilabel(predictions, gts)
+        optimizerD.zero_grad() #needs to be done at every iteration
+        outputsD = netD(gen_inputs)
+
+        lossD = ce(outputsD, labels)
+        if load_weightmap:
+            scale = (5*weightmaps + torch.ones_like(weightmaps))
+            lossD *= scale
+            lossD = lossD.mean()
+
+        lossD.backward()
+        optimizerD.step()
+        D_G_z1 = outputsD.data.mean()
+        train_lossD.update(lossD.data.item(), N)
+        #####
+
+        ###TRAIN G on reconstruction (on content error)#######
+        #NB no need for zero grad on G here?
+        netG.zero_grad() #neeeded ???
+        encoded = netG.encoder(input)
+        mu = encoded[0]
+        logvar = encoded[1]
+        kld_elements = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+        kld_lossG = torch.sum(kld_elements).mul_(-0.5)
+        sampled = netG.sampler(encoded)
+        rec = netG.decoder(sampled) #reconstructed
+
+        mse_lossG = mse(rec,inputs)
+        vae_loss = kld_lossG + mse_lossG #summed to do optimization in one go?
+        vae_loss.backward()
+        optimizerG.step()
+        #####
+
+        ### Train G based on discrimination result (on style error)###
+        netG.zero_grad()
+        labels = Variable((torch.zeros(N) if not FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
+        rec = netG(input) # this tensor is freed from mem at this point
+        outputsD = netD(rec)
+        lossG = ce(outputsD, labels)
+        lossG.backward()
+        optimizerG.step()
+        D_G_z2 = outputsD.data.mean()
+        ####
+
+        if i % print_freq == 0:
+            print('[epoch %d][batch s%d] recon loss: %.4f discr loss: %.4f gen loss: %.4f D(x): %.4f D(G(z)): %.4f / %.4f'
+                % (epoch, i, train_loss_vae.avg, train_lossD.avg, train_lossG.avg, D_x, D_G_z1, D_G_z2))
 
         curr_iter += 1
-        writer.add_scalar('train_loss', train_loss.avg, curr_iter)
-        writer.add_scalar('train_acc', acc, curr_iter)
-        writer.add_scalar('train_dice', dice, curr_iter)
-        if i % print_freq == 0:
-            tqdm.write('epoch: {}, batch: {} - train - loss: {:.5f}, acc: {:.2f}, acc_cls: {}. dice: {:.2f}, dice_cls: {}'.format(
-            epoch, i,  train_loss.avg, acc, acc_cls, dice, dice_cls))
-
+        writer.add_scalar('discr_loss', train_lossD.avg, curr_iter)
+        writer.add_scalar('recon_loss', train_loss_vae.avg, curr_iter)
+        writer.add_scalar('gen_loss', train_lossG.avg, curr_iter)
 
 def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.05, val_save_to_img_file=True):
     net.eval() #!!
@@ -89,10 +146,10 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     for vi, data in enumerate(val_loader): #pass over whole validation dataset
         inputs, gts = data
         N = inputs.size(0)
-        with no_grad(): #don't track variable history for backprop (to avoid out of memory)
+        with torch.no_grad(): #don't track variable history for backprop (to avoid out of memory)
             #NB @pytorch variables and tensors will be merged in the future
-            inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
-            gts = Variable(gts).cuda() if cuda.is_available() else Variable(inputs)
+            inputs = Variable(inputs).cuda() if torch.cuda.is_available() else Variable(inputs)
+            gts = Variable(gts).cuda() if torch.cuda.is_available() else Variable(inputs)
             outputs = net(inputs)
 
         val_loss.update(criterion(outputs, gts).data.item(), N)
@@ -121,8 +178,8 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
         best_record['dice_cls'] = dice_cls
         snapshot_name = 'epoch_.{:d}_loss_{:.5f}_acc_{:.5f}_dice_{:.5f}_lr_{:.10f}'.format(
             epoch, val_loss.avg, acc, dice, optimizer.param_groups[1]['lr'])
-        save(net.state_dict(), os.path.join(ckpt_path, exp_name, snapshot_name + '.pth'))
-        save(optimizer.state_dict(), os.path.join(ckpt_path, exp_name, 'opt_' + snapshot_name + '.pth'))
+        torch.save(net.state_dict(), os.path.join(ckpt_path, exp_name, snapshot_name + '.pth'))
+        torch.save(optimizer.state_dict(), os.path.join(ckpt_path, exp_name, 'opt_' + snapshot_name + '.pth'))
 
         if val_save_to_img_file:
             to_save_dir = os.path.join(ckpt_path, exp_name, str(epoch))
@@ -137,7 +194,7 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
                 imwrite(os.path.join(to_save_dir, "{}_pred.png".format(idx)), pred_rgb)
                 imwrite(os.path.join(to_save_dir, "{}_gt.png".format(idx)), gt_rgb)
             val_visual.extend([visualize(input_rgb), visualize(gt_rgb), visualize(pred_rgb)])
-        val_visual = stack(val_visual, 0)
+        val_visual = torch.stack(val_visual, 0)
         val_visual = vutils.make_grid(val_visual, nrow=3, padding=5)
         writer.add_image(snapshot_name, val_visual)
 
@@ -158,25 +215,36 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
 
 def main(FLAGS):
     if isinstance(FLAGS.gpu_ids[0], Integral):
-        cuda.set_device(FLAGS.gpu_ids[0])
+        torch.cuda.set_device(FLAGS.gpu_ids[0])
+        num_gpus = len(FLAGS.gpu_ids)
     else:
-        cuda.set_device(FLAGS.gpu_ids)
+        torch.cuda.set_device(FLAGS.gpu_ids)
+        num_gpus=1
 
-    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters,
-            'grayscale' : FLAGS.grayscale, 'batchnorm' : FLAGS.batchnorm}
-    if FLAGS.network_id == "UNet1":
-        net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs) #possible classes are stroma, gland, lumen
-    elif FLAGS.network_id == "UNet2":
-        net = UNet2(**inputs).cuda() if cuda.is_available() else UNet2(**inputs)
-    if not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available():
-        net = DataParallel(net, device_ids=FLAGS.gpu_ids).cuda()
+    ###LOAD MODELS####
+    netD = _netD(FLAGS.image_size, num_gpus)
+    netG = _netG(FLAGS.imageSize,ngpu)
+    netD.apply(weights_init) #initialize
+    netG.apply(weights_init)
+    if FLAGS.netD != '':
+        netD.load_state_dict(torch.load(FLAGS.netD))
+    if FLAGS.netG != '':
+        netG.load_state_dict(torch.load(FLAGS.netG))
+    if torch.cuda.is_available:
+        netD.cuda()
+        netG.make_cuda()
+
+    if not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and torch.cuda.is_available():
+        netD = DataParallel(netD, device_ids=FLAGS.gpu_ids).cuda()
+        netG = DataParallel(netG, device_ids=FLAGS.gpu_ids).cuda()
 
     if len(FLAGS.snapshot) == 0:
         curr_epoch = 1
         best_record = {'epoch': 0, 'val_loss': 1e10, 'acc': 0, 'acc_cls': [0,0,0], 'dice': -.001, 'dice_cls': [-.001,-.001,-.001]}
     else:
+        raise NotImplementedError
         print('training resumes from ' + FLAGS.snapshot)
-        net.load_state_dict(load(os.path.join(ckpt_path, exp_name, FLAGS.snapshot)))
+        net.load_state_dict(torch.load(os.path.join(ckpt_path, exp_name, FLAGS.snapshot)))
         split_snapshot = FLAGS.snapshot.split('_')
         curr_epoch = int(split_snapshot[1]) + 1
         best_record = {'epoch': int(split_snapshot[1]), 'val_loss': float(split_snapshot[3]),
@@ -185,37 +253,32 @@ def main(FLAGS):
                                'dice': float(split_snapshot[9]),
                                'dice_cls': [ch for ch in split_snapshot[11] if isinstance(ch, Integral)]}
     net.train()
+    ###################
 
+    ###CRITERIONS####
     reduce = not FLAGS.load_weightmap
-    if FLAGS.num_class>1:
-        if FLAGS.losstype == 'ce':
-            criterion = MultiLabelSoftMarginLoss(reduce=reduce, weight=FLAGS.class_weights) #loss
-            criterion_val = MultiLabelSoftMarginLoss(size_average=True, weight=FLAGS.class_weights)
-        else:
-            raise NotImplementedError
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
-    else:
-        if FLAGS.losstype == 'ce':
-            criterion = BCEWithLogitsLoss(reduce=reduce, weight=FLAGS.class_weights)
-            criterion_val = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
-        else:
-            raise NotImplementedError
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
+    ce = nn.BCELoss()
+    mse = nn.MSELoss()
+    if torch.cuda.is_available():
+        ce = gan_criterion.cuda()
+        mse = vae_criterion.cuda()
+    ################
 
-    if cuda.is_available(): criterion = criterion.cuda()
+    optimizerD = torch.optim.Adam(netD.parameters(), lr=FLAGS.lr, betas=(FLAGS.beta1, 0.999))
+    optimimizerG = torch.optim.Adam(netG.parameters(), lr=FLAGS.lr, betas=(FLAGS.beta1, 0.999))
 
-    optimizer = optim.Adam([
-        {'params': [param for name, param in net.named_parameters() if name[-4:] == 'bias'],
-         'lr': 2 * FLAGS.learning_rate},
-        {'params': [param for name, param in net.named_parameters() if name[-4:] != 'bias'],
-         'lr': FLAGS.learning_rate, 'weight_decay': FLAGS.weight_decay}
-    ])
-
+    optimimizerD = torch.optim.Adam(netD.parameters(), lr=FLAGS.lr, betas=(FLAGS.beta1, 0.999))
+    optimimizerG = torch.optim.Adam(netG.parameters(), lr=FLAGS.lr, betas=(FLAGS.beta1, 0.999))
 
     if len(FLAGS.snapshot) > 0:
-        optimizer.load_state_dict(load(os.path.join(ckpt_path, exp_name, 'opt_' + FLAGS.snapshot)))
-        optimizer.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
-        optimizer.param_groups[1]['lr'] = FLAGS.learning_rate
+        ###NOT IMPLEMENTED
+        raise NotImplementedError
+        optimizerD.load_state_dict(torch.load(os.path.join(ckpt_path, exp_name, 'opt_' + FLAGS.snapshot)))
+        optimizerD.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
+        optimizerD.param_groups[1]['lr'] = FLAGS.learning_rate
+        optimizerG.load_state_dict(torch.load(os.path.join(ckpt_path, exp_name, 'opt_' + FLAGS.snapshot)))
+        optimizerG.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
+        optimizerG.param_groups[1]['lr'] = FLAGS.learning_rate
 
     check_mkdir(ckpt_path)
     check_mkdir(os.path.join(ckpt_path, exp_name))
@@ -224,11 +287,11 @@ def main(FLAGS):
         argsfile.write(str(FLAGS) + '\n\n')
 
     #Train
-    train_dataset = ProstateDataset(FLAGS.data_dir, "train", out_size=FLAGS.image_size, down=FLAGS.downsample,
-                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale, augment=True, load_wm=FLAGS.load_weightmap)
+    train_dataset = GlandDataset(FLAGS.data_dir, "train", out_size=FLAGS.image_size, down=FLAGS.downsample,
+                    num_class=FLAGS.num_class, augment=True)
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, shuffle=True, num_workers=FLAGS.workers)
-    val_dataset = ProstateDataset(FLAGS.data_dir, "validate", out_size=FLAGS.image_size, down=FLAGS.downsample,
-                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale)
+    val_dataset = GlandDataset(FLAGS.data_dir, "validate", out_size=FLAGS.image_size, down=FLAGS.downsample,
+                    num_class=FLAGS.num_class)
     val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, shuffle=True, num_workers=FLAGS.workers)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
 
@@ -237,16 +300,15 @@ def main(FLAGS):
     print("Running on GPUs: {}".format(FLAGS.gpu_ids))
     print("Memory: Image size: {}, Batch size: {} (batchnorm: {}),  Net filter num: {}".format(FLAGS.image_size, FLAGS.batch_size, FLAGS.batchnorm, FLAGS.num_filters))
     print("Network has {} parameters".format(params))
-    print("Using network {}, {} loss".format(FLAGS.network_id, FLAGS.losstype))
     print("Saving results in {}".format(ckpt_path))
     print("Begin training ...")
 
     for epoch in range(curr_epoch, FLAGS.epochs):
-        train(train_loader, net, criterion, optimizer, epoch, FLAGS.load_weightmap, FLAGS.print_freq)
-        if epoch % 10 == 1: #so it validates at first epoch too
-            val_loss = validate(val_loader, net, criterion_val, optimizer, epoch,
-                        best_record, val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=True)
-        scheduler.step(val_loss)
+        train(train_loader, netG, netD, ce, mse, optimizerG, optimizerD, epoch, FLAGS.load_weightmap, FLAGS.print_freq)
+        #if epoch % 10 == 1: #so it validates at first epoch too
+            #val_loss = validate(val_loader, net, criterion_val, optimizer, epoch,
+                        #best_record, val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=True)
+        #scheduler.step(val_loss)
 
 if __name__ == '__main__':
 
@@ -258,14 +320,10 @@ if __name__ == '__main__':
 
     parser.add_argument('--epochs', default=4000, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
-    parser.add_argument('--batchnorm', default=False, type=str2bool)
 
-    parser.add_argument('--network_id', type=str, default="UNet2")
-    parser.add_argument('--num_class', type=int, default=3)
     parser.add_argument('-nf', '--num_filters', type=int, default=64, help='mcd number of filters for unet conv layers')
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
     parser.add_argument('--learning_rate_patience', default=50, type=int)
-    parser.add_argument('--weight_decay', default=5e-4, type=float)
     #parser.add_argument('--momentum', default=0.95, type=float) #for SGD not ADAM
     parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
     parser.add_argument('--class_weights', default=None)

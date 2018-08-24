@@ -11,7 +11,7 @@ import multiprocessing as mp
 import torch.backends.cudnn as cudnn
 import numpy as np
 import lstm_cnn_data as lstm_cnn_dataset
-import imagio
+import imageio
 
 from torch.autograd import Variable
 from lstm_cnn import LSTMCNN
@@ -57,7 +57,7 @@ class TileWorkersTissueSegmentation(mp.Process):
                 self._queue.task_done()
                 break
 
-            file, result_dir, wsi_name, i_tile, total_file = data[0], data[1], data[2], data[3], data[4]
+            file, result_dir, wsi_name, i_tile, total_file = data
 
             start_time = time.time()
 

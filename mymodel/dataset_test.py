@@ -14,11 +14,13 @@ import imageio
 from prostate_dataset import ProstateDataset
 
 
-def test_dataset(dataset,visualize, viewnum=50, testgt=False, testshape=False):
-    print("Number of tiles = {}".format(len(dataset.img_files)))
-    print("Dataset length = {}".format(len(dataset)))
+def test_dataset(dataset,visualize, testgt=False, testshape=False):
 
     for idx, (img, gt) in enumerate(dataset):
+
+        if isinstance(dataset, DataLoader):
+            gt = gt[0,...]
+            img = img[0,...]
 
         shape = (512, 512)
         if testshape:
@@ -30,13 +32,13 @@ def test_dataset(dataset,visualize, viewnum=50, testgt=False, testshape=False):
             print(dataset.gt_files[idx])
             imageio.imwrite("~/Desktop/CheckGoodGTs/{}.png".format(idx), img.numpy().transpose(1,2,0).astype(np.uint8))
             imageio.imwrite("~/Desktop/CheckGoodGTs/{}_gt.png".format(idx), colorize(gt.numpy()))
-            if visualize:
-                gt = gt.numpy().transpose(1,2,0)
-                img = img.numpy().transpose(1,2,0)
-                fig, axes = plt.subplots(1,2)
-                axes[0].imshow(img[:,:,0])
-                axes[1].imshow(gt[:,:,0])
-                plt.show()
+        if visualize:
+            gt = gt.numpy().transpose(1,2,0)
+            img = img.numpy().transpose(1,2,0)
+            fig, axes = plt.subplots(1,2)
+            axes[0].imshow(img[:,:,0] if img.shape[2] == 1 else img)
+            axes[1].imshow(gt[:,:,0])
+            plt.show()
 
 
 def test_evaluate(preds, gts):
@@ -57,16 +59,20 @@ def test_loss(preds, gts):
     print("Lossclass = {}".format(out))
 
 
-visualize=False
+
 if on_cluster():
     dir = "/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset"
 else:
-    dir = "/Volumes/A.CH.EXDISK1/Projects/Dataset"
-dataset = ProstateDataset(dir, 'train',  num_class=1, grayscale=True, down=4.0, out_size=512)
+    dir = "/Volumes/A-CH-EXDISK/Projects/Dataset"
+dataset = ProstateDataset(dir, 'train',  num_class=1, grayscale=False, down=4.0, out_size=512, augment=True)
 
-test_dataset(dataset, visualize, testshape=True)
+visualize=True
+loader = DataLoader(dataset, shuffle=True)
+print("Number of tiles = {}".format(len(dataset.img_files)))
+print("Dataset length = {}".format(len(dataset)))
+test_dataset(loader, visualize, testshape=False)
 
-train_loader = DataLoader(dataset)
+
 
 imgs, gts = next(iter(train_loader))
 print(imgs.shape, gts.shape)

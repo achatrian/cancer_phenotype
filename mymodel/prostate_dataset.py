@@ -5,6 +5,7 @@ import cv2
 import random
 import numbers
 from collections import namedtuple
+from pathlib import Path
 
 import imageio
 import torch
@@ -15,21 +16,30 @@ from torchvision.transforms import Compose
 from torch.utils.data import Dataset
 import warnings
 
+from utils import is_pathname_valid
+
 
 ia.seed(1)
-Example = namedtuple('example', ['img', 'gt'])
 
 ###Pytorch dataset###
 class ProstateDataset(Dataset):
 
     def __init__(self, dir, mode, out_size=1024, down=2.0, num_class=1, grayscale=False, augment=None, load_wm=False):
+        r"""
+        Dataset to return random (pre-made) tiles of WSI image at original resolution.
+        Can downscale
+        Make grayscale
+        Augment
+        Use pre-made weight map for each example
+        """
         self.mode = mode
         self.dir = dir
         self.out_size = out_size
         self.down = down
         self.num_class = num_class
         self.grayscale = grayscale
-        self.augment = augment #set augment, or augment wehn training
+        self.augment = augment #set augment, or augment when training
+        self.load_wm = load_wm
         assert(mode in ['train', 'validate', 'test'])
 
         #Read data paths
@@ -37,11 +47,24 @@ class ProstateDataset(Dataset):
         self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9],[0-9][0-9].png'), recursive=True))
         self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9][0-9],[0-9][0-9][0-9].png'), recursive=True))
         self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**','*_mask_[0-9][0-9][0-9][0-9],[0-9][0-9][0-9][0-9].png'), recursive=True))
-        self.img_files = [re.sub('mask', 'img', filename) for filename in self.gt_files]
-        self.weightmap_f = glob.glob('**/_weightmap_[0-9],[0-9].png', recursive=True)
-        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9],[0-9][0-9].png', recursive=True))
-        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9][0-9],[0-9][0-9][0-9].png', recursive=True))
-        self.weightmap_f.extend(glob.glob('**/_weightmap_[0-9][0-9][0-9][0-9],[0-9][0-9][0-9][0-9].png', recursive=True))
+
+        self.img_files = [re.sub('mask', 'img', gtfile) for gtfile in self.gt_files]
+        if self.load_wm:
+            self.wm_files = []
+            for gtfile in self.gt_files:
+                srch = re.search('_mask_([0-9\(\)]+),([0-9\(\)]+).png', gtfile)
+                self.wm_files.append(str(Path(gtfile).parents[1]/"weightmaps"/"weightmap_{},{}.png".format(srch.group(1), srch.group(2))))
+
+        #Check paths
+        path_check = zip(self.gt_files, self.img_files, self.wm_files) if self.load_wm else \
+                        zip(self.gt_files, self.img_files)
+        for idx, paths in enumerate(path_check):
+            for path in paths:
+                if not is_pathname_valid(path):
+                    warnings.warn("Invalid path {} was removed".format(self.gt_files[idx]))
+                    del self.gt_files[idx]
+
+
         assert(self.gt_files); r"Cannot be empty"
         assert(self.img_files);
 
@@ -51,29 +74,30 @@ class ProstateDataset(Dataset):
         elif self.mode in ['validate', 'test']: self.center_crop = CenterCrop(int(out_size*down))
 
         if self.augment:
-            geom_augs = [iaa.Affine(rotate=45),
-                        iaa.Fliplr(0.8),
-                        iaa.Flipud(0.8),
-                        iaa.PiecewiseAffine(scale=(0.01, 0.05)),
+            geom_augs = [iaa.Affine(rotate=(-45, 45)),
+                        iaa.Affine(shear=(-10, 10)),
+                        iaa.Fliplr(0.9),
+                        iaa.Flipud(0.9),
+                        iaa.PiecewiseAffine(scale=(0.01, 0.04)),
                         ]
             img_augs = [iaa.AdditiveGaussianNoise(scale=0.05*255),
-                            iaa.Add(40, per_channel=True),
+                            iaa.Add(20, per_channel=True),
                             iaa.Dropout(p=(0, 0.2)),
-                            iaa.ElasticTransformation(alpha=(0, 5.0), sigma=0.25),
-                            iaa.AverageBlur(k=(2, 7)),
-                            iaa.MedianBlur(k=(3, 7)),
-                            iaa.Sharpen(alpha=(0.0, 0.5), lightness=(0.75, 1.5)),
-                            iaa.Emboss(alpha=(0.0, 0.5), strength=(0.5, 1.0)),
-                            iaa.EdgeDetect(alpha=(0.0, 0.5))]
+                            iaa.ElasticTransformation(alpha=(0, 3.0), sigma=0.25),
+                            iaa.AverageBlur(k=(2, 5)),
+                            iaa.MedianBlur(k=(3, 5)),
+                            iaa.Sharpen(alpha=(0.0, 0.3), lightness=(0.9, 1.1)),
+                            iaa.Emboss(alpha=(0.0, 0.3), strength=(0.1, 0.3)),
+                            iaa.EdgeDetect(alpha=(0.0, 0.3))]
             if not self.grayscale:
                 #Add color modifications
-                img_augs.append(iaa.WithChannels(0, iaa.Add((10, 50))))
-                img_augs.append(iaa.WithChannels(1, iaa.Add((10, 50))))
-                img_augs.append(iaa.WithChannels(3, iaa.Add((10, 50))))
-                img_augs.append(iaa.ContrastNormalization((0.5, 1.5)))
-                img_augs.append(iaa.Multiply((0.5, 1.5)))
-                img_augs.append(iaa.Invert(0.5))
-                img_augs.append(iaa.Grayscale(alpha=(0.0, 1.0)))
+                img_augs.append(iaa.WithChannels(0, iaa.Add((5, 20))))
+                img_augs.append(iaa.WithChannels(1, iaa.Add((5, 10))))
+                img_augs.append(iaa.WithChannels(2, iaa.Add((5, 20))))
+                #img_augs.append(iaa.ContrastNormalization((0.8, 1.0)))
+                img_augs.append(iaa.Multiply((0.9, 1.1)))
+                #img_augs.append(iaa.Invert(0.5))
+                img_augs.append(iaa.Grayscale(alpha=(0.0, 0.2)))
             self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
             self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
 
@@ -81,8 +105,23 @@ class ProstateDataset(Dataset):
         return len(self.img_files)
 
     def __getitem__(self, idx):
-        img = imageio.imread(self.img_files[idx])
-        gt = imageio.imread(self.gt_files[idx])
+        try:
+            img = imageio.imread(self.img_files[idx])
+        except ValueError as err:
+            print("#--------> Invalid img data for path: {}".format(self.img_files[idx]))
+            raise err
+        try:
+            gt = imageio.imread(self.gt_files[idx])
+        except ValueError as err:
+            print("#--------> Invalid gt data for path: {}".format(self.img_files[idx]))
+            raise err
+        if self.load_wm:
+            try:
+                wm = imageio.imread(self.wm_files[idx]) / 255 #binarize
+                wm = np.expand_dims(wm[:,:,0], 2)
+            except ValueError as err:
+                print("#--------> Invalid wm data for path: {}".format(self.img_files[idx]))
+                raise err
         assert(len(set(gt.flatten())) <= 3); "Number of classes is greater than specified"
 
         #Pad images to desired size (for smaller tiles):
@@ -96,6 +135,8 @@ class ProstateDataset(Dataset):
             left, right = delta_w // 2, delta_w - (delta_w // 2)
             img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0,0,0])
             gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
+            #if self.load_wm:
+                #wm = cv2.copyMakeBorder(wm, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
             assert(img.shape[0] >= size_b4_down and img.shape[1] >= size_b4_down)  #Ensure padded
             assert(gt.shape[0] >= size_b4_down and gt.shape[1] >= size_b4_down)  #Ensure padded
 
@@ -107,16 +148,21 @@ class ProstateDataset(Dataset):
         if self.grayscale: img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
         if self.mode == 'train':
-            #Augment:
             img = self.crop_aug([img], random_state=1)[0] #crop to out_size * downsample
             img = self.downsample(img) #downsample to size out_sizee
             gt = self.crop_aug([gt], random_state=1)[0]
             gt = self.downsample(gt)
+            #if self.load_wm:
+                #wm = self.crop_aug([wm], random_state=1)[0]
+                #wm = self.downsample(wm)
         else:
             img = self.center_crop(img) #center crop tiles when testing
             img = self.downsample(img) #downsample like in training
             gt = self.center_crop(gt)
             gt = self.downsample(gt)
+            #if self.load_wm:
+                #wm = self.center_crop([wm])[0]
+                #wm = self.downsample(wm)
 
         if self.augment:
             geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
@@ -124,8 +170,14 @@ class ProstateDataset(Dataset):
             img = self.img_seq.augment_image(img)
             img.clip(0, 255) #ensure added values don't stray from normal boundaries
             gt = geom_seq_det.augment_image(gt)
+            if self.load_wm:
+                wm = geom_seq_det.augment_image(wm)
+            #print("THE SHAPE OF WM IS {}".format(wm.shape))
 
-        return self.to_tensor(img, gt)
+        example = self.to_tensor(img, isimage=True),  self.to_tensor(gt, isimage=False)
+        if self.load_wm:
+            example += (self.to_tensor(wm, isimage=False),)
+        return example
 
     def split_gt(self, gt, cls_values=[0,2,4], merge_cls={4:2}):
         cls_gts=[]
@@ -148,17 +200,21 @@ class ProstateDataset(Dataset):
         gt = np.stack(cls_gts, axis=2) #need to rescale with opencv later, so channel must be last dim
         return gt
 
-
-    def to_tensor(self, img, gt):
+    def to_tensor(self, na, isimage):
         r"""Convert ndarrays in sample to Tensors."""
         # swap color axis because
         # numpy image: H x W x C
         # torch image: C X H X W
-        img = img[np.newaxis,:,:] if self.grayscale else img.transpose((2, 0, 1)) #grayscale or RGB
-        gt = gt.transpose((2, 0, 1))
-        img = torch.from_numpy(img.copy()).type(torch.FloatTensor)
-        gt = torch.from_numpy(gt.copy()).type(torch.FloatTensor)
-        return Example(img=img, gt=gt)
+        na = na[np.newaxis,:,:] if self.grayscale and isimage else na.transpose((2, 0, 1)) #grayscale or RGB
+        na = torch.from_numpy(na.copy()).type(torch.FloatTensor)
+        return na
+
+######
+
+
+
+#####################################################
+#dataset utils
 
 
 class RandomCrop(object):

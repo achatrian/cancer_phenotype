@@ -3,7 +3,9 @@
 import os
 import argparse
 import time
+from tqdm import tqdm
 from pathlib import Path
+from numbers import Integral
 
 import numpy as np
 from torch import load, stack, cuda, no_grad
@@ -25,7 +27,7 @@ def save_examples(net, loader, criterion, savedir, save_images=True, save_weight
     if save_weightmap:
         maplist_path = os.path.join(loader.dataset.dir, "{}_weightmaps.txt".format(savedir.split('/')[-1]))
         maplist_file = open(maplist_path, 'wt')
-    for i, (inputs, gts) in enumerate(loader): #pass over whole validation dataset
+    for i, (inputs, gts) in enumerate(tqdm(loader)): #pass over whole validation dataset
         with no_grad(): #don't track variable history for backprop (to avoid out of memory)
             #NB @pytorch variables and tensors will be merged in the future
             inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
@@ -72,29 +74,40 @@ def save_examples(net, loader, criterion, savedir, save_images=True, save_weight
                 nums = (srch.group(1), srch.group(2))
                 check_mkdir(str(gtpath.parents[1]/"weightmaps"))
                 savepath = str(gtpath.parents[1]/"weightmaps"/"weightmap_{},{}.png".format(*nums))
+                if os.path.exists(savepath):
+                    continue    #don't remake if map already exists
                 imwrite(savepath, umi*255) #0 or 255 (to be visible in preview as image)
-                print(savepath, file=maplist_file)
-        if save_weightmap:
-            maplist_file.close()
+                print(savepath, file = maplist_file)
+    if save_weightmap:
+        maplist_file.close()
 
-    return dataset_metrics, saved_num, weightmap_files
+    return dataset_metrics, saved_num
 
 
 def main(FLAGS):
+    cuda.set_device(FLAGS.gpu_ids[0])
 
     p = Path(FLAGS.model_filepath)
     flags_filepath = str(p.parents[0]/p.parts[-3]) + '.txt'
     TRAINFLAGS = get_flags(flags_filepath)  #get training arguments for loading net etc.
-    inputs = {'num_classes' : TRAINFLAGS.num_class, 'num_channels' : TRAINFLAGS.num_filters,
+    inps = {'num_classes' : TRAINFLAGS.num_class, 'num_channels' : TRAINFLAGS.num_filters,
                 'grayscale' : TRAINFLAGS.grayscale, 'batchnorm' : TRAINFLAGS.batchnorm}
     #Setup
     if TRAINFLAGS.network_id == "UNet1":
-        net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs) #possible classes are stroma, gland, lumen
+        net = UNet1(**inps).cuda() if cuda.is_available() else UNet1(**inps) #possible classes are stroma, gland, lumen
     elif TRAINFLAGS.network_id == "UNet2":
-        net = UNet2(**inputs).cuda() if cuda.is_available() else UNet2(**inputs)
+        net = UNet2(**inps).cuda() if cuda.is_available() else UNet2(**inps)
+
     netdict = load(FLAGS.model_filepath, map_location = None if cuda.is_available() else'cpu')
-    netdict = {entry[7:] : tensor for entry, tensor in netdict.items()} #NB there is a .module at beginning that is quite annyoing and needs to be removed ...
+
+    if not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available():
+        net = DataParallel(net, device_ids=FLAGS.gpu_ids).cuda()
+    else:
+        #NB there is a .module at beginning for DataParallel nets that is quite annyoing and needs to be removed ...
+        netdict = {entry[7:] : tensor for entry, tensor in netdict.items()}
+
     net.load_state_dict(netdict)
+    if cuda.is_available(): net = net.cuda()
     net.eval()
 
     #Loss
@@ -115,8 +128,8 @@ def main(FLAGS):
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.workers)
     val_dataset = ProstateDataset(FLAGS.data_dir, "validate", TRAINFLAGS.image_size, down=TRAINFLAGS.downsample, grayscale=TRAINFLAGS.grayscale)
     val_loader = DataLoader(val_dataset, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.workers)
-    test_dataset = ProstateDataset(FLAGS.data_dir, "test", TRAINFLAGS.image_size, down=TRAINFLAGS.downsample, grayscale=TRAINFLAGS.grayscale)
-    test_loader = DataLoader(val_dataset, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.workers)
+    #test_dataset = ProstateDataset(FLAGS.data_dir, "test", TRAINFLAGS.image_size, down=TRAINFLAGS.downsample, grayscale=TRAINFLAGS.grayscale)
+    #test_loader = DataLoader(val_dataset, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.workers)
 
     #Check performance on train dataset and save poor performance images
     savedir = '/'.join(FLAGS.model_filepath.split('/')[:-2] + ["deploy_on_dataset"])
@@ -126,6 +139,7 @@ def main(FLAGS):
     check_mkdir(savedir + "/test")
     msg = "Saved {:d} {} images; dataset median loss: {}, mean acc: {}, mean dice: {}"
 
+    print("Running on GPUs: {}".format(FLAGS.gpu_ids))
     print("Evaluating on training images ...")
     train_metrics, train_saved_num = save_examples(net, train_loader, criterion, savedir + "/train", save_images=FLAGS.save_images,
                                                     save_weightmap=FLAGS.save_weightmap, batch_size=FLAGS.batch_size)
@@ -136,11 +150,11 @@ def main(FLAGS):
                                                save_weightmap=FLAGS.save_weightmap, batch_size=FLAGS.batch_size)
     print(msg.format(val_saved_num, "val", np.median(val_metrics['loss']), np.median(val_metrics['acc']), np.median(val_metrics['dice'])))
 
-    print("Evaluating on test images ...")
-    test_metrics, test_saved_num = save_examples(net, test_loader, criterion, savedir + "/test", save_images=FLAGS.save_images,
-                                                 save_weightmap=FLAGS.save_weightmap, batch_size=FLAGS.batch_size)
-
-    print(msg.format(test_saved_num, "test", np.median(test_metrics['loss']), np.median(test_metrics['acc']), np.median(test_metrics['dice'])))
+    # print("Evaluating on test images ...")
+    # test_metrics, test_saved_num = save_examples(net, test_loader, criterion, savedir + "/test", save_images=FLAGS.save_images,
+    #                                              save_weightmap=FLAGS.save_weightmap, batch_size=FLAGS.batch_size)
+    #
+    # print(msg.format(test_saved_num, "test", np.median(test_metrics['loss']), np.median(test_metrics['acc']), np.median(test_metrics['dice'])))
 
     print("Done !")
 
@@ -149,9 +163,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-mf', '--model_filepath', type=str, required=True)
-    parser.add_argument('-dd', '--data_dir', type=str, default="/Volumes/A.CH.EXDISK1/Projects/Dataset")
+    parser.add_argument('-dd', '--data_dir', type=str, default="/Volumes/A-CH-EXDISK/Projects/Dataset")
     parser.add_argument('-si', '--save_images', type=str2bool, default=True)
     parser.add_argument('-sw', '--save_weightmap', type=str2bool, default=False)
+    parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
+
 
 
     parser.add_argument('--batch_size', default=5, type=int)
