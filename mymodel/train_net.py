@@ -111,12 +111,11 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     print('epoch: {:d}, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}'.format(
         epoch, val_loss.avg, acc, acc_cls, dice, dice_cls))
 
-    if dice > best_record['dice']:
+    if dice > best_record['dice'] or epoch % 50 == 0:
         best_record['val_loss'] = val_loss.avg
         best_record['epoch'] = epoch
         best_record['acc'] = acc
         best_record['acc_cls'] = acc_cls
-        best_record['epoch'] = epoch
         best_record['dice'] = dice
         best_record['dice_cls'] = dice_cls
         snapshot_name = 'epoch_.{:d}_loss_{:.5f}_acc_{:.5f}_dice_{:.5f}_lr_{:.10f}'.format(

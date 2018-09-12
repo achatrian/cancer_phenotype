@@ -16,23 +16,28 @@ from torchvision.transforms import Compose
 from torch.utils.data import Dataset
 import warnings
 
-sys.append.path("../mymodel")
+sys.path.append("../mymodel")
 from utils import is_pathname_valid
 
 
 class GlandDataset(Dataset):
 
-    def __init__(self, dir, mode, grayscale= Falseload_wm=False):
+    def __init__(self, dir, mode, grayscale=False, augment=False, load_wm=False):
         r"Dataset for feeding glands instances to network"
         self.mode = mode
         self.dir = dir
-        self.out_size = out_size
         self.grayscale = grayscale
-        self.load_wm = False
+        self.augment = augment
+        self.load_wm = load_wm
 
         #Read data paths (images containing full glands)
-        self.gt_files = glob.glob(os.path.join(dir, mode, '**','*_gland_gt.png'), recursive=True)
-        self.img_files = [re.sub('mask', 'img', gtfile) for gtfile in self.gt_files]
+        self.gt_files = glob.glob(os.path.join(dir, mode, '**','gland_gt_[0-9].png'), recursive=True)
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9].png'), recursive=True))
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9][0-9].png'), recursive=True))
+        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9][0-9][0-9].png'), recursive=True))
+        assert(self.gt_files); "Cannot be empty"
+        self.img_files = [re.sub('gt', 'img', gtfile) for gtfile in self.gt_files]
+        assert (self.img_files)
 
         #Check paths
         path_check = zip(self.gt_files, self.img_files, self.wm_files) if self.load_wm else \
@@ -43,12 +48,11 @@ class GlandDataset(Dataset):
                     warnings.warn("Invalid path {} was removed".format(self.gt_files[idx]))
                     del self.gt_files[idx]
 
-
         assert(self.gt_files); r"Cannot be empty"
         assert(self.img_files)
 
         if self.augment:
-            geom_augs = [iaa.Affine(rotate=(-45, 45)),
+            geom_augs = [#iaa.Affine(rotate=(-45, 45)), #keep glands aligned to long dimension
                         iaa.Affine(shear=(-10, 10)),
                         iaa.Fliplr(0.9),
                         iaa.Flipud(0.9),
@@ -75,17 +79,20 @@ class GlandDataset(Dataset):
             self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
             self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
 
+    def __len__(self):
+        return len(self.img_files)
+
     def __getitem__(self, idx):
         try:
             img = imageio.imread(self.img_files[idx])
         except ValueError as err:
             print("#--------> Invalid img data for path: {}".format(self.img_files[idx]))
             raise err
-        try:
-            gt = imageio.imread(self.gt_files[idx])
-        except ValueError as err:
-            print("#--------> Invalid gt data for path: {}".format(self.img_files[idx]))
-            raise err
+        # try:
+        #     gt = imageio.imread(self.gt_files[idx])
+        # except ValueError as err:
+        #     print("#--------> Invalid gt data for path: {}".format(self.img_files[idx]))
+        #     raise err
         if self.load_wm:
             try:
                 wm = imageio.imread(self.wm_files[idx]) / 255 #binarize
@@ -93,11 +100,11 @@ class GlandDataset(Dataset):
             except ValueError as err:
                 print("#--------> Invalid wm data for path: {}".format(self.img_files[idx]))
                 raise err
-        assert(len(set(gt.flatten())) <= 3); "Number of classes is greater than specified"
+        #assert(len(set(gt.flatten())) <= 3); "Number of classes is greater than specified"
 
         #Transform gt to desired number of classes
-        if self.num_class > 1: gt = self.split_gt(gt)
-        else: gt=(gt>0)[:,:,np.newaxis].astype(np.uint8)
+        #if self.num_class > 1: gt = self.split_gt(gt)
+        #else: gt=(gt>0)[:,:,np.newaxis].astype(np.uint8)
 
         #Grascale
         if self.grayscale: img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -107,12 +114,12 @@ class GlandDataset(Dataset):
             img = geom_seq_det.augment_image(img)
             img = self.img_seq.augment_image(img)
             img.clip(0, 255) #ensure added values don't stray from normal boundaries
-            gt = geom_seq_det.augment_image(gt)
+            #gt = geom_seq_det.augment_image(gt)
             if self.load_wm:
                 wm = geom_seq_det.augment_image(wm)
             #print("THE SHAPE OF WM IS {}".format(wm.shape))
 
-        example = self.to_tensor(img, isimage=True),  self.to_tensor(gt, isimage=False)
+        example = self.to_tensor(img, isimage=True) #,  self.to_tensor(gt, isimage=False)
         if self.load_wm:
             example += (self.to_tensor(wm, isimage=False),)
         return example

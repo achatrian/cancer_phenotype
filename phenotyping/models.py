@@ -1,3 +1,11 @@
+import math
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.autograd import Variable
+
+
 
 # custom weights initialization called on netG and netD
 def weights_init(m):
@@ -9,16 +17,16 @@ def weights_init(m):
         m.bias.data.fill_(0)
 
 class _Sampler(nn.Module):
-    def __init__(self, cuda):
+    def __init__(self):
         super(_Sampler, self).__init__()
-        self.cuda = cuda
+        self.iscuda = torch.cuda.is_available()
 
-    def forward(self,input):
+    def forward(self, input):
         mu = input[0]
         logvar = input[1]
 
         std = logvar.mul(0.5).exp_() #calculate the STDEV
-        if self.cuda:
+        if self.iscuda:
             eps = torch.cuda.FloatTensor(std.size()).normal_() #random normalized noise
         else:
             eps = torch.FloatTensor(std.size()).normal_() #random normalized noise
@@ -27,118 +35,129 @@ class _Sampler(nn.Module):
 
 
 class _Encoder(nn.Module):
-    def __init__(self,imageSize):
+    def __init__(self, image_size, num_filt_gen, num_lat_dim, num_channels=3, batchnorm=True):
         super(_Encoder, self).__init__()
 
-        n = math.log2(imageSize)
+        n = math.log2(image_size)
 
-        assert n==round(n),'imageSize must be a power of 2'
-        assert n>=3,'imageSize must be at least 8'
+        assert n==round(n),'image_size must be a power of 2'
+        assert n>=3,'image_size must be at least 8'
         n=int(n)
 
-
-        self.conv1 = nn.Conv2d(ngf * 2**(n-3), nz, 4)
-        self.conv2 = nn.Conv2d(ngf * 2**(n-3), nz, 4)
-
         self.encoder = nn.Sequential()
-        # input is (nc) x 64 x 64
-        self.encoder.add_module('input-conv',nn.Conv2d(nc, ngf, 4, 2, 1, bias=False))
-        self.encoder.add_module('input-relu',nn.LeakyReLU(0.2, inplace=True))
+        self.encoder.add_module('input-conv',nn.Conv2d(num_channels, num_filt_gen, 3, 1, 0, bias=False))
+        self.encoder.add_module('input-relu',nn.ReLU(inplace=True))
         for i in range(n-3):
-            # state size. (ngf) x 32 x 32
-            self.encoder.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**i, ngf * 2**(i+1)), nn.Conv2d(ngf*2**(i), ngf * 2**(i+1), 4, 2, 1, bias=False))
-            self.encoder.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i+1)), nn.BatchNorm2d(ngf * 2**(i+1)))
-            self.encoder.add_module('pyramid.{0}.relu'.format(ngf * 2**(i+1)), nn.LeakyReLU(0.2, inplace=True))
+            #Convolutions have stride 2 !
+            self.encoder.add_module('pyramid{0}-{1}conv'.format(num_filt_gen*2**i, num_filt_gen * 2**(i+1)),
+                nn.Conv2d(num_filt_gen*2**(i), num_filt_gen * 2**(i+1), 3, 1, padding=0, bias=False))
+            if batchnorm:
+                self.encoder.add_module('pyramid{0}batchnorm'.format(num_filt_gen * 2**(i+1)), nn.BatchNorm2d(num_filt_gen * 2**(i+1)))
+            self.encoder.add_module('pyramid{0}relu'.format(num_filt_gen * 2**(i+1)), nn.ReLU(inplace=True))
+            self.encoder.add_module('pool{}'.format(i), nn.MaxPool2d(2, stride=2))
+        #Output is 4x4
+        self.encoder.add_module('output-conv', nn.Conv2d(num_filt_gen * 2**(n-3), num_lat_dim // (4*4), 3, 1, 0, bias=False))
+        #total number of outputs is == num_lat_dim
 
-        # state size. (ngf*8) x 4 x 4
+        #Compute std and variance
+        self.means = nn.Linear(num_lat_dim, num_lat_dim)
+        self.varn = nn.Linear(num_lat_dim, num_lat_dim)
 
-    def forward(self,input):
+    def forward(self, input):
         output = self.encoder(input)
-        return [self.conv1(output),self.conv2(output)]
+        mu = self.means(output.view(output.size(0), -1))
+        sig = self.varn(output.view(output.size(0), -1))
+        return mu.view(mu.size(0), mu.size(1) // (4*4), 4, 4), sig.view(sig.size(0), sig.size(1) // (4*4), 4, 4)
 
 
 class _netG(nn.Module):
-    def __init__(self, imageSize, ngpu):
+    def __init__(self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3, batchnorm=True):
         super(_netG, self).__init__()
         self.ngpu = ngpu
-        self.encoder = _Encoder(imageSize)
+        self.encoder = _Encoder(image_size, num_filt_gen, num_lat_dim, batchnorm=batchnorm)
         self.sampler = _Sampler()
+        self.iscuda = torch.cuda.is_available() and ngpu > 0
 
-        n = math.log2(imageSize)
+        n = math.log2(image_size)
 
-        assert n==round(n),'imageSize must be a power of 2'
-        assert n>=3,'imageSize must be at least 8'
+        assert n==round(n),'image_size must be a power of 2'
+        assert n>=3,'image_size must be at least 8'
         n=int(n)
 
         self.decoder = nn.Sequential()
-        # input is Z, going into a convolution
-        self.decoder.add_module('input-conv', nn.ConvTranspose2d(nz, ngf * 2**(n-3), 4, 1, 0, bias=False))
-        self.decoder.add_module('input-batchnorm', nn.BatchNorm2d(ngf * 2**(n-3)))
-        self.decoder.add_module('input-relu', nn.LeakyReLU(0.2, inplace=True))
-
-        # state size. (ngf * 2**(n-3)) x 4 x 4
+        # input is Z
+        self.decoder.add_module('input-conv',
+                nn.ConvTranspose2d(num_lat_dim // (4*4), num_filt_gen * 2**(n-3), 3, 1, padding=0, bias=False))
+        if batchnorm:
+            self.decoder.add_module('input-batchnorm', nn.BatchNorm2d(num_filt_gen * 2**(n-3)))
+        self.decoder.add_module('input-relu', nn.ReLU(inplace=True))
 
         for i in range(n-3, 0, -1):
-            self.decoder.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**i, ngf * 2**(i-1)),nn.ConvTranspose2d(ngf * 2**i, ngf * 2**(i-1), 4, 2, 1, bias=False))
-            self.decoder.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i-1)), nn.BatchNorm2d(ngf * 2**(i-1)))
-            self.decoder.add_module('pyramid.{0}.relu'.format(ngf * 2**(i-1)), nn.LeakyReLU(0.2, inplace=True))
+            self.decoder.add_module('pyramid{0}-{1}conv'.format(num_filt_gen*2**i, num_filt_gen * 2**(i-1)),
+                        nn.ConvTranspose2d(num_filt_gen * 2**i, num_filt_gen * 2**(i-1), 3, 2, padding=0, output_padding=1, bias=False))
+                        #output_padding=1 specifies correct size for 3x3 convolution kernel with stride 2
+            if batchnorm:
+                self.decoder.add_module('pyramid{0}batchnorm'.format(num_filt_gen * 2**(i-1)), nn.BatchNorm2d(num_filt_gen * 2**(i-1)))
+            self.decoder.add_module('pyramid{0}relu'.format(num_filt_gen * 2**(i-1)), nn.ReLU(inplace=True))
 
-        self.decoder.add_module('ouput-conv', nn.ConvTranspose2d(    ngf,      nc, 4, 2, 1, bias=False))
-        self.decoder.add_module('output-tanh', nn.Tanh())
+        self.decoder.add_module('ouput-conv', nn.ConvTranspose2d(num_filt_gen, num_channels, 3, 1, padding=0, bias=False))
+        self.decoder.add_module('output-sigmoid', nn.Sigmoid()) #multiplied by 255 (0 to 255 is image range) in forward
 
+        #where is the upsampling done in the decoder ????
 
     def forward(self, input):
-        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.encoder, input, range(self.ngpu))
-            output = nn.parallel.data_parallel(self.sampler, output, range(self.ngpu))
-            output = nn.parallel.data_parallel(self.decoder, output, range(self.ngpu))
+        if self.iscuda and self.ngpu > 1:
+            mu, sig = nn.parallel.data_parallel(self.encoder, input, list(range(self.ngpu)))
+            z = nn.parallel.data_parallel(self.sampler, [mu, sig], list(range(self.ngpu)))
+            output = nn.parallel.data_parallel(self.decoder, z, list(range(self.ngpu)))
         else:
-            output = self.encoder(input)
-            output = self.sampler(output)
-            output = self.decoder(output)
+            mu, sig = self.encoder(input)
+            z = self.sampler([mu, sig])
+            output = self.decoder(z)
+        output *= 255 #OUTPUT IS FROM 0 TO 1 OTHERWISE !!! ORIGINAL OUTPUT WAS PROBABLY NORMALIZED FROM 0 TO 1 !!!
         return output
-
-    def make_cuda(self):
-        self.encoder.cuda()
-        self.sampler.cuda()
-        self.decoder.cuda()
-
-netG = _netG(FLAGS.imageSize,ngpu)
-netG.apply(weights_init)
-if FLAGS.netG != '':
-    netG.load_state_dict(torch.load(FLAGS.netG))
-print(netG)
 
 
 class _netD(nn.Module):
-    def __init__(self, imageSize, ngpu):
+    def __init__(self, image_size, ngpu, num_filt_discr, num_channels=3, batchnorm=True):
         super(_netD, self).__init__()
         self.ngpu = ngpu
-        n = math.log2(imageSize)
+        self.iscuda = torch.cuda.is_available() and ngpu > 0
+        n = math.log2(image_size)
 
-        assert n==round(n),'imageSize must be a power of 2'
-        assert n>=3,'imageSize must be at least 8'
+        assert n==round(n),'image_size must be a power of 2'
+        assert n>=3,'image_size must be at least 8'
         n=int(n)
         self.main = nn.Sequential()
 
-        # input is (nc) x 64 x 64
-        self.main.add_module('input-conv', nn.Conv2d(nc, ndf, 4, 2, 1, bias=False))
-        self.main.add_module('relu', nn.LeakyReLU(0.2, inplace=True))
+        self.main.add_module('input-conv', nn.Conv2d(num_channels, num_filt_discr, 3, bias=False))
+        self.main.add_module('relu', nn.ReLU(inplace=True))
 
-        # state size. (ndf) x 32 x 32
         for i in range(n-3):
-            self.main.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**(i), ngf * 2**(i+1)), nn.Conv2d(ndf * 2 ** (i), ndf * 2 ** (i+1), 4, 2, 1, bias=False))
-            self.main.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i+1)), nn.BatchNorm2d(ndf * 2 ** (i+1)))
-            self.main.add_module('pyramid.{0}.relu'.format(ngf * 2**(i+1)), nn.LeakyReLU(0.2, inplace=True))
+            self.main.add_module('pyramid{0}-{1}conv'.format(num_filt_discr*2**(i), num_filt_discr * 2**(i+1)), nn.Conv2d(num_filt_discr * 2 ** (i), num_filt_discr * 2 ** (i+1), 3, bias=False))
+            if batchnorm:
+                self.main.add_module('pyramid{0}batchnorm'.format(num_filt_discr * 2**(i+1)), nn.BatchNorm2d(num_filt_discr * 2 ** (i+1)))
+            self.main.add_module('pyramid{0}relu'.format(num_filt_discr * 2**(i+1)), nn.ReLU(inplace=True))
+            self.main.add_module('pool{}'.format(i), nn.MaxPool2d(2, stride=2))
 
-        self.main.add_module('output-conv', nn.Conv2d(ndf * 2**(n-3), 1, 4, 1, 0, bias=False))
-        self.main.add_module('output-sigmoid', nn.Sigmoid())
+        self.main.add_module('output_conv',  nn.Conv2d(num_filt_discr * 2 ** (i+1), 64, 3)) #output conv
+
+        #Classification layer:
+        self.classifier = nn.Sequential(
+                        nn.Linear(4*4*64, 300), #padding issues
+                        nn.ReLU(inplace=True),
+                        nn.Linear(300,1),
+                        nn.Sigmoid()
+                        )
 
 
     def forward(self, input):
-        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
+        if self.iscuda and self.ngpu > 1:
+            output = nn.parallel.data_parallel(self.main, input, list(range(self.ngpu)))
+            output = output.view(output.size(0), -1) #reshape tensor for fc classifier
+            output = nn.parallel.data_parallel(self.classifier, output, list(range(self.ngpu)))
         else:
             output = self.main(input)
-
-        return output.view(-1, 1)
+            output = output.view(output.size(0), -1) #reshape tensor
+            output = self.classifier(output)
+        return output
