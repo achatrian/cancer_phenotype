@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import datetime
-import os
+import os, sys
 import random
 import argparse
 from pathlib import Path
@@ -27,24 +27,39 @@ from cv2 import cvtColor, COLOR_GRAY2RGB
 import warnings
 
 from models import *
-from utils import get_time_stamp, check_mkdir, str2bool, evaluate_multilabel, colorize, MultiLabelSoftDiceLoss, AverageMeter
+from utils import on_cluster, get_time_stamp, check_mkdir, str2bool, \
+    evaluate_multilabel, colorize, AverageMeter, get_flags
 
 from prostate_dataset import ProstateDataset
+if on_cluster():
+    sys.path.append("/gpfs0/users/win/achatrian/ProstateCancer/korsuks_code")
+else:
+    sys.path.append("/Users/andreachatrian/Documents/Repositories/ProstateCancer/korsuks_code")
+#from dataset_FusionNet_imgaug import SegDataset
+from dataset_FusionNet_imgaug import SegDataset
+from dataset_FusionNet import SegDataset as ValDataset
+from clr import CyclicLR
 
 cudnn.benchmark = True
 
 timestamp = get_time_stamp()
-ckpt_path = str(Path.home()) + "/ProstateCancer/logs/" + timestamp + "/ckpt"
+if on_cluster():
+    ckpt_path = "/well/win/users/achatrian/ProstateCancer/logs/" + timestamp + "/ckpt"
+else:
+    ckpt_path = "/Users/andreachatrian/Documents/Repositories/ProstateCancer/Logs"
 exp_name = ''
-writer = SummaryWriter(os.path.join(ckpt_path, exp_name))
+writer = SummaryWriter(os.path.join(str(ckpt_path), exp_name))
 visualize = ToTensor()
 
-def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_freq):
+
+
+def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_freq, scheduler=None):
     train_loss = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
     for i, data in enumerate(tqdm(train_loader)):
         if not load_weightmap:
             inputs, labels = data
+            #labels = labels.squeeze()
         else:
             inputs, labels, weightmaps = data
         N = inputs.size(0)
@@ -65,6 +80,9 @@ def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_
         loss.backward()
         optimizer.step()
 
+        if scheduler:
+            scheduler.batch_step()
+
         train_loss.update(loss.data.item(), N)
 
         #Compute training metrics:
@@ -79,7 +97,6 @@ def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_
         if i % print_freq == 0:
             tqdm.write('epoch: {}, batch: {} - train - loss: {:.5f}, acc: {:.2f}, acc_cls: {}. dice: {:.2f}, dice_cls: {}'.format(
             epoch, i,  train_loss.avg, acc, acc_cls, dice, dice_cls))
-
 
 def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.05, val_save_to_img_file=True):
     net.eval() #!!
@@ -107,28 +124,31 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     predictions_smpl = np.stack(predictions_smpl, axis=0)
 
     #Compute metrics
-    acc, acc_cls, dice, dice_cls = evaluate_multilabel(predictions_smpl, gts_smpl)
+    acc, acc_cls, dice, dice_cls = evaluate_multilabel(outputs.cpu().numpy(), gts.cpu().numpy())
     print('epoch: {:d}, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}'.format(
         epoch, val_loss.avg, acc, acc_cls, dice, dice_cls))
 
-    if dice > best_record['dice'] or epoch % 50 == 0:
+    if dice > best_record['dice']:
         best_record['val_loss'] = val_loss.avg
         best_record['epoch'] = epoch
         best_record['acc'] = acc
         best_record['acc_cls'] = acc_cls
         best_record['dice'] = dice
         best_record['dice_cls'] = dice_cls
+        best_record['lr'] = optimizer.param_groups[1]['lr']
         snapshot_name = 'epoch_.{:d}_loss_{:.5f}_acc_{:.5f}_dice_{:.5f}_lr_{:.10f}'.format(
             epoch, val_loss.avg, acc, dice, optimizer.param_groups[1]['lr'])
         save(net.state_dict(), os.path.join(ckpt_path, exp_name, snapshot_name + '.pth'))
         save(optimizer.state_dict(), os.path.join(ckpt_path, exp_name, 'opt_' + snapshot_name + '.pth'))
 
         if val_save_to_img_file:
-            to_save_dir = os.path.join(ckpt_path, exp_name, str(epoch))
+            to_save_dir = os.path.join(str(ckpt_path), exp_name, str(epoch))
             check_mkdir(to_save_dir)
 
         val_visual = []
         for idx, (input, gt, pred) in enumerate(zip(inputs_smpl, gts_smpl, predictions_smpl)):
+
+            # FIXME adapt colorize() to korsuk's preprocessing (images not displaying correctly
             gt_rgb, pred_rgb = colorize(gt), colorize(pred)
             input_rgb = input.transpose(1,2,0) if input.shape[0] == 3 else cvtColor(input.transpose(1,2,0) , COLOR_GRAY2RGB)
             if val_save_to_img_file:
@@ -156,50 +176,63 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     return val_loss.avg
 
 def main(FLAGS):
-    if isinstance(FLAGS.gpu_ids[0], Integral):
-        cuda.set_device(FLAGS.gpu_ids[0])
-    else:
-        cuda.set_device(FLAGS.gpu_ids)
+    if cuda.is_available():
+        if isinstance(FLAGS.gpu_ids, Integral):
+            cuda.set_device(FLAGS.gpu_ids)
+        else:
+            cuda.set_device(FLAGS.gpu_ids[0])
 
-    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters,
-            'grayscale' : FLAGS.grayscale, 'batchnorm' : FLAGS.batchnorm}
+    if FLAGS.checkpoint_folder:
+        ckpt_path = Path(FLAGS.checkpoint_folder)  # scope? does this change inside train and validate functs as well?
+        try:
+            LOADEDFLAGS = get_flags(str(ckpt_path / ckpt_path.parent.name) + ".txt")
+            FLAGS.num_filters = LOADEDFLAGS.num_filters
+            FLAGS.num_class = LOADEDFLAGS.num_class
+        except FileNotFoundError:
+            pass
+
+    parallel = not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available()
+    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters}
     if FLAGS.network_id == "UNet1":
-        net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs) #possible classes are stroma, gland, lumen
+        net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs)
     elif FLAGS.network_id == "UNet2":
         net = UNet2(**inputs).cuda() if cuda.is_available() else UNet2(**inputs)
-    if not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available():
+    elif FLAGS.network_id == "UNet3":
+        net = UNet3(**inputs).cuda() if cuda.is_available() else UNet3(**inputs)
+    elif FLAGS.network_id == "UNet4":
+        net = UNet4(**inputs).cuda() if cuda.is_available() else UNet4(**inputs)
+    if parallel:
         net = DataParallel(net, device_ids=FLAGS.gpu_ids).cuda()
 
-    if len(FLAGS.snapshot) == 0:
-        curr_epoch = 1
-        best_record = {'epoch': 0, 'val_loss': 1e10, 'acc': 0, 'acc_cls': [0,0,0], 'dice': -.001, 'dice_cls': [-.001,-.001,-.001]}
-    else:
-        print('training resumes from ' + FLAGS.snapshot)
-        net.load_state_dict(load(os.path.join(ckpt_path, exp_name, FLAGS.snapshot)))
-        split_snapshot = FLAGS.snapshot.split('_')
-        curr_epoch = int(split_snapshot[1]) + 1
-        best_record = {'epoch': int(split_snapshot[1]), 'val_loss': float(split_snapshot[3]),
-                               'acc': float(split_snapshot[5]),
-                               'acc_cls': [ch for ch in split_snapshot[5] if isinstance(ch, Integral)],
-                               'dice': float(split_snapshot[9]),
-                               'dice_cls': [ch for ch in split_snapshot[11] if isinstance(ch, Integral)]}
     net.train()
 
-    reduce = not FLAGS.load_weightmap
-    if FLAGS.num_class>1:
-        if FLAGS.losstype == 'ce':
-            criterion = MultiLabelSoftMarginLoss(reduce=reduce, weight=FLAGS.class_weights) #loss
-            criterion_val = MultiLabelSoftMarginLoss(size_average=True, weight=FLAGS.class_weights)
-        else:
-            raise NotImplementedError
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
+    if not FLAGS.snapshot:
+        curr_epoch = 1
+        best_record = {'epoch': 0, 'val_loss': 1e10, 'acc': 0, 'acc_cls': [0,0,0], 'dice': -.001,
+                       'dice_cls': [-.001, -.001, -.001], 'lr': FLAGS.learning_rate}
     else:
-        if FLAGS.losstype == 'ce':
-            criterion = BCEWithLogitsLoss(reduce=reduce, weight=FLAGS.class_weights)
-            criterion_val = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
-        else:
-            raise NotImplementedError
-            criterion = MultiLabelSoftDiceLoss(num_class=FLAGS.num_class, weights=FLAGS.class_weights)
+        print('training resumes from ' + FLAGS.snapshot)
+
+        dev = None if cuda.is_available() else 'cpu'
+        state_dict = load(str(ckpt_path/exp_name/FLAGS.snapshot), map_location=dev)
+        if not parallel:
+            state_dict = {key[7:] : value for key, value in state_dict.items()}
+        net.load_state_dict(state_dict)
+        split_snapshot = FLAGS.snapshot.split('_')
+        curr_epoch = int(split_snapshot[1][1:]) + 1
+        best_record = {'epoch': int(split_snapshot[1][1:]), 'val_loss': float(split_snapshot[3]),
+                               'acc': float(split_snapshot[5]),
+                               'acc_cls': [float(split_snapshot[5]) for i in range(FLAGS.num_class)],
+                               'dice': float(split_snapshot[7]),
+                               'dice_cls': [float(split_snapshot[7]) for i in range(FLAGS.num_class)],
+                                'lr': float(split_snapshot[9][:-4])}
+        val_loss = best_record['val_loss']
+
+    #reduce = not FLAGS.load_weightmap
+    criterion = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
+    #criterion = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
+    criterion_val = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
+    #criterion_val = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
 
     if cuda.is_available(): criterion = criterion.cuda()
 
@@ -211,55 +244,57 @@ def main(FLAGS):
     ])
 
 
-    if len(FLAGS.snapshot) > 0:
-        optimizer.load_state_dict(load(os.path.join(ckpt_path, exp_name, 'opt_' + FLAGS.snapshot)))
-        optimizer.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
-        optimizer.param_groups[1]['lr'] = FLAGS.learning_rate
+    if FLAGS.snapshot:
+        optimizer.load_state_dict(load(str(ckpt_path/exp_name/('opt_' + FLAGS.snapshot)), map_location=dev))
+        #optimizer.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
+        #optimizer.param_groups[1]['lr'] = FLAGS.learning_rate
 
-    check_mkdir(ckpt_path)
-    check_mkdir(os.path.join(ckpt_path, exp_name))
+    check_mkdir(str(ckpt_path))
+    check_mkdir(str(ckpt_path/exp_name))
     #Save arguments
-    with open(os.path.join(ckpt_path, exp_name, str(timestamp) + '.txt'), 'w') as argsfile:
+    with open(os.path.join(str(ckpt_path), exp_name, str(timestamp) + '.txt'), 'w') as argsfile:
         argsfile.write(str(FLAGS) + '\n\n')
 
     #Train
-    train_dataset = ProstateDataset(FLAGS.data_dir, "train", out_size=FLAGS.image_size, down=FLAGS.downsample,
-                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale, augment=True, load_wm=FLAGS.load_weightmap)
+    #train_dataset = ProstateDataset(FLAGS.data_dir, "train", out_size=FLAGS.image_size, down=FLAGS.downsample,
+    #                num_class=FLAGS.num_class, grayscale=FLAGS.grayscale, augment=True, load_wm=FLAGS.load_weightmap)
+    train_dataset = SegDataset(FLAGS.data_dir, "train")
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, shuffle=True, num_workers=FLAGS.workers)
-    val_dataset = ProstateDataset(FLAGS.data_dir, "validate", out_size=FLAGS.image_size, down=FLAGS.downsample,
-                    num_class=FLAGS.num_class, grayscale=FLAGS.grayscale)
+    val_dataset = ValDataset(FLAGS.data_dir, "val")
+    #val_dataset = ProstateDataset(FLAGS.data_dir, "validate", out_size=FLAGS.image_size, down=FLAGS.downsample,
+    #               num_class=FLAGS.num_class, grayscale=FLAGS.grayscale)
     val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, shuffle=True, num_workers=FLAGS.workers)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
+    #scheduler = ReduceLROnPlateau(optimizer, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
+    scheduler = CyclicLR(optimizer, base_lr=FLAGS.learning_rate/10, max_lr=FLAGS.learning_rate, step_size=180*40, mode='triangular2')
 
     model_parameters = filter(lambda p: p.requires_grad, net.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
     print("Running on GPUs: {}".format(FLAGS.gpu_ids))
-    print("Memory: Image size: {}, Batch size: {} (batchnorm: {}),  Net filter num: {}".format(FLAGS.image_size, FLAGS.batch_size, FLAGS.batchnorm, FLAGS.num_filters))
+    print("Memory: Image size: {}, Batch size: {},  Net filter num: {}".format(FLAGS.image_size, FLAGS.batch_size, FLAGS.num_filters))
     print("Network has {} parameters".format(params))
     print("Using network {}, {} loss".format(FLAGS.network_id, FLAGS.losstype))
-    print("Saving results in {}".format(ckpt_path))
+    print("Saving results in {}".format(str(ckpt_path)))
     print("Begin training ...")
 
     for epoch in range(curr_epoch, FLAGS.epochs):
-        train(train_loader, net, criterion, optimizer, epoch, FLAGS.load_weightmap, FLAGS.print_freq)
+        train(train_loader, net, criterion, optimizer, epoch, FLAGS.load_weightmap, FLAGS.print_freq, scheduler=scheduler)
         if epoch % 10 == 1: #so it validates at first epoch too
             val_loss = validate(val_loader, net, criterion_val, optimizer, epoch,
                         best_record, val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=True)
-        scheduler.step(val_loss)
+        #scheduler.step(val_loss)
+
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--image_size', type=int, default=1024, help='the height / width of the input image to network')
+    parser.add_argument('--image_size', type=int, default=512, help='the height / width of the input image to network')
     parser.add_argument('--downsample', type=float, default=2.0)
-    parser.add_argument('--grayscale', type=str2bool, default=False)
 
     parser.add_argument('--epochs', default=4000, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
-    parser.add_argument('--batchnorm', default=False, type=str2bool)
 
-    parser.add_argument('--network_id', type=str, default="UNet2")
+    parser.add_argument('--network_id', type=str, default="UNet1")
     parser.add_argument('--num_class', type=int, default=3)
     parser.add_argument('-nf', '--num_filters', type=int, default=64, help='mcd number of filters for unet conv layers')
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
@@ -278,8 +313,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
     parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
-    parser.add_argument('--checkpoint_folder', default='checkpoints', type=str, help='checkpoint folder')
-    parser.add_argument('--resume', default='', type=str, help='which checkpoint file to resume the training')
+    parser.add_argument('--checkpoint_folder', default='', type=str, help='checkpoint folder')
 
     FLAGS, unparsed = parser.parse_known_args()
     if unparsed: warnings.warn("Unparsed arguments")

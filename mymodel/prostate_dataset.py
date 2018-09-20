@@ -22,6 +22,164 @@ from utils import is_pathname_valid
 ia.seed(1)
 
 ###Pytorch dataset###
+class SegDataset(Dataset):
+
+    def __init__(self, dir_, mode):
+        self.mode = mode
+
+        self.file_list = []
+        self.label = []
+
+        thedir = os.path.join(dir_, mode)
+        folders = [ name for name in os.listdir(thedir) if os.path.isdir(os.path.join(thedir, name)) ]
+
+        file_list = []
+        for file in folders:
+            file_list += glob.glob(os.path.join(thedir, file, 'tiles', '*_img_*.png'))
+
+        self.file_list = file_list
+        self.label = [x.replace('_img_', '_mask_') for x in file_list]
+
+        self.dir = dir_
+
+        self.randomcrop = RandomCrop(512)
+
+        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+
+        self.seq = iaa.Sequential(
+            [
+                # apply the following augmenters to most images
+                iaa.Fliplr(0.5),  # horizontally flip 50% of all images
+                iaa.Flipud(0.2),  # vertically flip 20% of all images
+                # crop images by -5% to 10% of their height/width
+                sometimes(iaa.CropAndPad(
+                    percent=(-0.05, 0.1),
+                    pad_mode=ia.ALL,
+                    pad_cval=(0, 255)
+                )),
+                sometimes(iaa.Affine(
+                    scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                    # scale images to 80-120% of their size, individually per axis
+                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                    # translate by -20 to +20 percent (per axis)
+                    rotate=(-45, 45),  # rotate by -45 to +45 degrees
+                    shear=(-16, 16),  # shear by -16 to +16 degrees
+                    order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                    cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
+                    mode=ia.ALL  # use any of scikit-image's warping modes (see 2nd image from the top for examples)
+                )),
+                # execute 0 to 5 of the following (less important) augmenters per image
+                # don't execute all of them, as that would often be way too strong
+                iaa.SomeOf((0, 5),
+                           [   # convert images into their superpixel representation
+                               iaa.WithChannels([0, 1, 2],
+                                                iaa.OneOf([
+                                                    iaa.GaussianBlur((0, 3.0)),
+                                                    # blur images with a sigma between 0 and 3.0
+                                                    iaa.AverageBlur(k=(2, 7)),
+                                                    # blur image using local means with kernel sizes between 2 and 7
+                                                    iaa.MedianBlur(k=(3, 11)),
+                                                    # blur image using local medians with kernel sizes between 2 and 7
+                                                ])),
+                               iaa.WithChannels([0, 1, 2], iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5))),  # sharpen images
+                               iaa.WithChannels([0, 1, 2], iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0))),  # emboss images
+                               # search either for all edges or for directed edges,
+                               # blend the result with the original image using a blobby mask
+                               iaa.WithChannels([0, 1, 2], iaa.SimplexNoiseAlpha(iaa.OneOf([
+                                   iaa.EdgeDetect(alpha=(0.5, 1.0)),
+                                   iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
+                               ]))),
+                               iaa.WithChannels([0, 1, 2], iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255), per_channel=0.5)),
+                               # add gaussian noise to images
+                               iaa.WithChannels([0, 1, 2], iaa.OneOf([
+                                   iaa.Dropout((0.01, 0.1), per_channel=0.5),  # randomly remove up to 10% of the pixels
+                                   iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2)])),
+                               iaa.WithChannels([0, 1, 2], iaa.Invert(0.05, per_channel=True)),  # invert color channels
+                               iaa.WithChannels([0, 1, 2], iaa.Add((-10, 10), per_channel=0.5)),
+                               # change brightness of images (by -10 to 10 of original value)
+                               iaa.WithChannels([0, 1, 2], iaa.AddToHueAndSaturation((-20, 20))),  # change hue and saturation
+                               # either change the brightness of the whole image (sometimes
+                               # per channel) or change the brightness of subareas
+                               iaa.WithChannels([0, 1, 2], iaa.OneOf([
+                                   iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                                   iaa.FrequencyNoiseAlpha(
+                                       exponent=(-4, 0),
+                                       first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                                       second=iaa.ContrastNormalization((0.5, 2.0))
+                                   )])),
+                               iaa.WithChannels([0, 1, 2], iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5)),  # improve or worsen the contrast
+                               iaa.WithChannels([0, 1, 2], iaa.Grayscale(alpha=(0.0, 1.0))),
+                               # move pixels locally around (with random strengths)
+                               sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                               # sometimes move parts of the image around
+                               sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
+                           ],
+                           random_order=True
+                           )
+            ],
+            random_order=True
+        )
+
+    def __len__(self):
+        return len(self.file_list)
+
+    def adjust_gamma(self, image, gamma=1.0):
+        # build a lookup table mapping the pixel values [0, 255] to
+        # their adjusted gamma values
+        # invGamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** gamma) * 255
+                          for i in np.arange(0, 256)]).astype("uint8")
+
+        # apply gamma correction using the lookup table
+        return cv2.LUT(image, table)
+
+    def __getitem__(self, idx):
+        img_name = self.file_list[idx]
+        gt_name = self.label[idx]
+
+        bgr_img = cv2.imread(img_name, -1)
+        b, g, r = cv2.split(bgr_img)  # get b,g,r
+
+        image = cv2.merge([r, g, b])  # switch it to rgb
+        gt = cv2.imread(gt_name, -1)
+        gt[gt > 0] = 255
+
+        # scale image
+        image = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
+        gt = cv2.resize(gt, (0, 0), fx=0.5, fy=0.5)
+
+
+        # im aug
+        cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
+        cat = self.randomcrop(cat)
+        if self.mode == "train":
+            cat = self.seq.augment_image(cat)
+        image = cat[:, :, 0:3]
+        gt = cat[:, :, 3]
+        gt[gt < 255] = 0
+
+        # weight = np.zeros_like(gt)
+        weight = np.zeros_like(gt)
+        weight[gt == 0] = 1.0
+        weight[gt == 255] = 1.0
+
+        # scale between 0 and 1 and swap the dimension
+        image = image.transpose(2, 0, 1)/255.0
+        gt = np.expand_dims(gt, axis=2).transpose(2, 0, 1)/255.0
+        weight = np.expand_dims(weight, axis=2).transpose(2, 0, 1)
+
+        # normalised image between -1 and 1
+        image = [np.expand_dims((img - 0.5)/0.5, axis=0) for img in image]
+        image = np.concatenate(image, axis=0)
+
+        # convert to torch tensor
+        dtype = torch.FloatTensor
+        image = torch.from_numpy(image).type(dtype)
+        gt = torch.from_numpy(gt).type(torch.FloatTensor) #change to FloatTensor for BCE
+        weight = torch.from_numpy(weight).type(dtype)
+
+        return image, gt  #, weight
+
 class ProstateDataset(Dataset):
 
     def __init__(self, dir, mode, out_size=1024, down=2.0, num_class=1, grayscale=False, augment=None, load_wm=False):
@@ -229,9 +387,10 @@ class RandomCrop(object):
         else:
             self.size = size
 
-    def __call__(self, images, random_state, parents=None, hooks=None):
+    def __call__(self, images, random_state=None, parents=None, hooks=None):
         cropped_images = []
-        random.seed(random_state) #ensure that deterministic sequence applies the same transormation
+        if random_state:
+            random.seed(random_state) #ensure that deterministic sequence applies the same transormation
         for img in images:
             w, h = img.shape[1], img.shape[0]
             th, tw = self.size

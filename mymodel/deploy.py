@@ -1,86 +1,119 @@
-import gc
-import os, glob
-import time
-import torch
+import os
 import argparse
-import torch.utils.data
-import scipy.signal
-import pickle
-
-import multiprocessing as mp
-import torch.backends.cudnn as cudnn
+from pathlib import Path
+from numbers import Integral
+from torchvision import transforms
 import numpy as np
-import lstm_cnn_data as lstm_cnn_dataset
+import scipy.signal
+import gc
+import torch
+from torch import load
 import imageio
+from models import UNet1, UNet2, UNet3, UNet4
+import time
+from PIL import Image
+from torch import cuda
+from torch.nn import DataParallel
+import cv2
+import random
+from PIL import ImageEnhance
+from utils import get_flags
 
-from torch.autograd import Variable
-from lstm_cnn import LSTMCNN
-from functools import partial
-
-pickle.load = partial(pickle.load, encoding="latin1")
-pickle.Unpickler = partial(pickle.Unpickler, encoding="latin1")
+Image.MAX_IMAGE_PIXELS = None
 
 parser = argparse.ArgumentParser()
-
-parser.add_argument('--result_dir', default='../temp/step3_tissue_segmentation', type=str)
-parser.add_argument('--test_folder', default='../temp/step1_colour_norm', type=str)
-parser.add_argument('--image_extension', default='.png', type=str)
-
-parser.add_argument('--batch_size', default=64, type=int)
-parser.add_argument('--patch_size', default=512, type=int)
-parser.add_argument('--test_stride', default=42, type=int)
-parser.add_argument('--image_size', type=int, default=64, help='the height / width of the input image to network')
-
-parser.add_argument('--learning_rate', default=0.0002, type=float)
-
+parser.add_argument('--save_folder', default='/well/win/users/achatrian/ProstateCancer/Results', type=str,
+                    help='Dir to save results')
+parser.add_argument('--image', default='/well/win/users/achatrian/ProstateCancer/Dataset/train/17_A047-4463_153D+-+2017-05-11+09.40.22_TissueTrain_(1.00,35171,30052,4796,3922)/17_A047-4463_153D+-+2017-05-11+09.40.22_TissueTrain_(1.00,35171,30052,4796,3922)_img.png', type=str)
+parser.add_argument('--checkpoint_folder', default='/well/win/users/achatrian/ProstateCancer/logs/2018_09_17_20_56_36/ckpt', type=str, help='checkpoint folder')
+parser.add_argument('--snapshot', default='epoch_.171_loss_0.21296_acc_0.93000_dice_0.93000_lr_0.0000686500.pth', type=str)
 parser.add_argument('--gpu_id', default='0', type=str)
-parser.add_argument('--ngpu', type=int, default=1)
-parser.add_argument('--workers', default=1, type=int)
-parser.add_argument('--checkpoint_folder', default='checkpoints', type=str)
-parser.add_argument('--resume', default='checkpoints/checkpoint_46.pth', type=str)
+parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
+parser.add_argument('--batch_size', default=8, type=int)
 
-parser.add_argument('--nz', type=int, default=512, help='size of the latent z vector')
-parser.add_argument('--nf', type=int, default=64)
+parser.add_argument('--num_class', type=int, default=1)
+parser.add_argument('-nf', '--num_filters', type=int, default=37, help='mcd number of filters for unet conv layers')
+parser.add_argument('--network_id', type=str, default="UNet3")
 
+FLAGS = parser.parse_args()
 
-class TileWorkersTissueSegmentation(mp.Process):
-    def __init__(self, queue, predictor):
-        mp.Process.__init__(self, name='TileWorker')
-        self.daemon = True
-        self._queue = queue
-        self._predictor = predictor
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpu_id
 
-    def run(self):
-        while True:
-            data = self._queue.get()
-            if data is None:
-                self._queue.task_done()
-                break
+if not os.path.exists(FLAGS.save_folder):
+    os.mkdir(FLAGS.save_folder)
 
-            file, result_dir, wsi_name, i_tile, total_file = data
+ckpt_path = Path(FLAGS.checkpoint_folder)  # scope? does this change inside train and validate functs as well?
+#LOADEDFLAGS = get_flags(str(ckpt_path / ckpt_path.parent.name) + ".txt")
+#FLAGS.num_filters = LOADEDFLAGS.num_filters
+#FLAGS.num_class = LOADEDFLAGS.num_class
 
-            start_time = time.time()
+exp_name=''
 
-            basename = os.path.basename(file)
-            basename = os.path.splitext(basename)[0]
-            savename = os.path.join(result_dir, wsi_name, basename + '.png')
-            savename_confidence = os.path.join(result_dir, wsi_name, basename + '_confidence.png')
+########################################################################################
 
-            if not os.path.exists(savename):
-                # evaluation mode
-                result, confidence = self._predictor.run(file)
-                KSimage.imwrite(result, savename)
-                KSimage.imwrite(confidence, savename_confidence)
+class CustomisedTransform(object):
+    # hue
+    def adjust_gamma(self, image, gamma=1.0):
+        # build a lookup table mapping the pixel values [0, 255] to
+        # their adjusted gamma values
+        # invGamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** gamma) * 255
+                          for i in np.arange(0, 256)]).astype("uint8")
 
-            duration = time.time() - start_time
+        # apply gamma correction using the lookup table
+        return cv2.LUT(image, table)
 
-            print('Finish segmenting tissue regions on H&E tile %d / %d (%.2f sec)' % (i_tile, total_file, duration))
+    def __call__(self, img):
+        r, g, b = cv2.split(img)
 
-            self._queue.task_done()
+        rr = np.random.uniform(low=np.log(0.25), high=np.log(4))
+        rb = np.random.uniform(low=np.log(0.25), high=np.log(4))
+        r = self.adjust_gamma(r, gamma=np.exp(rr))
+        b = self.adjust_gamma(b, gamma=np.exp(rb))
+        image = cv2.merge([r, g, b])  # switch it to rgb
+
+        image = Image.fromarray(image)
+
+        # brightness
+        brightness = 0.4
+        enhancer = ImageEnhance.Brightness(image)
+        brightness_factor = np.random.uniform(max(0, 1 - brightness), 1 + brightness)
+        image = enhancer.enhance(brightness_factor)
+
+        # contrast
+        contrast = 0.4
+        contrast_factor = np.random.uniform(max(0, 1 - contrast), 1 + contrast)
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(contrast_factor)
+
+        # saturation
+        saturation = 0.4
+        saturation_factor = np.random.uniform(max(0, 1 - saturation), 1 + saturation)
+        enhancer = ImageEnhance.Color(image)
+        image = enhancer.enhance(saturation_factor)
+
+        # convert image back to numpy array
+        image = np.array(image)
+
+        # flip horizontal
+        if random.random() < 0.5:
+            image = cv2.flip(image, 1).reshape(image.shape)
+
+        # flip vertical
+        if random.random() < 0.5:
+            image = cv2.flip(image, 0).reshape(image.shape)
+
+        # flip transpose
+        if random.random() < 0.5:
+            image = cv2.flip(image, -1).reshape(image.shape)
+
+        return image
+
 
 ########################################################################################
 class TilePrediction(object):
-    def __init__(self, patch_size, effective_window_size, subdivisions, scaling_factor, pred_model, batch_size):
+    def __init__(self, patch_size, subdivisions, scaling_factor, pred_model, batch_size):
         """
         :param patch_size:
         :param subdivisions: the size of stride is define by this
@@ -88,34 +121,27 @@ class TilePrediction(object):
         :param pred_model: the prediction function
         """
         self.patch_size = patch_size
-        self.effective_window_size = effective_window_size
         self.scaling_factor = scaling_factor
         self.subdivisions = subdivisions
         self.pred_model = pred_model
         self.batch_size = batch_size
 
-        self.stride = int(self.patch_size/self.subdivisions)
+        self.stride = int(self.patch_size / self.subdivisions)
 
-        # scaling operation
-        self.scale64 = lstm_cnn_dataset.Scale(64)
-        self.scale128 = lstm_cnn_dataset.Scale(128)
-        self.scale256 = lstm_cnn_dataset.Scale(256)
-        self.crop = lstm_cnn_dataset.CenterCrop(64)
+        transform_list = [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        self.transform = transforms.Compose(transform_list)
 
-        self.WINDOW_SPLINE_2D = self._window_2D(window_size=self.patch_size, effective_window_size=self.effective_window_size, power=2)
+        self.WINDOW_SPLINE_2D = self._window_2D(window_size=self.patch_size, effective_window_size=patch_size, power=2)
 
-    def _read_data(self, filename, scaling_factor):
+    def _read_data(self, filename):
         """
         :param filename:
         :return:
         """
-        img = KSimage.imread(filename)
-        img = KSimage.imresize(img, scaling_factor)
+        img = cv2.imread(filename, -1)
+        img = img[..., ::-1]
 
-        if img.ndim == 2:
-            img = np.expand_dims(img, axis=3)
-
-        # padding
+        img = cv2.resize(img, (0, 0), fx=self.scaling_factor, fy=self.scaling_factor)
         img = self._pad_img(img)
 
         return img
@@ -146,7 +172,7 @@ class TilePrediction(object):
         Squared spline (power=2) window function:
         https://www.wolframalpha.com/input/?i=y%3Dx**2,+y%3D-(x-2)**2+%2B2,+y%3D(x-4)**2,+from+y+%3D+0+to+2
         """
-        window_size = 2*effective_window_size
+        window_size = effective_window_size
         intersection = int(window_size / 4)
         wind_outer = (abs(2 * (scipy.signal.triang(window_size))) ** power) / 2
         wind_outer[intersection:-intersection] = 0
@@ -189,12 +215,9 @@ class TilePrediction(object):
         for row in row_range:
             for col in col_range:
                 x = img[row:row + self.patch_size, col:col + self.patch_size, :]
-                imgs = [self.scale64(x), self.scale128(x), self.scale256(x), x]
-                imgs = [self.crop(x) for x in imgs]
-                imgs = [x.transpose(2, 0, 1) / 255.0 for x in imgs]
-                imgs = [torch.from_numpy(x).type(torch.FloatTensor) for x in imgs]
+                x = self.transform(x)
 
-                yield (imgs)
+                yield x
 
     def _merge_patches(self, patches, padded_img_size):
         """
@@ -214,9 +237,9 @@ class TilePrediction(object):
         for index1, row in enumerate(row_range):
             for index2, col in enumerate(col_range):
                 tmp = patches[(index1 * len(col_range)) + index2]
-                tmp = tmp[np.newaxis, np.newaxis, :]
-                tmp = np.repeat(tmp, self.patch_size, axis=0)
-                tmp = np.repeat(tmp, self.patch_size, axis=1)
+                # tmp = tmp[np.newaxis, np.newaxis, :]
+                # tmp = np.repeat(tmp, self.patch_size, axis=0)
+                # tmp = np.repeat(tmp, self.patch_size, axis=1)
                 tmp *= self.WINDOW_SPLINE_2D
                 # tmp = (np.ones((self.patch_size, self.patch_size, n_dims), dtype=np.float32) * tmp) * self.WINDOW_SPLINE_2D
 
@@ -239,57 +262,14 @@ class TilePrediction(object):
                 raise StopIteration
             yield chunk
 
-    def _softmax(self, X, theta=1.0, axis=None):
-        """
-        Compute the softmax of each element along an axis of X.
-
-        Parameters
-        ----------
-        X: ND-Array. Probably should be floats.
-        theta (optional): float parameter, used as a multiplier
-            prior to exponentiation. Default = 1.0
-        axis (optional): axis to compute values along. Default is the
-            first non-singleton axis.
-
-        Returns an array the same size as X. The result will sum to 1
-        along the specified axis.
-        """
-
-        # make X at least 2d
-        y = np.atleast_2d(X)
-
-        # find axis
-        if axis is None:
-            axis = next(j[0] for j in enumerate(y.shape) if j[1] > 1)
-
-        # multiply y against the theta parameter,
-        y = y * float(theta)
-
-        # subtract the max for numerical stability
-        y = y - np.expand_dims(np.max(y, axis=axis), axis)
-
-        # exponentiate y
-        y = np.exp(y)
-
-        # take the sum along the specified axis
-        ax_sum = np.expand_dims(np.sum(y, axis=axis), axis)
-
-        # finally: divide elementwise
-        p = y / ax_sum
-
-        # flatten if X was 1D
-        if len(X.shape) == 1:
-            p = p.flatten()
-
-        return p
-
     def run(self, filename):
         """
         :param filename:
         :return:
         """
+
         # read image, scaling, and padding
-        padded_img = self._read_data(filename, self.scaling_factor)
+        padded_img = self._read_data(filename)
 
         # extract patches
         patches = self._extract_patches(padded_img)
@@ -297,159 +277,89 @@ class TilePrediction(object):
 
         # run the model in batches
         all_prediction = []
+
         for ipatch, chunk in enumerate(self.batches(patches, self.batch_size)):
-            p0 = []
-            p1 = []
-            p2 = []
-            p3 = []
+            x = []
+
             for ch in chunk:
-                p0.append(ch[0].unsqueeze(0))
-                p1.append(ch[1].unsqueeze(0))
-                p2.append(ch[2].unsqueeze(0))
-                p3.append(ch[3].unsqueeze(0))
+                x.append(ch.unsqueeze(0))
 
-            p0 = Variable(torch.cat(p0, dim=0).cuda(), requires_grad=False)
-            p1 = Variable(torch.cat(p1, dim=0).cuda(), requires_grad=False)
-            p2 = Variable(torch.cat(p2, dim=0).cuda(), requires_grad=False)
-            p3 = Variable(torch.cat(p3, dim=0).cuda(), requires_grad=False)
+            img = torch.cat(x, dim=0)
 
-            temp = [p0, p1, p2, p3]
+            all_prediction += [self.pred_model(img).cpu().data.numpy()]
 
-            pred = self.pred_model(temp)
-            all_prediction.append(pred.cpu().data.numpy())
-
-            del temp
-            del pred
-
-        # merge patches and unpad
-        gc.collect()
         all_prediction = np.concatenate(all_prediction, axis=0)
-        tiled_prediction = self._merge_patches(all_prediction, padded_img.shape)
+        all_prediction = all_prediction.transpose(0, 2, 3, 1)
 
-        # find prediction confidence
-        prob = self._softmax(tiled_prediction, axis=2)
-        prob = np.sort(prob, axis=2)
-        confidence = prob[:, :, -1] - prob[:, :, -2]
-        confidence = np.clip(confidence, 0, 1) * 255.0
-        confidence = confidence.astype(np.uint8)
+        result = self._merge_patches(all_prediction, padded_img.shape)
 
-        # find maximum
-        final_prediction = np.argmax(tiled_prediction, axis=2)
-        final_prediction = final_prediction.astype(np.uint8)
+        # confidence
+        uncertain = ((np.logical_and(result < 0.8, result > 0.3)) * 255.0).astype(np.uint8)
 
-        # rescale
-        result = KSimage.imresize(final_prediction, 1/self.scaling_factor)
-        confidence = KSimage.imresize(confidence, 1/self.scaling_factor)
+        result = (result > 0.55) * 255.0
+        result = result.astype(np.uint8)
+        result = cv2.resize(result, (0, 0), fx=1.0 / self.scaling_factor, fy=1.0 / self.scaling_factor)
 
-        return result, confidence
+        uncertain = cv2.resize(uncertain, (0, 0), fx=1.0 / self.scaling_factor, fy=1.0 / self.scaling_factor)
+
+        result = np.clip(result, 0, 255).astype(np.uint8)
+        uncertain = np.clip(uncertain, 0, 255).astype(np.uint8)
+
+        return result, uncertain
 
 
-########################################################################################
-def load_model(args):
-    """
-    construct, load, and initialize the model
-    :param args:
-    :return:
-    """
-    # initialize CUDA
-    cudnn.benchmark = True
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
-    if torch.cuda.is_available():
-        torch.randn(8).cuda()
-
-    # create a model
-    net = LSTMCNN(args.image_size, 3, args.nf, args.nz, 4, args.learning_rate, args.batch_size)
-
-    if torch.cuda.is_available():
-        net.cuda()
-
-    # load trained model
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            net.load_state_dict(checkpoint['state_dict'])
-
-            print("=> loaded checkpoint '{}' (epoch {})"
-                .format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
-
-    # set the model for evaluation
-    net.eval()
-
-    return net
-
-####################################################################################
 def main():
-    global args
-    # load input arguments
-    args = parser.parse_args()
+    if cuda.is_available():
+        cuda.set_device(0)
 
-    # load the model
-    net = load_model(args)
-    net.share_memory()
+    # check if the input image exists
+    if os.path.exists(FLAGS.image):
 
-    # create result folder
-    routine.create_dir(args.result_dir)
+        # basename
+        basename = os.path.basename(FLAGS.image)
+        basename = os.path.splitext(basename)[0]
+        savename = os.path.join(FLAGS.save_folder, basename + '.png')
+        savename_conf = os.path.join(FLAGS.save_folder, basename + '_confidence.png')
 
-    # list all folders
-    wsi_list = [name for name in os.listdir(args.test_folder) if os.path.isdir(os.path.join(args.test_folder, name))]
-    wsi_list.sort()
+        if not os.path.exists(savename):
 
-    # define tiled prediction operation
-    predictor = TilePrediction(patch_size=args.patch_size,
-                               effective_window_size=64,
-                               subdivisions=12,
-                               scaling_factor=0.5,
-                               pred_model=net,
-                               batch_size=128)
+            parallel = True
+            inputs = {'num_classes': FLAGS.num_class, 'num_channels': FLAGS.num_filters}
+            if FLAGS.network_id == "UNet1":
+                net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs)
+            elif FLAGS.network_id == "UNet2":
+                net = UNet2(**inputs).cuda() if cuda.is_available() else UNet2(**inputs)
+            elif FLAGS.network_id == "UNet3":
+                net = UNet3(**inputs).cuda() if cuda.is_available() else UNet3(**inputs)
+            elif FLAGS.network_id == "UNet4":
+                net = UNet4(**inputs).cuda() if cuda.is_available() else UNet4(**inputs)
+            if parallel:
+                net = DataParallel(net).cuda()
 
-    for wsi_name in wsi_list:
+            print('Load model: ' + FLAGS.snapshot)
 
-        # list test image files
-        filename_list = glob.glob(os.path.join(args.test_folder, wsi_name, '*' + args.image_extension))
-        filename_list.sort()
+            dev = None if cuda.is_available() else 'cpu'
+            state_dict = load(str(ckpt_path / exp_name / FLAGS.snapshot), map_location=dev)
+            if not parallel:
+                state_dict = {key[7:]: value for key, value in state_dict.items()}
+            net.load_state_dict(state_dict)
 
-        # create a directory
-        routine.create_dir(os.path.join(args.result_dir, wsi_name))
+            net.eval()
+            predictor = TilePrediction(patch_size=512,
+                                       subdivisions=2.0,
+                                       scaling_factor=0.5,
+                                       pred_model=net,
+                                       batch_size=6)
 
-        #########################################################
-        num_workers = args.workers
-        queue = mp.JoinableQueue(2 * num_workers)
-        for i in range(num_workers):
-            TileWorkersTissueSegmentation(queue, predictor).start()
-        #########################################################
+            segmentation, uncertain = predictor.run(FLAGS.image)
 
-        # read list of data
-        for iImage, file in enumerate(filename_list, 1):
-            # start_time = time.time()
-            #
-            # basename = os.path.basename(file)
-            # basename = os.path.splitext(basename)[0]
-            # savename = os.path.join(args.result_dir, wsi_name, basename + '.png')
-            #
-            # if not os.path.exists(savename):
-            #     # evaluation mode
-            #     result = predictor.run(file)
-            #
-            #     KSimage.imwrite(result, savename)
-            # duration = time.time() - start_time
-            # print('Finish segmenting DCIS regions on the H&E image of sample %d out of %d samples (%.2f sec)' %
-            #       (iImage + 1, len(filename_list), duration))
+            imageio.imwrite(savename, segmentation)
+            imageio.imwrite(savename_conf, uncertain)
 
-            queue.put((file, args.result_dir, wsi_name, iImage, len(filename_list)))
 
-        ###############################################################
-        for _i in range(num_workers):
-            queue.put(None)
-        queue.join()
-        ###############################################################
-
+#############################################################################################
 
 if __name__ == '__main__':
-
-    mp.set_start_method('spawn')
-    from KS_lib.prepare_data import routine
-
+    t = time.time()
     main()
+    print('finish image (%.2f)' % (time.time() - t))

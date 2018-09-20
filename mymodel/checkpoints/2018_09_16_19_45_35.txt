@@ -1,0 +1,2 @@
+Namespace(batch_size=1, checkpoint_folder='checkpoints', class_weights=None, data_dir='/Volumes/A-CH-EXDISK/Projects/Dataset', downsample=2.0, epochs=4000, gpu_ids=0, image_size=512, learning_rate=0.0001, learning_rate_patience=50, load_weightmap=False, losstype='ce', network_id='UNet3', num_class=3, num_filters=10, print_freq=10, snapshot='', val_batch_size=64, val_imgs_sample_rate=0.05, weight_decay=0.0005, workers=4)
+

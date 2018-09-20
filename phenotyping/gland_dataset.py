@@ -16,6 +16,8 @@ from torchvision.transforms import Compose
 from torch.utils.data import Dataset
 import warnings
 
+from itertools import product
+
 sys.path.append("../mymodel")
 from utils import is_pathname_valid
 
@@ -61,7 +63,7 @@ class GlandDataset(Dataset):
             img_augs = [iaa.AdditiveGaussianNoise(scale=0.05*255),
                             iaa.Add(20, per_channel=True),
                             iaa.Dropout(p=(0, 0.2)),
-                            iaa.ElasticTransformation(alpha=(0, 3.0), sigma=0.25),
+                            iaa.ElasticTransformation(alpha=(0, 0.2), sigma=0.25),
                             iaa.AverageBlur(k=(2, 5)),
                             iaa.MedianBlur(k=(3, 5)),
                             iaa.Sharpen(alpha=(0.0, 0.3), lightness=(0.9, 1.1)),
@@ -75,7 +77,7 @@ class GlandDataset(Dataset):
                 #img_augs.append(iaa.ContrastNormalization((0.8, 1.0)))
                 img_augs.append(iaa.Multiply((0.9, 1.1)))
                 #img_augs.append(iaa.Invert(0.5))
-                img_augs.append(iaa.Grayscale(alpha=(0.0, 0.2)))
+                img_augs.append(iaa.Grayscale(alpha=(0.0, 0.1)))
             self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
             self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
 
@@ -113,11 +115,13 @@ class GlandDataset(Dataset):
             geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
             img = geom_seq_det.augment_image(img)
             img = self.img_seq.augment_image(img)
-            img.clip(0, 255) #ensure added values don't stray from normal boundaries
             #gt = geom_seq_det.augment_image(gt)
             if self.load_wm:
                 wm = geom_seq_det.augment_image(wm)
             #print("THE SHAPE OF WM IS {}".format(wm.shape))
+
+        img.clip(0, 255)  # ensure added values don't stray from normal boundaries
+        img = img / 255  # normalize from 0 to 1
 
         example = self.to_tensor(img, isimage=True) #,  self.to_tensor(gt, isimage=False)
         if self.load_wm:
@@ -150,6 +154,160 @@ class GlandDataset(Dataset):
         # swap color axis because
         # numpy image: H x W x C
         # torch image: C X H X W
-        na = na[np.newaxis,:,:] if self.grayscale and isimage else na.transpose((2, 0, 1)) #grayscale or RGB
+        na = na[np.newaxis,:,:] if self.grayscale and isimage else na.transpose((2, 0, 1)) # grayscale or RGB
         na = torch.from_numpy(na.copy()).type(torch.FloatTensor)
         return na
+
+
+class GlandPatchDataset(Dataset):
+
+    def __init__(self, dir, mode, tile_size=512, augment=False):
+
+        self.mode = mode
+        self.dir = dir
+        self.tile_size = tile_size
+        self.augment = augment
+
+        # Read data paths (images containing gland parts)
+        self.gt_files = glob.glob(os.path.join(dir, mode, '**','gland_gt_[0-9]_([0-9],[0-9]).png'), recursive=True)
+        n = "[0-9]"
+        for gl_idx, x, y in product(range(1,3), range(1,4), range(1,4)):
+            to_glob = os.path.join(dir, mode, '**', 'gland_gt_' + n*gl_idx + '_(' + n*x + ',' + n*y + ').png')
+            self.gt_files += glob.glob(to_glob, recursive=True)
+
+        assert(self.gt_files); r"Cannot be empty"
+        self.img_files = [re.sub('gt', 'img', gtfile) for gtfile in self.gt_files]
+        assert (self.img_files)
+
+        # Check paths
+        path_check = zip(self.gt_files, self.img_files)
+        for idx, paths in enumerate(path_check):
+            for path in paths:
+                if not is_pathname_valid(path):
+                    warnings.warn("Invalid path {} was removed".format(self.gt_files[idx]))
+                    del self.gt_files[idx]
+
+        assert(self.gt_files); r"All paths invalid"
+        assert(self.img_files)
+
+        if self.augment:
+            geom_augs = [#iaa.Affine(rotate=(-45, 45)), #keep glands aligned to long dimension
+                        iaa.Affine(shear=(-10, 10)),
+                        iaa.Fliplr(0.9),
+                        iaa.Flipud(0.9),
+                        iaa.PiecewiseAffine(scale=(0.01, 0.04)),
+                        ]
+            img_augs = [iaa.AdditiveGaussianNoise(scale=0.05*255),
+                            iaa.Add(20, per_channel=True),
+                            iaa.Dropout(p=(0, 0.2)),
+                            iaa.ElasticTransformation(alpha=(0, 0.2), sigma=0.25),
+                            iaa.AverageBlur(k=(2, 5)),
+                            iaa.MedianBlur(k=(3, 5)),
+                            iaa.Sharpen(alpha=(0.0, 0.3), lightness=(0.9, 1.1)),
+                            iaa.Emboss(alpha=(0.0, 0.3), strength=(0.1, 0.3)),
+                            iaa.EdgeDetect(alpha=(0.0, 0.3))]
+            #Add color modifications
+            img_augs.append(iaa.WithChannels(0, iaa.Add((5, 20))))
+            img_augs.append(iaa.WithChannels(1, iaa.Add((5, 10))))
+            img_augs.append(iaa.WithChannels(2, iaa.Add((5, 20))))
+            #img_augs.append(iaa.ContrastNormalization((0.8, 1.0)))
+            img_augs.append(iaa.Multiply((0.9, 1.1)))
+            #img_augs.append(iaa.Invert(0.5))
+            img_augs.append(iaa.Grayscale(alpha=(0.0, 0.1)))
+            self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
+            self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
+
+    def __getitem__(self, idx):
+        try:
+            img = imageio.imread(self.img_files[idx])
+        except ValueError as err:
+            print("#--------> Invalid img data for path: {}".format(self.img_files[idx]))
+            raise err
+        try:
+            gt = imageio.imread(self.gt_files[idx])
+        except ValueError as err:
+            print("#--------> Invalid gt data for path: {}".format(self.img_files[idx]))
+            raise err
+
+        gt[gt > 0] = 1
+
+        # gt2, contours, hierarchy = cv2.findContours(gt, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # areas = [cv2.contourArea(contour) for contour in contours]
+        # areas.remove(max(areas))  # remove gland contour
+        # if areas:
+        #     assert(max(areas) < 2000)  # ensure there is only one gland in image
+
+        img_mean = np.mean(img)
+        if img.shape[0] < self.tile_size or img.shape[1] < self.tile_size:
+            img_dir = Path(self.img_files[idx]).parent
+            w_origin, h_origin = str(img_dir)[:-1].split('(')[1].split(',')[-2:]  # get original img size from folder name
+            x_tile, y_tile = self.img_files[idx][:-5].split('/')[-1].split('(')[1].split(',')  # get position of gland tile relative to larger image
+            w_origin, h_origin, x_tile, y_tile = [int(s) for s in [w_origin, h_origin, x_tile, y_tile]]
+
+            if x_tile > w_origin // 2:
+                left = self.tile_size - img.shape[1]
+                right = 0
+            else:
+                right = self.tile_size - img.shape[1]
+                left = 0
+
+            if y_tile > h_origin // 2:
+                bottom = self.tile_size - img.shape[0]
+                top = 0
+            else:
+                top = self.tile_size - img.shape[0]
+                bottom = 0
+
+            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[img_mean]*3)
+            gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
+
+        gt = gt[:, :, np.newaxis]
+        img[gt.repeat(3, axis=2) == 0] = img_mean  # TODO use only mean outside of gland rather than for whole tile?
+
+        # if self.augment:
+        #     img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
+        #     geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
+        #     img = geom_seq_det.augment_image(img)
+        #     img = self.img_seq.augment_image(img)
+        #     #gt = geom_seq_det.augment_image(gt)
+        #
+        #     #print("THE SHAPE OF WM IS {}".format(wm.shape))
+        #
+        #     img.clip(0, 255)  # ensure added values don't stray from normal boundaries
+        #     img = img / 255  # !!!!!! normalize from 0 to 1 if augmentation !
+
+        img = self.to_tensor(img)
+        #gt = self.to_tensor(gt)
+
+        return img, gt
+
+    def __len__(self):
+        return len(self.gt_files)
+
+    def to_tensor(self, na):
+        r"""Convert ndarrays in sample to Tensors."""
+        # swap color axis because
+        # numpy image: H x W x C
+        # torch image: C X H X W
+        na = na.transpose(2, 0, 1)
+        na = torch.from_numpy(na.copy()).type(torch.FloatTensor)
+        return na
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

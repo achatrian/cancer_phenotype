@@ -97,6 +97,10 @@ def main(FLAGS):
         net = UNet1(**inps).cuda() if cuda.is_available() else UNet1(**inps) #possible classes are stroma, gland, lumen
     elif TRAINFLAGS.network_id == "UNet2":
         net = UNet2(**inps).cuda() if cuda.is_available() else UNet2(**inps)
+    elif TRAINFLAGS.network_id == "UNet3":
+        net = UNet3(**inps).cuda() if cuda.is_available() else UNet3(**inps) #possible classes are stroma, gland, lumen
+    elif TRAINFLAGS.network_id == "UNet4":
+        net = UNet4(**inps).cuda() if cuda.is_available() else UNet4(**inps)
 
     netdict = load(FLAGS.model_filepath, map_location = None if cuda.is_available() else'cpu')
 
@@ -112,15 +116,10 @@ def main(FLAGS):
 
     #Loss
     if TRAINFLAGS.num_class>1:
-        if TRAINFLAGS.losstype == 'ce':
-            criterion = MultiLabelSoftMarginLoss(size_average=True, weight=TRAINFLAGS.class_weights) #loss
-        else:
-            criterion = MultiLabelSoftDiceLoss(num_class=TRAINFLAGS.num_class, weights=TRAINFLAGS.class_weights)
+        criterion = MultiLabelSoftMarginLoss(size_average=True, weight=TRAINFLAGS.class_weights) #loss
     else:
-        if TRAINFLAGS.losstype == 'ce':
-            criterion = BCEWithLogitsLoss(size_average=True, weight=TRAINFLAGS.class_weights)
-        else:
-            criterion = MultiLabelSoftDiceLoss(num_class=TRAINFLAGS.num_class, weights=TRAINFLAGS.class_weights)
+        criterion = BCEWithLogitsLoss(size_average=True, weight=TRAINFLAGS.class_weights)
+
 
     if cuda.is_available(): criterion = criterion.cuda()
 
