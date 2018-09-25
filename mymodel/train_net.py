@@ -42,18 +42,13 @@ from clr import CyclicLR
 
 cudnn.benchmark = True
 
-timestamp = get_time_stamp()
-if on_cluster():
-    ckpt_path = "/well/win/users/achatrian/ProstateCancer/logs/" + timestamp + "/ckpt"
-else:
-    ckpt_path = "/Users/andreachatrian/Documents/Repositories/ProstateCancer/Logs"
-exp_name = ''
-writer = SummaryWriter(os.path.join(str(ckpt_path), exp_name))
-visualize = ToTensor()
-
-
+ckpt_path = ''
+writer = None
 
 def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_freq, scheduler=None):
+    global ckpt_path
+    ckpt_path = ckpt_path  # update with global value
+
     train_loss = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
     for i, data in enumerate(tqdm(train_loader)):
@@ -99,6 +94,9 @@ def train(train_loader, net, criterion, optimizer, epoch, load_weightmap, print_
             epoch, i,  train_loss.avg, acc, acc_cls, dice, dice_cls))
 
 def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.05, val_save_to_img_file=True):
+    global ckpt_path, writer
+    ckpt_path, writer = ckpt_path, writer  # update with global value
+
     net.eval() #!!
 
     val_loss = AverageMeter()
@@ -176,6 +174,10 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     return val_loss.avg
 
 def main(FLAGS):
+    global ckpt_path, writer
+    ckpt_path, writer = Path(ckpt_path), writer
+
+
     if cuda.is_available():
         if isinstance(FLAGS.gpu_ids, Integral):
             cuda.set_device(FLAGS.gpu_ids)
@@ -228,10 +230,10 @@ def main(FLAGS):
                                 'lr': float(split_snapshot[9][:-4])}
         val_loss = best_record['val_loss']
 
-    #reduce = not FLAGS.load_weightmap
-    criterion = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
+    reduce = not FLAGS.load_weightmap
+    criterion = BCEWithLogitsLoss(size_average=reduce, reduce=reduce, weight=FLAGS.class_weights)
     #criterion = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
-    criterion_val = BCEWithLogitsLoss(size_average=True, weight=FLAGS.class_weights)
+    criterion_val = BCEWithLogitsLoss(size_average=True, reduce=reduce, weight=FLAGS.class_weights)
     #criterion_val = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
 
     if cuda.is_available(): criterion = criterion.cuda()
@@ -317,4 +319,14 @@ if __name__ == '__main__':
 
     FLAGS, unparsed = parser.parse_known_args()
     if unparsed: warnings.warn("Unparsed arguments")
+
+    timestamp = get_time_stamp()
+    if on_cluster():
+        ckpt_path = "/well/win/users/achatrian/ProstateCancer/logs/" + timestamp + "/ckpt"
+    else:
+        ckpt_path = "/Users/andreachatrian/Documents/Repositories/ProstateCancer/Logs"
+    exp_name = ''
+    writer = SummaryWriter(os.path.join(str(ckpt_path), exp_name if not FLAGS.snapshot else exp_name + "_" + FLAGS.snapshot))
+    visualize = ToTensor()
+
     main(FLAGS)

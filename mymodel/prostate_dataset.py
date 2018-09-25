@@ -31,7 +31,7 @@ class SegDataset(Dataset):
         self.label = []
 
         thedir = os.path.join(dir_, mode)
-        folders = [ name for name in os.listdir(thedir) if os.path.isdir(os.path.join(thedir, name)) ]
+        folders = [name for name in os.listdir(thedir) if os.path.isdir(os.path.join(thedir, name))]
 
         file_list = []
         for file in folders:

@@ -10,6 +10,7 @@ from pathlib import Path
 import imageio
 import torch
 import numpy as np
+from scipy import stats
 import imgaug as ia
 from imgaug import augmenters as iaa
 from torchvision.transforms import Compose
@@ -129,7 +130,7 @@ class GlandDataset(Dataset):
         return example
 
     def split_gt(self, gt, cls_values=[0,2,4], merge_cls={4:2}):
-        cls_gts=[]
+        cls_gt=[]
 
         if len(cls_values) == 2: #binarize
             gt = (gt > 0).astype(np.uint8)
@@ -139,14 +140,14 @@ class GlandDataset(Dataset):
         for c in cls_values:
             map = np.array(gt == c, dtype=np.uint8)  #simple 0 or 1 for different classes
             #could weight pixels here
-            cls_gts.append(map)
+            cls_gt.append(map)
 
         #Handle overlapping classes (fill)
         for cs, ct in merge_cls.items():
-            mask = cls_gts[cls_values.index(cs)] > 0
-            cls_gts[cls_values.index(ct)][mask] = 1
+            mask = cls_gt[cls_values.index(cs)] > 0
+            cls_gt[cls_values.index(ct)][mask] = 1
 
-        gt = np.stack(cls_gts, axis=2) #need to rescale with opencv later, so channel must be last dim
+        gt = np.stack(cls_gt, axis=2) #need to rescale with opencv later, so channel must be last dim
         return gt
 
     def to_tensor(self, na, isimage):
@@ -161,17 +162,18 @@ class GlandDataset(Dataset):
 
 class GlandPatchDataset(Dataset):
 
-    def __init__(self, dir, mode, tile_size=512, augment=False):
+    def __init__(self, dir, mode, tile_size=512, augment=False, return_cls=False):
 
         self.mode = mode
         self.dir = dir
         self.tile_size = tile_size
         self.augment = augment
+        self.return_cls = return_cls
 
         # Read data paths (images containing gland parts)
         self.gt_files = glob.glob(os.path.join(dir, mode, '**','gland_gt_[0-9]_([0-9],[0-9]).png'), recursive=True)
         n = "[0-9]"
-        for gl_idx, x, y in product(range(1,3), range(1,4), range(1,4)):
+        for gl_idx, x, y in product(range(1,4), range(1,5), range(1,5)):
             to_glob = os.path.join(dir, mode, '**', 'gland_gt_' + n*gl_idx + '_(' + n*x + ',' + n*y + ').png')
             self.gt_files += glob.glob(to_glob, recursive=True)
 
@@ -229,15 +231,12 @@ class GlandPatchDataset(Dataset):
             print("#--------> Invalid gt data for path: {}".format(self.img_files[idx]))
             raise err
 
-        gt[gt > 0] = 1
+        if self.return_cls:
+            tumour_cls = [stats.mode(gt[np.logical_and(gt > 0, gt != 4)], axis=None)[0] for gt in gt] # take most common class over gland excluding lumen
+            tumour_cls = [int(tc) if tc.size > 0 else 0 for tc in tumour_cls]
+        gt[gt > 0] = 1  # push to one class
 
-        # gt2, contours, hierarchy = cv2.findContours(gt, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        # areas = [cv2.contourArea(contour) for contour in contours]
-        # areas.remove(max(areas))  # remove gland contour
-        # if areas:
-        #     assert(max(areas) < 2000)  # ensure there is only one gland in image
-
-        img_mean = np.mean(img)
+        stromal_mean = np.mean(img[np.isclose(gt, 0)])
         if img.shape[0] < self.tile_size or img.shape[1] < self.tile_size:
             img_dir = Path(self.img_files[idx]).parent
             w_origin, h_origin = str(img_dir)[:-1].split('(')[1].split(',')[-2:]  # get original img size from folder name
@@ -258,28 +257,28 @@ class GlandPatchDataset(Dataset):
                 top = self.tile_size - img.shape[0]
                 bottom = 0
 
-            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[img_mean]*3)
+            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[stromal_mean]*3)
             gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
 
         gt = gt[:, :, np.newaxis]
-        img[gt.repeat(3, axis=2) == 0] = img_mean  # TODO use only mean outside of gland rather than for whole tile?
+        img[gt.repeat(3, axis=2) == 0] = stromal_mean  # doing this outside as it breaks frequency augmentation
 
-        # if self.augment:
-        #     img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
-        #     geom_seq_det = self.geom_aug_seq.to_deterministic() #ensure ground truth and image are transformed identically
-        #     img = geom_seq_det.augment_image(img)
-        #     img = self.img_seq.augment_image(img)
-        #     #gt = geom_seq_det.augment_image(gt)
-        #
-        #     #print("THE SHAPE OF WM IS {}".format(wm.shape))
-        #
-        #     img.clip(0, 255)  # ensure added values don't stray from normal boundaries
-        #     img = img / 255  # !!!!!! normalize from 0 to 1 if augmentation !
+        # Normalize as when training network:
+        #img = img.clip(0, 255) # NOT NEEDED
+        img = img / 255  # from 0 to 1
+        img = (img - 0.5)/0.5  # from -1 to 1
+
+        assert img.max() <= 1.0
+        assert img.min() >= -1.0
 
         img = self.to_tensor(img)
-        #gt = self.to_tensor(gt)
+        gt = self.to_tensor(gt)  # NB dataloader must return tensors
 
-        return img, gt
+        data = (img, gt)
+        if self.return_cls:
+            data += (tumour_cls,)
+        return data
+
 
     def __len__(self):
         return len(self.gt_files)

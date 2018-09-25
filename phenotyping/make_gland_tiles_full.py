@@ -24,7 +24,7 @@ class InstanceSaver(mp.Process):
     """
     Groups together
     """
-    def __init__(self, queue, id, dir, out_size, min_gland_area=10000):
+    def __init__(self, queue, id, dir, out_size, min_gland_area=10000, bb_margin=0.1):
         mp.Process.__init__(self, name='InstanceSaver')
         self.daemon = True #requred
         self.id = id
@@ -32,6 +32,7 @@ class InstanceSaver(mp.Process):
         self.dir = Path(dir)
         self.max_out_size = out_size
         self.min_gland_area = min_gland_area
+        self.bb_margin = bb_margin
 
     def run(self):
         count = 0
@@ -42,6 +43,8 @@ class InstanceSaver(mp.Process):
                 break
 
             idx, img, gt, glandspath = data
+            assert img.size
+            assert gt.size
 
             # Resize as during training
             img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
@@ -55,7 +58,14 @@ class InstanceSaver(mp.Process):
                 if x <= 0 or y <= 0 or x+w >= img.shape[1] or y+h >= img.shape[0]:
                     continue  #skip instance if gland touches walls (incomplete)
 
+                # Slightly increase bounding Box
+                x = max(x - round(w * self.bb_margin), 0)
+                y = max(y - round(h * self.bb_margin), 0)
+                w += min(round(w * self.bb_margin) * 2, img.shape[1] - x) # overall increases by size * margin percentage
+                h += min(round(h * self.bb_margin) * 2, img.shape[0] - y)
+
                 if w > self.max_out_size:
+                    # For glands bigger than the desired tile size
                     tile_xs = list(range(x, x + w - self.max_out_size, self.max_out_size))
                     if tile_xs and x + w - self.max_out_size - tile_xs[-1] < 150:
                         del tile_xs[-1]  # delete last and replace with border if they are similar
@@ -84,6 +94,8 @@ class InstanceSaver(mp.Process):
                     ht = min(h, self.max_out_size)
                     gland_img = img[yt: yt + ht, xt: xt + wt]
                     gland_gt = gt_temp[yt: yt + ht, xt: xt + wt]
+                    assert gland_img.size  # must be non-empty
+                    assert gland_gt.size # must be non-empty
                     imageio.imwrite(self.dir / glandspath / "gland_img_{}_({},{}).png".format(c_idx, xt, yt), gland_img)
                     imageio.imwrite(self.dir / glandspath / "gland_gt_{}_({},{}).png".format(c_idx, xt, yt), gland_gt)
 
@@ -116,7 +128,7 @@ def main(FLAGS):
         queue.put((idx, img, gt, glandspath))
 
     for i in range(FLAGS.workers):
-        queue.put(None)  #why?
+        queue.put(None)  # why?
     queue.join()
 
 

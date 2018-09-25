@@ -6,8 +6,8 @@ clc
 % nucleus_train_val_split = 0.85;
 % unet_train_val_split = 0.85;
 nuc_output_size = 1024;         % Set this to < 2 to output nuclei images of different sizes for maskrcnn
-imgpath = '/Volumes/A.CH.EXDISK1/Projects/Project_annotate/masks';
-tissue_unet_out_path = '/Volumes/A.CH.EXDISK1/Projects/Dataset';
+imgpath = '/Volumes/A-CH-EXDISK/Projects/Project_annotate/masks';
+tissue_unet_out_path = '/Volumes/A-CH-EXDISK/Projects/Dataset';
 filenames = dir(imgpath); 
 filenames = filenames(4:end); %remove hidden system folders
 class_id = {'Nucleus', 'Tumor', 'Benign', 'Lumen'};
@@ -18,7 +18,7 @@ tissue_mask = {};
 
 downsample = 1.00;
 overlap_thresh = 0.0005; %overlap threshold to merge overlapping instances
-merge_gland_cls = true; %option to merge tumour and benign class
+merge_gland_cls = false; %option to merge tumour and benign class
 make_tiles = true; %option to divide images into smaller tiles
 tile_side = 1024*uint64(2.0/downsample);
 visualize = false;
@@ -264,3 +264,5 @@ for i = 1:numel(tissue_trn_img)
         end
     end
 end
+
+display("End")
