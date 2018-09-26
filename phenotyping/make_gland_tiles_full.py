@@ -24,7 +24,7 @@ class InstanceSaver(mp.Process):
     """
     Groups together
     """
-    def __init__(self, queue, id, dir, out_size, min_gland_area=10000, bb_margin=0.1):
+    def __init__(self, queue, id, dir, out_size, min_gland_area=6000, bb_margin=0.1):
         mp.Process.__init__(self, name='InstanceSaver')
         self.daemon = True #requred
         self.id = id
@@ -128,8 +128,10 @@ def main(FLAGS):
         queue.put((idx, img, gt, glandspath))
 
     for i in range(FLAGS.workers):
-        queue.put(None)  # why?
+        queue.put(None)
+
     queue.join()
+    # print("Generated {} glands (with minimum area {})".format(idx, FLAGS.min_gland_area))
 
 
 
@@ -139,7 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to make gland data')
     parser.add_argument('--max_image_size', type=int, default=512)
-    parser.add_argument('--min_gland_area', type=int, default=10000)
+    parser.add_argument('--min_gland_area', type=int, default=6000)
     mp.set_start_method('spawn')
 
     FLAGS, unparsed = parser.parse_known_args()

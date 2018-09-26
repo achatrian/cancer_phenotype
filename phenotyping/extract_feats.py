@@ -16,6 +16,7 @@ from torch.autograd import Variable
 import cv2
 from tqdm import tqdm
 from imageio import imwrite
+from PIL import Image
 
 from skimage.filters import gabor_kernel
 from scipy import ndimage as ndi
@@ -187,7 +188,6 @@ def feature_extraction(imgs, gts):
         for k, kernel in enumerate(kernels):
             filtered = ndi.convolve(img, kernel, mode='wrap')
             kernel_descriptors.append(filtered.mean(), filtered.var())
-
     pass
 
 def make_thumnbnail(img, th_size, label=None):
@@ -198,22 +198,37 @@ def make_thumnbnail(img, th_size, label=None):
     :return: thumbnail
 
     Generate thumbnail of required size given an image, taking into account different gland sizes
+    If label is given, colour the background with the label of specific classes
     """
 
     img = (img + 1) / 2 * 255  # change back to RGB from [-1, 1] range
-    img_mode = int(mode(img, axis=None)[0])
-    background = (label or 0) * 60  # 4 labels, 60 * 4 = 240 < 255
-    img[img == img_mode] = background
+    assert img.min() > 0.0 - 0.1 and img.max() < 255.0 + 0.1
+    img = img.astype(np.uint8)
+    img_mode = [int(mode(img[..., 0], axis=None)[0]),
+                int(mode(img[..., 1], axis=None)[0]), int(mode(img[..., 2], axis=None)[0])]
+    background = label or 0
+    if background == 2:
+        img[img[..., 0] == img_mode[0], 0] = 100
+        img[img[..., 1] == img_mode[1], 1] = 170
+        img[img[..., 2] == img_mode[2], 0] = 100
+    elif background == 3:
+        img[img[..., 0] == img_mode[0], 0] = 100
+        img[img[..., 1] == img_mode[1], 1] = 100
+        img[img[..., 2] == img_mode[2], 2] = 170
+    else:
+        pass
     seg = np.logical_not(np.isclose(background, img)).any(axis=2).astype(np.uint8)  # isclose to compare floats
     gt2, contours, hierarchy = cv2.findContours(seg, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     areas = [cv2.contourArea(cnt) for cnt in contours]
     gland_cnt = contours[areas.index(max(areas))]
     x, y, w, h = cv2.boundingRect(gland_cnt)
     s = max(w, h)
+    s = min(int(round(s * 1.5)), img.shape[0])  # increase bounding box for better visualization
     x = min(x, img.shape[0] - s)  # img is a square
     y = min(y, img.shape[0] - s)
     tn = img[y: y+s, x: x+s]
-    tn = cv2.resize(tn, th_size, cv2.INTER_AREA)  # could upsample or downsample depending on original gland size
+    #tn = np.array(Image.fromarray(tn).thumbnail(th_size, Image.ANTIALIAS)) # could upsample or downsample depending on original gland size
+    tn = cv2.resize(tn, th_size, cv2.INTER_AREA)
     return tn.astype(np.uint8)
 
 
@@ -339,7 +354,7 @@ def augment_glands(imgs, gts, N=1):
     """
     if N:
         #Does nothing for N = 0
-        imgs = (imgs + 1) / 2 * 255
+        #imgs = (imgs + 1) / 2 * 255  # NO, needed from -1 to 1 for features
         cat = np.concatenate([imgs, gts], axis=3)
         for n in range(N):
             out = seq.augment_images(cat)  # works on batch of images
@@ -442,6 +457,11 @@ def main(FLAGS):
 
             if FLAGS.get_tumour_cls:
                 tumour_cls = data[2]
+                tumour_cls = list(tumour_cls.numpy())
+
+                img_paths = data[3]  # get
+            else:
+                img_paths = data[2]
 
             glands_features = []
             for n in range(FLAGS.augment_num + 1):
@@ -479,7 +499,8 @@ def main(FLAGS):
                 X[-1] = np.concatenate((gl_features, colours, [size]))
 
             # Save original images
-            to_save = zip(imgs[0: 0+num, ...], tumour_cls) if FLAGS.get_tumour_cls else imgs[0: 0+num, ...]
+            to_save = zip(imgs[0: 0+num, ...],  # only originals
+                          tumour_cls) if FLAGS.get_tumour_cls else imgs[0: 0+num, ...]
             for j, in_data in enumerate(to_save):
                 if j in bad_imgs:
                     continue  # skip if nan response
@@ -488,14 +509,16 @@ def main(FLAGS):
                     label = in_data[1]
                 else:
                     img = in_data
-                tn = make_thumnbnail(img, th_size)
+                tn = make_thumnbnail(img, th_size, label=label if FLAGS.get_tumour_cls else None)
                 thumbnails.append(tn)
                 if FLAGS.get_tumour_cls:
                     labels.append(label)
 
-    X = np.array(X)
+                if i == 0:
+                    imwrite(Path(FLAGS.save_dir).expanduser() / "thumbnail_test.png", tn)
 
     # Save features
+    X = np.array(X)
     header = "mean_1,std_1,max_1,mean_2,std_2,max_2,..._{}x{}_{}".format(X.shape[0], X.shape[1], FLAGS.snapshot)
     save_file = Path(FLAGS.save_dir).expanduser()/("feats_" + FLAGS.snapshot[:-4] + ".csv")
     with open(str(save_file), 'w') as feature_file:
@@ -503,19 +526,16 @@ def main(FLAGS):
     print("Saved feature matrix ({}x{})".format(*X.shape))
 
     # Save thumbnails
-    spriteimage = create_sprite_image(thumbnails)
-    spriteimage = spriteimage.astype(np.uint8)
+    thumbnails = np.array(thumbnails)
+    spriteimage = create_sprite_image(thumbnails.astype(np.uint8))
     save_file = Path(FLAGS.save_dir).expanduser() /("sprite_" + FLAGS.snapshot[:-4] + ".png")
     imwrite(save_file, spriteimage)
     save_file = Path(FLAGS.save_dir).expanduser() / ("thumbnails_" + FLAGS.snapshot[:-4] + ".npy")  # format for saving numpy data (not compressed)
-    thumbnails = np.array(thumbnails)
     # Revert to RGB:
     thumbnails = thumbnails.astype(np.uint8)
     with open(str(save_file), 'wb') as thumbnails_file:  # it uses pickle, hence need to open file in binary mode
         np.save(thumbnails_file, thumbnails)
     print("Saved {} ({}x{} thumbnails".format(*thumbnails.shape))
-
-    print("Done!")
 
     if FLAGS.get_tumour_cls:
         labels = np.array(labels)
@@ -523,8 +543,9 @@ def main(FLAGS):
         save_file = Path(FLAGS.save_dir).expanduser() / ("labels_" + FLAGS.snapshot[:-4] + ".tsv")
         with open(str(save_file), 'w') as labels_file:
             np.savetxt(labels_file, labels, delimiter='\t')
-        print("Saved labels ({})".format(labels.size))
+        print("Saved labels ({}) - {} tumour and {} gland".format(labels.size, np.sum(labels == 2), np.sum(labels == 3)))
 
+    print("Done!")
 
 def thumbnails_size_check(str_size):
     size = int(str_size)
@@ -545,7 +566,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_resnet', type=str2bool, default='n')
 
     parser.add_argument('--network_id', type=str, default="UNet4")
-    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--batch_size', default=4, type=int)
 
     parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
     parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')

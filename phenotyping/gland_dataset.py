@@ -232,11 +232,12 @@ class GlandPatchDataset(Dataset):
             raise err
 
         if self.return_cls:
-            tumour_cls = [stats.mode(gt[np.logical_and(gt > 0, gt != 4)], axis=None)[0] for gt in gt] # take most common class over gland excluding lumen
-            tumour_cls = [int(tc) if tc.size > 0 else 0 for tc in tumour_cls]
+            tumour_cls = stats.mode(gt[np.logical_and(gt > 0, gt != 4)], axis=None)[0]  # take most common class over gland excluding lumen
+            tumour_cls = int(tumour_cls) if tumour_cls.size > 0 else 0
         gt[gt > 0] = 1  # push to one class
 
-        stromal_mean = np.mean(img[np.isclose(gt, 0)])
+        bg_mask = np.isclose(gt.squeeze(), 0)  # background mask
+        stromal_mean = [np.mean(img[bg_mask, 0]), np.mean(img[bg_mask, 1]), np.mean(img[bg_mask, 1])]
         if img.shape[0] < self.tile_size or img.shape[1] < self.tile_size:
             img_dir = Path(self.img_files[idx]).parent
             w_origin, h_origin = str(img_dir)[:-1].split('(')[1].split(',')[-2:]  # get original img size from folder name
@@ -257,11 +258,14 @@ class GlandPatchDataset(Dataset):
                 top = self.tile_size - img.shape[0]
                 bottom = 0
 
-            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[stromal_mean]*3)
+            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=stromal_mean)
             gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
 
+
+        img[gt == 0, 0] = stromal_mean[0]
+        img[gt == 0, 1] = stromal_mean[1]
+        img[gt == 0, 2] = stromal_mean[2]
         gt = gt[:, :, np.newaxis]
-        img[gt.repeat(3, axis=2) == 0] = stromal_mean  # doing this outside as it breaks frequency augmentation
 
         # Normalize as when training network:
         #img = img.clip(0, 255) # NOT NEEDED
@@ -276,7 +280,9 @@ class GlandPatchDataset(Dataset):
 
         data = (img, gt)
         if self.return_cls:
-            data += (tumour_cls,)
+            data += (tumour_cls,)  # batch of these is automatically turned into a tensor by dataloader !
+
+        data += (self.img_files[idx],)
         return data
 
 
