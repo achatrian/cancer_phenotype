@@ -99,76 +99,77 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
 
     net.eval() #!!
 
-    val_loss = AverageMeter()
-    inputs_smpl, gts_smpl, predictions_smpl = [], [], []
-    for vi, data in enumerate(val_loader): #pass over whole validation dataset
-        inputs, gts = data
-        N = inputs.size(0)
-        with no_grad(): #don't track variable history for backprop (to avoid out of memory)
-            #NB @pytorch variables and tensors will be merged in the future
-            inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
-            gts = Variable(gts).cuda() if cuda.is_available() else Variable(inputs)
-            outputs = net(inputs)
+    with torch.no_grad():
+        val_loss = AverageMeter()
+        inputs_smpl, gts_smpl, predictions_smpl = [], [], []
+        for vi, data in enumerate(val_loader): #pass over whole validation dataset
+            inputs, gts = data
+            N = inputs.size(0)
+            with no_grad(): #don't track variable history for backprop (to avoid out of memory)
+                #NB @pytorch variables and tensors will be merged in the future
+                inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
+                gts = Variable(gts).cuda() if cuda.is_available() else Variable(inputs)
+                outputs = net(inputs)
 
-        val_loss.update(criterion(outputs, gts).data.item(), N)
+            val_loss.update(criterion(outputs, gts).data.item(), N)
 
-        val_num = int(np.floor(val_imgs_sample_rate*N))
-        val_idx = random.sample(list(range(N)), val_num)
-        for idx in val_idx:
-            inputs_smpl.append(inputs[idx,...].data.cpu().numpy())
-            gts_smpl.append(gts[idx,...].data.cpu().numpy())
-            predictions_smpl.append(outputs[idx,...].data.cpu().numpy())
-    gts_smpl = np.stack(gts_smpl, axis=0)
-    predictions_smpl = np.stack(predictions_smpl, axis=0)
+            val_num = int(np.floor(val_imgs_sample_rate*N))
+            val_idx = random.sample(list(range(N)), val_num)
+            for idx in val_idx:
+                inputs_smpl.append(inputs[idx,...].data.cpu().numpy())
+                gts_smpl.append(gts[idx,...].data.cpu().numpy())
+                predictions_smpl.append(outputs[idx,...].data.cpu().numpy())
+        gts_smpl = np.stack(gts_smpl, axis=0)
+        predictions_smpl = np.stack(predictions_smpl, axis=0)
 
-    #Compute metrics
-    acc, acc_cls, dice, dice_cls = evaluate_multilabel(outputs.cpu().numpy(), gts.cpu().numpy())
-    print('epoch: {:d}, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}'.format(
-        epoch, val_loss.avg, acc, acc_cls, dice, dice_cls))
+        #Compute metrics
+        acc, acc_cls, dice, dice_cls = evaluate_multilabel(outputs.cpu().numpy(), gts.cpu().numpy())
+        print('epoch: {:d}, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}'.format(
+            epoch, val_loss.avg, acc, acc_cls, dice, dice_cls))
 
-    if dice > best_record['dice']:
-        best_record['val_loss'] = val_loss.avg
-        best_record['epoch'] = epoch
-        best_record['acc'] = acc
-        best_record['acc_cls'] = acc_cls
-        best_record['dice'] = dice
-        best_record['dice_cls'] = dice_cls
-        best_record['lr'] = optimizer.param_groups[1]['lr']
-        snapshot_name = 'epoch_.{:d}_loss_{:.5f}_acc_{:.5f}_dice_{:.5f}_lr_{:.10f}'.format(
-            epoch, val_loss.avg, acc, dice, optimizer.param_groups[1]['lr'])
-        save(net.state_dict(), os.path.join(ckpt_path, exp_name, snapshot_name + '.pth'))
-        save(optimizer.state_dict(), os.path.join(ckpt_path, exp_name, 'opt_' + snapshot_name + '.pth'))
+        if dice > best_record['dice']:
+            best_record['val_loss'] = val_loss.avg
+            best_record['epoch'] = epoch
+            best_record['acc'] = acc
+            best_record['acc_cls'] = acc_cls
+            best_record['dice'] = dice
+            best_record['dice_cls'] = dice_cls
+            best_record['lr'] = optimizer.param_groups[1]['lr']
+            snapshot_name = 'epoch_.{:d}_loss_{:.5f}_acc_{:.5f}_dice_{:.5f}_lr_{:.10f}'.format(
+                epoch, val_loss.avg, acc, dice, optimizer.param_groups[1]['lr'])
+            save(net.state_dict(), os.path.join(ckpt_path, exp_name, snapshot_name + '.pth'))
+            save(optimizer.state_dict(), os.path.join(ckpt_path, exp_name, 'opt_' + snapshot_name + '.pth'))
 
-        if val_save_to_img_file:
-            to_save_dir = os.path.join(str(ckpt_path), exp_name, str(epoch))
-            check_mkdir(to_save_dir)
-
-        val_visual = []
-        for idx, (input, gt, pred) in enumerate(zip(inputs_smpl, gts_smpl, predictions_smpl)):
-
-            # FIXME adapt colorize() to korsuk's preprocessing (images not displaying correctly
-            gt_rgb, pred_rgb = colorize(gt), colorize(pred)
-            input_rgb = input.transpose(1,2,0) if input.shape[0] == 3 else cvtColor(input.transpose(1,2,0) , COLOR_GRAY2RGB)
             if val_save_to_img_file:
-                imwrite(os.path.join(to_save_dir, "{}_input.png".format(idx)), input_rgb)
-                imwrite(os.path.join(to_save_dir, "{}_pred.png".format(idx)), pred_rgb)
-                imwrite(os.path.join(to_save_dir, "{}_gt.png".format(idx)), gt_rgb)
-            val_visual.extend([visualize(input_rgb), visualize(gt_rgb), visualize(pred_rgb)])
-        val_visual = stack(val_visual, 0)
-        val_visual = vutils.make_grid(val_visual, nrow=3, padding=5)
-        writer.add_image(snapshot_name, val_visual)
+                to_save_dir = os.path.join(str(ckpt_path), exp_name, str(epoch))
+                check_mkdir(to_save_dir)
 
-        print('-----------------------------------------------------------------------------------------------------------')
-        print("best record (epoch{:d}):, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}".format(
-            best_record['epoch'], best_record['val_loss'], best_record['acc'], best_record['acc_cls'],
-            best_record['dice'], best_record['dice_cls']))
-        print('-----------------------------------------------------------------------------------------------------------')
-    writer.add_scalar('val_loss', val_loss.avg, epoch)
-    writer.add_scalar('acc', acc, epoch)
-    for c, acc_c in enumerate(acc_cls): writer.add_scalar('acc_c{}'.format(c), acc_c, epoch)
-    writer.add_scalar('dice', dice, epoch)
-    for c, dice_c in enumerate(dice_cls): writer.add_scalar('dice_c{}'.format(c), dice_c, epoch)
-    writer.add_scalar('lr', optimizer.param_groups[1]['lr'], epoch)
+            val_visual = []
+            for idx, (input, gt, pred) in enumerate(zip(inputs_smpl, gts_smpl, predictions_smpl)):
+
+                # FIXME adapt colorize() to korsuk's preprocessing (images not displaying correctly
+                gt_rgb, pred_rgb = colorize(gt), colorize(pred)
+                input_rgb = input.transpose(1,2,0) if input.shape[0] == 3 else cvtColor(input.transpose(1,2,0) , COLOR_GRAY2RGB)
+                if val_save_to_img_file:
+                    imwrite(os.path.join(to_save_dir, "{}_input.png".format(idx)), input_rgb)
+                    imwrite(os.path.join(to_save_dir, "{}_pred.png".format(idx)), pred_rgb)
+                    imwrite(os.path.join(to_save_dir, "{}_gt.png".format(idx)), gt_rgb)
+                val_visual.extend([visualize(input_rgb), visualize(gt_rgb), visualize(pred_rgb)])
+            val_visual = stack(val_visual, 0)
+            val_visual = vutils.make_grid(val_visual, nrow=3, padding=5)
+            writer.add_image(snapshot_name, val_visual)
+
+            print('-----------------------------------------------------------------------------------------------------------')
+            print("best record (epoch{:d}):, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}".format(
+                best_record['epoch'], best_record['val_loss'], best_record['acc'], best_record['acc_cls'],
+                best_record['dice'], best_record['dice_cls']))
+            print('-----------------------------------------------------------------------------------------------------------')
+        writer.add_scalar('val_loss', val_loss.avg, epoch)
+        writer.add_scalar('acc', acc, epoch)
+        for c, acc_c in enumerate(acc_cls): writer.add_scalar('acc_c{}'.format(c), acc_c, epoch)
+        writer.add_scalar('dice', dice, epoch)
+        for c, dice_c in enumerate(dice_cls): writer.add_scalar('dice_c{}'.format(c), dice_c, epoch)
+        writer.add_scalar('lr', optimizer.param_groups[1]['lr'], epoch)
 
     net.train() #reset network state to train (e.g. for batch norm)
     return val_loss.avg

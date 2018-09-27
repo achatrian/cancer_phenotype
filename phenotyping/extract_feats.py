@@ -16,17 +16,18 @@ from torch.autograd import Variable
 import cv2
 from tqdm import tqdm
 from imageio import imwrite
-from PIL import Image
-
 from skimage.filters import gabor_kernel
 from scipy import ndimage as ndi
-
 from imgaug import augmenters as iaa
 import imgaug as ia
+from torch.nn.functional import avg_pool2d
+from torch.multiprocessing import Pool  # wrapper areound original mp method to share tensors in memory
+from itertools import chain
 
-from torchvision.models import resnet50
 from gland_dataset import GlandPatchDataset
 
+dtype = torch.cuda.FloatTensor
+dtype_long = torch.cuda.LongTensor
 
 def on_cluster():
     import socket, re
@@ -43,10 +44,10 @@ if on_cluster():
     sys.path.append(os.path.expanduser('~') + '/ProstateCancer')
 else:
     sys.path.append(os.path.expanduser('~') + '/Documents/Repositories/ProstateCancer')
-
 from mymodel.utils import on_cluster, get_time_stamp, check_mkdir, str2bool, \
     evaluate_multilabel, colorize, AverageMeter, get_flags
 from mymodel.models import UNet1, UNet2, UNet3, UNet4
+
 exp_name = ''
 
 
@@ -111,7 +112,7 @@ def summary_net_features(gts, feature_maps):
         #From feature maps:
         gl_features = []
         for fm in gland_feature_maps:
-            gt_small = cv2.resize(gt[:, :, 0], fm.shape[-2:], interpolation=cv2.INTER_AREA)
+            gt_small = cv2.resize(gt[:, :, 0], fm.shape[-2:], interpolation=cv2.cv2.INTER_NEAREST)
             gl_features.append(fm[:, gt_small > 0])  # only take values overlapping with glands
         # Take spatial stats:
         for i, fm in enumerate(gl_features):
@@ -136,17 +137,87 @@ def summary_net_features(gts, feature_maps):
     glands_features = np.array(glands_features)
     return glands_features
 
-EPS = 0.1
-def gland_colour_size(img, gt):
+
+def get_stats(n, feature_maps, downsampled_gts, down_sizes):
     """
-    :param img:
-    :param gt:
+    :param fm:
+    :param downsampled_gts:
     :return:
+    used for pooling
     """
-    gt = gt.squeeze()
-    colours = [cc[np.logical_or(np.isclose(gt, 2), np.isclose(gt, 3))].mean() for cc in img.transpose(2,0,1)]
-    size = np.sqrt(np.sum(gt > (0 + EPS)))
-    return colours, size
+
+    all_gland_stats = []
+    # Extract features for each gland
+    gland_feature_maps = [fm[n, ...] for fm in feature_maps]  # get feature maps for one gland
+    for i, fm in enumerate(gland_feature_maps):
+        gtd = downsampled_gts[down_sizes.index(fm.shape[-1])][n, ...]
+        fm_gland = fm[:, gtd.squeeze()]
+        means = fm_gland.mean(dim=1)
+        medians = fm_gland.mean(dim=1)
+        varns = fm_gland.var(dim=1)
+        maxs = fm_gland.max(dim=1)[0]
+        mins = fm_gland.min(dim=1)[0]
+        norms = fm_gland.norm(p=1, dim=1)
+        stats = torch.cat([means, medians, varns, maxs, mins, norms], dim=0)
+        all_gland_stats.append(stats)
+    all_gland_stats = torch.cat(all_gland_stats, dim=0)
+    return all_gland_stats
+
+
+
+def summary_net_features_torch(gts, feature_maps):
+    """
+    :param gts: NCHW
+    :param feature_maps: list of tensors [NCHW, NCHW, ...]
+    :downsamplings: list of downsizes to calculates gts for
+    :return: gland feature vectors from path feature maps
+
+    Features are mean, median, var
+    """
+
+    glands_features = []
+    fm_smaller_side_lens = sorted(list(set((fm.shape[3] for fm in feature_maps if fm.shape[3] < gts.shape[3]))),
+                                  reverse=True)
+    down_sizes = [gts.shape[3]]
+    avg = lambda gt, pad: avg_pool2d(gt.float(), kernel_size=2, padding=pad)  # maxpool with kernel 2 in unet
+    downsampled_gts = [gts.byte()]
+    gtd = avg(gts, 1)
+    for sl in fm_smaller_side_lens:
+        while gtd.shape[3] >= sl*2:
+            gtd = avg(gtd, 0)
+        first = abs(sl - gtd.shape[3]) // 2
+        second = abs(sl - gtd.shape[3]) - first
+        if sl > gtd.shape[3]:
+            gtd = torch.nn.functional.pad(gtd, (first, second, first, second))
+        elif sl < gtd.shape[3]:
+            ds = slice(first, -second)
+            gtd = gtd[..., ds, ds]
+        else:
+            pass
+
+        if sl != gtd.shape[3]:
+            raise ValueError("GET IT RIGHT MAN!")
+
+        downsampled_gts.append(gtd > 0.0)  # binarizes (since gt is from 0.0 to 1.0)
+        down_sizes.append(gtd.shape[3])
+
+    # TODO what about the upsampling path
+
+    # pool = Pool(4)
+    # for fm in feature_maps:
+    #     fm = fm.share_memory_()  # doesn't work for cuda tensors?
+    # for gts in downsampled_gts:
+    #     gts = gts.share_memory_()
+    inputs4stats = [(n, feature_maps, downsampled_gts, down_sizes) for n in range(gts.shape[0])]
+    # glands_features = pool.starmap(get_stats, inputs4stats)  # unpacks tuple to pass arguments to func
+
+    
+    glands_features = []
+    for n in range(gts.shape[0]):
+       glands_features.append(get_stats(*inputs4stats[n]))
+    glands_features = torch.stack(glands_features, dim=0)
+    return glands_features
+
 
 
 # Make objects for feature extraction
@@ -190,7 +261,8 @@ def feature_extraction(imgs, gts):
             kernel_descriptors.append(filtered.mean(), filtered.var())
     pass
 
-def make_thumnbnail(img, th_size, label=None):
+
+def make_thumbnail(img, th_size, label=None):
     """
     :param img:
     :param th_size:
@@ -206,7 +278,7 @@ def make_thumnbnail(img, th_size, label=None):
     img = img.astype(np.uint8)
     img_mode = [int(mode(img[..., 0], axis=None)[0]),
                 int(mode(img[..., 1], axis=None)[0]), int(mode(img[..., 2], axis=None)[0])]
-    background = label or 0
+    background = int(label) or 0
     if background == 2:
         img[img[..., 0] == img_mode[0], 0] = 100
         img[img[..., 1] == img_mode[1], 1] = 170
@@ -275,8 +347,8 @@ alpha = 0.3
 seq = iaa.Sequential(
         [
             # apply the following augmenters to most images
-            iaa.Fliplr(0.6),  # horizontally flip 50% of all images
-            iaa.Flipud(0.6),  # vertically flip 50% of all images
+            iaa.Fliplr(0.7),  # horizontally flip 50% of all images
+            iaa.Flipud(0.7),  # vertically flip 50% of all images
             # crop images by -5% to 10% of their height/width
             # sometimes(iaa.CropAndPad(
             #     percent=(-0.05, 0.1),
@@ -323,7 +395,7 @@ seq = iaa.Sequential(
                            iaa.WithChannels([0, 1, 2], iaa.Invert(0.05, per_channel=True)),  # invert color channels
                            iaa.WithChannels([0, 1, 2], iaa.Add((-10, 10), per_channel=0.5)),
                            # change brightness of images (by -10 to 10 of original value)
-                           iaa.WithChannels([0, 1, 2], iaa.AddToHueAndSaturation((-2, 2))),  # change hue and saturation
+                           iaa.WithChannels([0, 1, 2], iaa.AddToHueAndSaturation((-1, 1))),  # change hue and saturation
                            # either change the brightness of the whole image (sometimes
                            # per channel) or change the brightness of subareas
                            iaa.WithChannels([0, 1, 2], iaa.OneOf([
@@ -345,6 +417,7 @@ seq = iaa.Sequential(
         ],
         random_order=True
     )
+seq = seq.to_deterministic()  # to ensure that every image is augmented in the same way (so that features are more comparable)
 def augment_glands(imgs, gts, N=1):
     """
     :param imgs:
@@ -353,13 +426,17 @@ def augment_glands(imgs, gts, N=1):
     :return: Original images + N augmented copies of images and ground truths
     """
     if N:
+        M = imgs.shape[0]
         #Does nothing for N = 0
         #imgs = (imgs + 1) / 2 * 255  # NO, needed from -1 to 1 for features
+        order = [0 + m*(N+1) for m in range(M)]  # reorder images so that images for same gland are consecutive
         cat = np.concatenate([imgs, gts], axis=3)
         for n in range(N):
             out = seq.augment_images(cat)  # works on batch of images
             gts = np.concatenate((gts, out[..., 3:4]), axis=0)  # need to keep channel dim
             imgs = np.concatenate((imgs, out[..., 0:3]), axis=0)
+            order += [(n+1) + m*(N+1) for m in range(M)]
+        imgs, gts = imgs[order], gts[order]
     return imgs, gts
 
 
@@ -420,15 +497,16 @@ def main(FLAGS):
         features_net = features_net.cuda()
     if parallel:
         features_net = DataParallel(features_net, device_ids=FLAGS.gpu_ids).cuda()
+
     features_net.eval()  # extracting features only
 
-    if FLAGS.use_resnet:
-        resnet50 = resnet50(pretrained=True)  # FIXME why is this local ?
-        resnet50 = resnet50.eval()
-        resnet_layers = ['conv1', 'bn1', 'relu', 'maxpool', 'layer1', 'layer2', 'layer', 'layer4', 'avgpool', 'fc']
-        features_resnet = FeatureExtractor(resnet50, extracted_layers=['layer4'], layers=resnet_layers)
-        if parallel:
-            features_resnet = DataParallel(features_resnet, device_ids=FLAGS.gpu_ids).cuda()
+    # if FLAGS.use_resnet:
+    #     resnet50 = resnet50(pretrained=True)  # FIXME why is this local ?
+    #     resnet50 = resnet50.eval()
+    #     resnet_layers = ['conv1', 'bn1', 'relu', 'maxpool', 'layer1', 'layer2', 'layer', 'layer4', 'avgpool', 'fc']
+    #     features_resnet = FeatureExtractor(resnet50, extracted_layers=['layer4'], layers=resnet_layers)
+    #     if parallel:
+    #         features_resnet = DataParallel(features_resnet, device_ids=FLAGS.gpu_ids).cuda()
 
     datasets = [GlandPatchDataset(FLAGS.data_dir, mode, return_cls=FLAGS.get_tumour_cls) for mode in ['train', 'val', 'test']]
     #datasets = [GlandPatchDataset(FLAGS.data_dir, mode) for mode in ['train']]
@@ -447,6 +525,7 @@ def main(FLAGS):
 
             inputs = data[0]
             gts = data[1]
+            colours_n_size = data[2].numpy()
             num = inputs.shape[0]  # remember how many different gland images are there
 
             assert np.any(np.array(inputs.shape))  # non empty data
@@ -456,30 +535,29 @@ def main(FLAGS):
             imgs, gts = augment_glands(imgs, gts, N=FLAGS.augment_num)
 
             if FLAGS.get_tumour_cls:
-                tumour_cls = data[2]
+                tumour_cls = data[3]
                 tumour_cls = list(tumour_cls.numpy())
 
-                img_paths = data[3]  # get
-            else:
-                img_paths = data[2]
-
-            glands_features = []
-            for n in range(FLAGS.augment_num + 1):
-                inputs = to_tensor(imgs[n*num: (n+1)*num, ...])
-                inputs = Variable(inputs, requires_grad=False).cuda() if cuda.is_available() else \
-                        Variable(inputs, requires_grad=False)
+            with torch.no_grad():  # speeds up computations and uses less RAM
+                inputs = to_tensor(imgs)
+                inputs = Variable(inputs)
+                inputs = inputs.cuda() if cuda.is_available() else inputs
                 feature_maps = features_net(inputs)  # Channel as last dimension
-                feature_maps = [block_fms.detach().cpu().numpy() for block_fms in feature_maps]
+
                 assert feature_maps  # non empty feature map list
-                net_feats = summary_net_features(gts[n*num: (n+1)*num, ...], feature_maps)
-                glands_features.append(net_feats)
+                if FLAGS.torch_feats:
+                    gts = to_tensor(gts)
+                    gts = gts.cuda() if cuda.is_available() else gts
+                    glands_features = summary_net_features_torch(gts, feature_maps)
+                else:
+                    feature_maps = [block_fms.cpu().numpy() for block_fms in feature_maps]
+                    glands_features = summary_net_features(gts, feature_maps)
 
-            glands_features = np.concatenate(glands_features, axis=0)
-
-            if FLAGS.augment_num:
-                # started with M images, added M*N with augmentation, now take mean of N+1 responses
-                glands_features = glands_features[np.newaxis, ...].reshape(num, glands_features.shape[0]//num, -1)
-                glands_features = glands_features.mean(axis=1, keepdims=False)
+                if FLAGS.augment_num:
+                    # started with M images, added M*N with augmentation, now take mean of N+1 responses
+                    glands_features = glands_features.reshape((glands_features.shape[0] // (FLAGS.augment_num + 1),
+                                                               (FLAGS.augment_num + 1), -1))
+                    glands_features = glands_features.mean(dim=1)
 
             # if FLAGS.use_resnet:
             #     rn_feature_maps = features_resnet(inputs)
@@ -491,16 +569,16 @@ def main(FLAGS):
             bad_imgs = []
             for j, gl_features in enumerate(glands_features):
                 # Checks FIXME should not have to do this
+                gl_features = gl_features.numpy()
                 if gl_features.dtype != np.float32:
                     bad_imgs.append(j)  # nan response
                     continue
                 X.append(gl_features)  # feature vector
-                colours, size = gland_colour_size(imgs[j, ...], gts[j, ...])  # get confounds
-                X[-1] = np.concatenate((gl_features, colours, [size]))
+                X[-1] = np.concatenate((gl_features, colours_n_size[j, ...]))
 
             # Save original images
-            to_save = zip(imgs[0: 0+num, ...],  # only originals
-                          tumour_cls) if FLAGS.get_tumour_cls else imgs[0: 0+num, ...]
+            to_save = zip(imgs[0::num, ...],  # only originals
+                          tumour_cls) if FLAGS.get_tumour_cls else imgs[0::num, ...]
             for j, in_data in enumerate(to_save):
                 if j in bad_imgs:
                     continue  # skip if nan response
@@ -509,7 +587,7 @@ def main(FLAGS):
                     label = in_data[1]
                 else:
                     img = in_data
-                tn = make_thumnbnail(img, th_size, label=label if FLAGS.get_tumour_cls else None)
+                tn = make_thumbnail(img, th_size, label=label if FLAGS.get_tumour_cls else None)
                 thumbnails.append(tn)
                 if FLAGS.get_tumour_cls:
                     labels.append(label)
@@ -563,7 +641,7 @@ if __name__ == '__main__':
     parser.add_argument('-tc', '--get_tumour_cls', type=str2bool, default='n')
     parser.add_argument('--thumbnail_size', default=64, type=thumbnails_size_check)
     parser.add_argument('--augment_num', type=int, default=0)
-    parser.add_argument('--use_resnet', type=str2bool, default='n')
+    parser.add_argument('--torch_feats', type=str2bool, default='y')
 
     parser.add_argument('--network_id', type=str, default="UNet4")
     parser.add_argument('--batch_size', default=4, type=int)

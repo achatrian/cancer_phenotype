@@ -234,6 +234,9 @@ class GlandPatchDataset(Dataset):
         if self.return_cls:
             tumour_cls = stats.mode(gt[np.logical_and(gt > 0, gt != 4)], axis=None)[0]  # take most common class over gland excluding lumen
             tumour_cls = int(tumour_cls) if tumour_cls.size > 0 else 0
+
+        colour, size = self.gland_colour_size(img, gt)
+
         gt[gt > 0] = 1  # push to one class
 
         bg_mask = np.isclose(gt.squeeze(), 0)  # background mask
@@ -267,7 +270,7 @@ class GlandPatchDataset(Dataset):
         img[gt == 0, 2] = stromal_mean[2]
         gt = gt[:, :, np.newaxis]
 
-        # Normalize as when training network:
+        # Normalize as wh en training network:
         #img = img.clip(0, 255) # NOT NEEDED
         img = img / 255  # from 0 to 1
         img = (img - 0.5)/0.5  # from -1 to 1
@@ -278,18 +281,17 @@ class GlandPatchDataset(Dataset):
         img = self.to_tensor(img)
         gt = self.to_tensor(gt)  # NB dataloader must return tensors
 
-        data = (img, gt)
+        data = (img, gt, torch.tensor(colour + [size]).float())
         if self.return_cls:
             data += (tumour_cls,)  # batch of these is automatically turned into a tensor by dataloader !
 
-        data += (self.img_files[idx],)
         return data
-
 
     def __len__(self):
         return len(self.gt_files)
 
-    def to_tensor(self, na):
+    @staticmethod
+    def to_tensor(na):
         r"""Convert ndarrays in sample to Tensors."""
         # swap color axis because
         # numpy image: H x W x C
@@ -297,6 +299,19 @@ class GlandPatchDataset(Dataset):
         na = na.transpose(2, 0, 1)
         na = torch.from_numpy(na.copy()).type(torch.FloatTensor)
         return na
+
+    @staticmethod
+    def gland_colour_size(img, gt):
+        """
+        :param img:
+        :param gt:
+        :return:
+        """
+        EPS = 0.1
+        gt = gt.squeeze()
+        colours = [int(cc[np.logical_or(np.isclose(gt, 2), np.isclose(gt, 3))].mean()) for cc in img.transpose(2, 0, 1)]
+        size = np.sqrt(np.sum(gt > (0 + EPS)))
+        return colours, size
 
 
 
