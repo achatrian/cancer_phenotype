@@ -26,7 +26,7 @@ class InstanceSaver(mp.Process):
     """
     def __init__(self, queue, id, dir, out_size, min_gland_area=6000, bb_margin=0.1):
         mp.Process.__init__(self, name='InstanceSaver')
-        self.daemon = True #requred
+        self.daemon = True  # required
         self.id = id
         self.queue = queue
         self.dir = Path(dir)
@@ -40,7 +40,7 @@ class InstanceSaver(mp.Process):
             data = self.queue.get()
             if data is None:
                 self.queue.task_done()
-                break
+                break  # exit from infinite loop
 
             idx, img, gt, glandspath = data
             assert img.size

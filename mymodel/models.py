@@ -266,3 +266,5 @@ class UNet4(nn.Module):
         final0 = self.final0(F.upsample(dec1, x.size()[2:], mode='bilinear'))
         final1 = self.final1(F.upsample(final0, x.size()[2:], mode='bilinear'))
         return final1
+
+

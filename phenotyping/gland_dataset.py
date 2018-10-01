@@ -193,31 +193,83 @@ class GlandPatchDataset(Dataset):
         assert(self.img_files)
 
         if self.augment:
-            geom_augs = [#iaa.Affine(rotate=(-45, 45)), #keep glands aligned to long dimension
-                        iaa.Affine(shear=(-10, 10)),
-                        iaa.Fliplr(0.9),
-                        iaa.Flipud(0.9),
-                        iaa.PiecewiseAffine(scale=(0.01, 0.04)),
-                        ]
-            img_augs = [iaa.AdditiveGaussianNoise(scale=0.05*255),
-                            iaa.Add(20, per_channel=True),
-                            iaa.Dropout(p=(0, 0.2)),
-                            iaa.ElasticTransformation(alpha=(0, 0.2), sigma=0.25),
-                            iaa.AverageBlur(k=(2, 5)),
-                            iaa.MedianBlur(k=(3, 5)),
-                            iaa.Sharpen(alpha=(0.0, 0.3), lightness=(0.9, 1.1)),
-                            iaa.Emboss(alpha=(0.0, 0.3), strength=(0.1, 0.3)),
-                            iaa.EdgeDetect(alpha=(0.0, 0.3))]
-            #Add color modifications
-            img_augs.append(iaa.WithChannels(0, iaa.Add((5, 20))))
-            img_augs.append(iaa.WithChannels(1, iaa.Add((5, 10))))
-            img_augs.append(iaa.WithChannels(2, iaa.Add((5, 20))))
-            #img_augs.append(iaa.ContrastNormalization((0.8, 1.0)))
-            img_augs.append(iaa.Multiply((0.9, 1.1)))
-            #img_augs.append(iaa.Invert(0.5))
-            img_augs.append(iaa.Grayscale(alpha=(0.0, 0.1)))
-            self.geom_aug_seq = iaa.SomeOf((0, None), geom_augs) #apply 0-all augmenters; both img and gt
-            self.img_seq = iaa.SomeOf((0, None), img_augs) #only img
+            alpha = 0.2
+            self.seq = iaa.Sequential(
+                [
+                    # apply the following augmenters to most images
+                    iaa.Fliplr(0.8),  # horizontally flip
+                    iaa.Flipud(0.8),  # vertically flip
+                    # crop images by -5% to 10% of their height/width
+                    # sometimes(iaa.CropAndPad(
+                    #     percent=(-0.05, 0.1),
+                    #     pad_mode=ia.ALL,
+                    #     pad_cval=(0, 255)
+                    # )),
+                    iaa.Affine(
+                        scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                        # scale images to 80-120% of their size, individually per axis
+                        translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
+                        # translate by -20 to +20 percent (per axis)
+                        rotate=(-45, 45),  # rotate by -45 to +45 degrees
+                        shear=(-2, 2),  # shear by -16 to +16 degrees
+                        order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                        cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
+                        mode=ia.ALL  # use any of scikit-image's warping modes (see 2nd image from the top for examples)
+                    ),
+                    # execute 0 to 5 of the following (less important) augmenters per image
+                    # don't execute all of them, as that would often be way too strong
+                    iaa.SomeOf((0, 5),
+                               [  # convert images into their superpixel representation
+                                   # iaa.WithChannels([0, 1, 2],
+                                   #                  iaa.OneOf([
+                                   #                      iaa.GaussianBlur((0, 3.0)),
+                                   #                      # blur images with a sigma between 0 and 3.0
+                                   #                      iaa.AverageBlur(k=(2, 7)),
+                                   #                      # blur image using local means with kernel sizes between 2 and 7
+                                   #                      iaa.MedianBlur(k=(3, 11)),
+                                   #                      # blur image using local medians with kernel sizes between 2 and 7
+                                   #                  ])),
+                                   iaa.WithChannels([0, 1, 2], iaa.Sharpen(alpha=(0, alpha), lightness=(0.75, 1.5))),
+                                   # sharpen images
+                                   iaa.WithChannels([0, 1, 2], iaa.Emboss(alpha=(0, alpha), strength=(0, 0.1))),  # emboss images
+                                   # search either for all edges or for directed edges,
+                                   # blend the result with the original image using a blobby mask
+                                   iaa.WithChannels([0, 1, 2], iaa.SimplexNoiseAlpha(iaa.OneOf([
+                                       iaa.EdgeDetect(alpha=(0.05, alpha)),
+                                       iaa.DirectedEdgeDetect(alpha=(0.05, alpha), direction=(0.0, 1.0)),
+                                   ]))),
+                                   iaa.WithChannels([0, 1, 2],
+                                                    iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255), per_channel=0.5)),
+                                   # add gaussian noise to images
+                                   # iaa.WithChannels([0, 1, 2], #iaa.OneOf([
+                                   # iaa.Dropout((0.01, 0.1), per_channel=0.5),  # randomly remove up to 10% of the pixels
+                                   # iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2)])),
+                                   iaa.WithChannels([0, 1, 2], iaa.Invert(0.05, per_channel=True)),  # invert color channels
+                                   iaa.WithChannels([0, 1, 2], iaa.Add((-10, 10), per_channel=0.5)),
+                                   # change brightness of images (by -10 to 10 of original value)
+                                   iaa.WithChannels([0, 1, 2], iaa.AddToHueAndSaturation((-1, 1))),  # change hue and saturation
+                                   # either change the brightness of the whole image (sometimes
+                                   # per channel) or change the brightness of subareas
+                                   iaa.WithChannels([0, 1, 2], iaa.OneOf([
+                                       iaa.Multiply((0.8, 1.3), per_channel=0.5),
+                                       iaa.FrequencyNoiseAlpha(
+                                           exponent=(-2, 2),
+                                           first=iaa.Multiply((0.8, 1.3), per_channel=True),
+                                           second=iaa.ContrastNormalization((0.5, 2.0)))
+                                   ])),
+                                   iaa.WithChannels([0, 1, 2], iaa.ContrastNormalization((0.5, 1.5), per_channel=0.5)),
+                                   # improve or worsen the contrast
+                                   iaa.WithChannels([0, 1, 2], iaa.Grayscale(alpha=(0.0, alpha))),
+                                   # move pixels locally around (with random strengths)
+                                   # sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                                   # sometimes move parts of the image around
+                                   # sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
+                               ],
+                               random_order=True
+                               )
+                ],
+                random_order=True
+            )
 
     def __getitem__(self, idx):
         try:
@@ -242,36 +294,53 @@ class GlandPatchDataset(Dataset):
         bg_mask = np.isclose(gt.squeeze(), 0)  # background mask
         stromal_mean = [np.mean(img[bg_mask, 0]), np.mean(img[bg_mask, 1]), np.mean(img[bg_mask, 1])]
         if img.shape[0] < self.tile_size or img.shape[1] < self.tile_size:
-            img_dir = Path(self.img_files[idx]).parent
-            w_origin, h_origin = str(img_dir)[:-1].split('(')[1].split(',')[-2:]  # get original img size from folder name
-            x_tile, y_tile = self.img_files[idx][:-5].split('/')[-1].split('(')[1].split(',')  # get position of gland tile relative to larger image
-            w_origin, h_origin, x_tile, y_tile = [int(s) for s in [w_origin, h_origin, x_tile, y_tile]]
+            # img_dir = Path(self.img_files[idx]).parent
+            # w_origin, h_origin = str(img_dir)[:-1].split('(')[1].split(',')[-2:]  # get original img size from folder name
+            # x_tile, y_tile = self.img_files[idx][:-5].split('/')[-1].split('(')[1].split(',')  # get position of gland tile relative to larger image
+            # w_origin, h_origin, x_tile, y_tile = [int(s) for s in [w_origin, h_origin, x_tile, y_tile]]
 
-            if x_tile > w_origin // 2:
-                left = self.tile_size - img.shape[1]
-                right = 0
-            else:
-                right = self.tile_size - img.shape[1]
-                left = 0
+            left = (self.tile_size - img.shape[1]) // 2
+            right = (self.tile_size - img.shape[1]) - left
+            bottom = (self.tile_size - img.shape[0]) // 2
+            top = (self.tile_size - img.shape[0]) - bottom
 
-            if y_tile > h_origin // 2:
-                bottom = self.tile_size - img.shape[0]
-                top = 0
-            else:
-                top = self.tile_size - img.shape[0]
-                bottom = 0
+            # if x_tile > w_origin // 2:
+            #     left = (self.tile_size - img.shape[1])
+            #     right = 0
+            # else:
+            #     right = self.tile_size - img.shape[1]
+            #     left = 0
+            #
+            # if y_tile > h_origin // 2:
+            #     bottom = self.tile_size - img.shape[0]
+            #     top = 0
+            # else:
+            #     top = self.tile_size - img.shape[0]
+            #     bottom = 0
+
+            left, right, bottom, top = max(0, left), max(0, right), max(0, bottom), max(0, top)
 
             img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=stromal_mean)
             gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
 
-
         img[gt == 0, 0] = stromal_mean[0]
         img[gt == 0, 1] = stromal_mean[1]
         img[gt == 0, 2] = stromal_mean[2]
+
+        if img.shape[0] > self.tile_size or img.shape[1] > self.tile_size:
+            img = cv2.resize(img, (self.tile_size,)*2, interpolation=cv2.INTER_CUBIC)
+            gt = cv2.resize(gt, (self.tile_size,)*2, interpolation=cv2.INTER_NEAREST)
+
         gt = gt[:, :, np.newaxis]
 
         # Normalize as wh en training network:
-        #img = img.clip(0, 255) # NOT NEEDED
+        if self.augment:
+            cat = np.concatenate([img, gt], axis=2)
+            cat = self.seq.augment_image(cat)
+            img = cat[..., 0:3]
+            gt = cat[..., 3]
+            gt = gt[:, :, np.newaxis]
+            img = img.clip(0, 255)
         img = img / 255  # from 0 to 1
         img = (img - 0.5)/0.5  # from -1 to 1
 
@@ -309,7 +378,11 @@ class GlandPatchDataset(Dataset):
         """
         EPS = 0.1
         gt = gt.squeeze()
-        colours = [int(cc[np.logical_or(np.isclose(gt, 2), np.isclose(gt, 3))].mean()) for cc in img.transpose(2, 0, 1)]
+        with np.errstate(divide='ignore'):
+            try:
+                colours = [int(cc[np.logical_or(np.isclose(gt, 2), np.isclose(gt, 3))].mean()) for cc in img.transpose(2, 0, 1)]
+            except ValueError:
+                colours = [cc.mean() for cc in img.transpose(2, 0, 1)]
         size = np.sqrt(np.sum(gt > (0 + EPS)))
         return colours, size
 

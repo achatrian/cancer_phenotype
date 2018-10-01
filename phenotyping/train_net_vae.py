@@ -8,6 +8,7 @@ from pathlib import Path
 from numbers import Integral
 
 import numpy as np
+import math
 import torch
 from torchvision.transforms import ToTensor  #NB careful -- this changes the range from 0:255 to 0:1 !!!
 import torchvision.utils as vutils
@@ -24,7 +25,7 @@ from cv2 import cvtColor, COLOR_GRAY2RGB
 
 import warnings
 
-from gland_dataset import GlandDataset
+from gland_dataset import GlandPatchDataset
 
 def on_cluster():
     import socket, re
@@ -59,27 +60,75 @@ FAKE_LABEL = 0
 equilibrium = 0.68
 margin = 0.35
 
-def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, schedulers, gamma=1.0, epoch=1, load_weightmap=False, print_freq=10):
+def get_gaussian_blur(step, alpha=0.1):
+    # Set these to whatever you want for your gaussian filter
+    kernel_size = 15
+
+    sigma = 5 * math.exp(- alpha*step)
+
+    # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
+    x_cord = torch.arange(kernel_size)
+    x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
+    y_grid = x_grid.t()
+    xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
+
+    mean = (kernel_size - 1) / 2.
+    variance = sigma ** 2.
+
+    # Calculate the 2-dimensional gaussian kernel which is
+    # the product of two gaussian distributions for two different
+    # variables (in this case called x and y)
+    gaussian_kernel = (1. / (2. * math.pi * variance)) * \
+                      torch.exp(
+                          -torch.sum((xy_grid - mean) ** 2., dim=-1) / \
+                          (2 * variance)
+                      )
+    # Make sure sum of values in gaussian kernel equals 1.
+    gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
+
+    # Reshape to 2d depthwise convolutional weight
+    gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
+    gaussian_kernel = gaussian_kernel.repeat(3, 3, 1, 1)
+
+    gaussian_filter = torch.nn.Conv2d(in_channels=3, out_channels=3,
+                                kernel_size=kernel_size, bias=False, padding=1)
+
+    gaussian_filter.weight.data = gaussian_kernel
+    gaussian_filter.weight.requires_grad = False
+    return gaussian_filter
+
+def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, opt_vae, schedulers, gamma=1.0, epoch=1, load_weightmap=False, print_freq=10):
     train_loss_enc = AverageMeter()
     train_loss_dec = AverageMeter()
     train_loss_gan = AverageMeter()
     train_loss_rec = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
     train_dec, train_dis = True, True
+    if epoch < 20:
+        gaussian_filter = get_gaussian_blur(epoch, alpha=0.1)
+    mse_rec = MSELoss(size_average=False, reduce=False)
     for i, data in enumerate(tqdm(train_loader)):
 
-        if not load_weightmap:
-            inputs = data
-        else:
-            inputs, weightmaps = data
-        N = inputs.size(0)
+        inputs = data[0]
+        gts = data[1]
+        gts = gts / gts.max() * 4 + 1.0
+        N, y, x = inputs.size(0), inputs.size(2), inputs.size(3)
+
+        if epoch < 20:
+            inputs = gaussian_filter(inputs)
+            inputs = inputs / max(inputs.max(), abs(inputs.min()))  # normalize so that images are still in range [-1, 1]
+            left = max(0, (x - inputs.size(3)) // 2)
+            right = max(0, x - inputs.size(3) - left)
+            bottom = max(0, (y - inputs.size(2)) // 2)
+            top = max(0, y - inputs.size(2) - bottom)
+            inputs = torch.nn.functional.pad(inputs, (left, right, top, bottom), mode='reflect')
+
         inputs = Variable(inputs)
         labels = Variable((torch.zeros(N) if not FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
         if torch.cuda.is_available():
             inputs = inputs.cuda()
+            gts = gts.cuda()
             labels = labels.cuda()
-            if load_weightmap:
-                weightmaps = weightmaps.cuda()
 
         encoded, reconstructed, generated = vae(inputs)  # generated does not depend on inputs
 
@@ -87,17 +136,18 @@ def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, schedule
         logvar = encoded[1] # !!! log of sigma^2
         ###Prior loss (KL div between recognition model and prior)#######
         kld_elements = (mu.pow(2) + logvar.exp() - 1 - logvar) / 2  #log of variance learned by network (why??)
-        kld_loss = torch.mean(kld_elements)
+        kld_loss = torch.clamp(torch.mean(kld_elements), max=1e15)
 
         #MSE loss between discriminator layers for reconstructed and real input
         l_rec = discr(reconstructed, output_layer=True)
         l_real = Variable(discr(inputs, output_layer=True), requires_grad=False)
-        mse_loss = mse(l_rec, l_real)
+        mse_loss = torch.clamp(mse(l_rec, l_real), max=1e15)
 
         #GAN loss:
-        d_x = discr(inputs)
-        d_g_z = discr(reconstructed)
-        d_g_zp = discr(generated)
+        gts_3ch = gts.repeat(1, 3, 1, 1) / 5  # help discriminator focus on gland ?
+        d_x = discr(inputs * gts_3ch)
+        d_g_z = discr(reconstructed * gts_3ch)
+        d_g_zp = discr(generated * gts_3ch)
         dis_loss = - torch.mean(torch.log(d_x + 1e-3) + torch.log(1 - d_g_z + 1e-3) +
                     torch.log(1 - d_g_zp + 1e-3)) #need to ascend its opposite !
         gen_loss = torch.mean(torch.log(1 - d_g_z + 1e-3) + torch.log(1 - d_g_zp + 1e-3))
@@ -142,13 +192,14 @@ def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, schedule
 
         # Optimize encoder w.r. to MSE loss for reconstruction (calculated later to save gpu space)
 
-        mse = MSELoss(size_average=False, reduce=True)
-        opt_enc.zero_grad()
-        opt_dec.zero_grad()
-        rec_loss = mse(reconstructed, inputs) / N
+        #opt_enc.zero_grad()  # training through reconstruction can be done through whole network !
+        #opt_dec.zero_grad()
+        opt_vae.zero_grad()
+        rec_loss = torch.sum(mse_rec(reconstructed, inputs) * gts)
         rec_loss.backward()
-        opt_enc.step()
-        opt_dec.step()
+        #opt_enc.step()
+        #opt_dec.step()
+        opt_vae.step()
         train_loss_rec.update(rec_loss.data.item(), N)
         #####
 
@@ -178,8 +229,11 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
     val_loss_dec = AverageMeter()
     val_loss_gan = AverageMeter()
     inputs_smpl, reconstructions_smpl = [], []
+    mse_rec = MSELoss(size_average=False, reduce=False)
     for vi, data in enumerate(val_loader): #pass over whole validation dataset
-        inputs = data
+        inputs = data[0]
+        gts = data[1]
+        gts = gts / gts.max() * 4 + 1
         N = inputs.size(0)
         #Validate discrimination by D net
         with torch.no_grad(): #don't track variable history for backprop (to avoid out of memory)
@@ -188,6 +242,7 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
             labels = Variable((torch.zeros(N) if not FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
             if torch.cuda.is_available():
                 inputs = inputs.cuda()
+                gts = gts.cuda()
                 labels = labels.cuda()
 
             encoded, reconstructed, generated = vae(inputs)  # generated does not depend on inputs
@@ -204,9 +259,10 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
             mse_loss = mse(l_rec, l_real)
 
             # GAN loss:
-            d_x = discr(inputs)
-            d_g_z = discr(reconstructed)
-            d_g_zp = discr(generated)
+            gts_3ch = gts.repeat(1, 3, 1, 1) / 5
+            d_x = discr(inputs * gts_3ch)
+            d_g_z = discr(reconstructed * gts_3ch)
+            d_g_zp = discr(generated * gts_3ch)
             dis_loss = - torch.mean(torch.log(d_x + 1e-3) + torch.log(1 - d_g_z + 1e-3) +
                                     torch.log(1 - d_g_zp + 1e-3))
             gen_loss = torch.mean(torch.log(1 - d_g_z + 1e-3) + torch.log(1 - d_g_zp + 1e-3))
@@ -214,7 +270,8 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
             # Losses:
             loss_enc = kld_loss + mse_loss
             loss_dec = gamma * mse_loss + gen_loss
-            loss_rec = mse(inputs, reconstructed) #computed only for validation
+            loss_rec = mse_rec(reconstructed, inputs) * gts
+            loss_rec = loss_rec.sum()
             val_loss_enc.update(loss_enc.data.item(), N)
             val_loss_dec.update(loss_dec.data.item(), N)
             val_loss_gan.update(dis_loss.data.item(), N)
@@ -222,7 +279,7 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
 
 
         #Save some reconstruction examples
-        val_num = int(np.floor(val_imgs_sample_rate*N))
+        val_num = max(int(np.floor(val_imgs_sample_rate*N)), 1)
         val_idx = random.sample(list(range(N)), val_num)
         for idx in val_idx:
             inputs_smpl.append(inputs[idx, ...].data.cpu().numpy())
@@ -275,7 +332,7 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
 
 def main(FLAGS):
 
-    #For data parallel, default gpu must be set as first available one in node (pytorch rule)
+    # For data parallel, default gpu must be set as first available one in node (pytorch rule)
     if torch.cuda.is_available():
         if isinstance(FLAGS.gpu_ids, Integral):
             torch.cuda.set_device(FLAGS.gpu_ids)
@@ -283,13 +340,15 @@ def main(FLAGS):
         else:
             torch.cuda.set_device(FLAGS.gpu_ids[0])
             num_gpus = len(FLAGS.gpu_ids)
+            FLAGS.batch_size -= FLAGS.batch_size % len(FLAGS.gpu_ids)  # ensure that there are enough examples per GPU
+            FLAGS.val_batch_size -= FLAGS.batch_size % len(FLAGS.gpu_ids)  # " "
     else:
         num_gpus=0
 
     ###LOAD MODELS###
     num_channels = 3
     discr = Discriminator(FLAGS.image_size, num_gpus, FLAGS.num_filt_discr, num_channels) # (self, image_size, ngpu, num_filt_discr, num_channels=3):
-    vae = VAE(FLAGS.image_size, num_gpus, FLAGS.num_filt_gen, FLAGS.num_lat_dim, num_channels) # (self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
+    vae = VAE(FLAGS.image_size, num_gpus, FLAGS.num_filt_gen, FLAGS.num_lat_dim) # (self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
     discr.apply(weights_init) #initialize
     vae.apply(weights_init)
 
@@ -343,10 +402,11 @@ def main(FLAGS):
         opt_dis = torch.optim.Adam(discr.parameters(), lr=FLAGS.learning_rate)
         opt_enc = torch.optim.Adam(vae.encoder.parameters(), lr=FLAGS.learning_rate)
         opt_dec = torch.optim.Adam(vae.decoder.parameters(), lr=FLAGS.learning_rate)
+    opt_vae = torch.optim.Adam(vae.parameters(), lr=FLAGS.learning_rate)
 
     if len(FLAGS.snapshot) > 0:
         ###NOT IMPLEMENTED
-        #TODO decide whether to incorporate or not
+        # TODO decide whether to incorporate or not
         raise NotImplementedError
         opt_dis.load_state_dict(torch.load(os.path.join(ckpt_path, exp_name, 'opt_dis' + FLAGS.snapshot)))
         opt_dis.param_groups[0]['lr'] = 2 * FLAGS.learning_rate
@@ -366,10 +426,12 @@ def main(FLAGS):
         argsfile.write(str(FLAGS) + '\n\n')
 
     #Train
-    train_dataset = GlandDataset(FLAGS.data_dir, "train", augment=True)
-    train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, shuffle=True, num_workers=FLAGS.workers)
-    val_dataset = GlandDataset(FLAGS.data_dir, "val")
-    val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, shuffle=True, num_workers=FLAGS.workers)
+    #train_dataset = GlandDataset(FLAGS.data_dir, "train", augment=True)
+    train_dataset = GlandPatchDataset(FLAGS.data_dir, "train", tile_size=256, augment=True)
+    train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)
+    #val_dataset = GlandDataset(FLAGS.data_dir, "val")
+    val_dataset = GlandPatchDataset(FLAGS.data_dir, "val", tile_size=256)
+    val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)
     #scheduler_enc = ReduceLROnPlateau(opt_enc, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
     #scheduler_dec = ReduceLROnPlateau(opt_dec, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
     #scheduler_discr = ReduceLROnPlateau(opt_dis, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
@@ -394,7 +456,7 @@ def main(FLAGS):
     print("Begin training ...")
 
     for epoch in range(curr_epoch, FLAGS.epochs):
-        train(train_loader, vae, discr, FLAGS.num_lat_dim, mse, opt_enc, opt_dec, opt_dis, schedulers={'enc': sche_enc, 'dec': sche_dec, 'dis': sche_dis},
+        train(train_loader, vae, discr, FLAGS.num_lat_dim, mse, opt_enc, opt_dec, opt_dis, opt_vae, schedulers={'enc': sche_enc, 'dec': sche_dec, 'dis': sche_dis},
               epoch=epoch, load_weightmap=FLAGS.load_weightmap, print_freq=FLAGS.print_freq)
         if epoch % 10 == 1: #so it validates at first epoch too
             optimizers = {'enc': opt_enc, 'dec': opt_dec, 'dis': opt_dis}
@@ -416,7 +478,7 @@ if __name__ == '__main__':
 
     parser.add_argument('-ndf', '--num_filt_discr', type=int, default=35, help='mcd number of filters for unet conv layers')
     parser.add_argument('-ngf', '--num_filt_gen', type=int, default=35, help='mcd number of filters for unet conv layers')
-    parser.add_argument('-nz', '--num_lat_dim', type=int, default=1024, help='size of the latent z vector')
+    parser.add_argument('-nz', '--num_lat_dim', type=int, default=4096, help='size of the latent z vector')
 
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
     parser.add_argument('--learning_rate_patience', default=50, type=int)
@@ -425,7 +487,7 @@ if __name__ == '__main__':
     parser.add_argument('--load_weightmap', type=str2bool, default=False)
 
     parser.add_argument('--print_freq', default=10, type=int)
-    parser.add_argument('--val_batch_size', default=45, type=int)
+    parser.add_argument('--val_batch_size', default=20, type=int)
     parser.add_argument('--val_imgs_sample_rate', default=0.05, type=float)
     parser.add_argument('--snapshot', default='')
 

@@ -25,9 +25,9 @@ class _Sampler(nn.Module):
 
         std = logvar.mul(0.5).exp_() #calculate the STDEV
         if self.iscuda:
-            eps = torch.cuda.FloatTensor(std.size()).normal_() #random normalized noise
+            eps = torch.cuda.FloatTensor(std.size()).normal_()  #random normalized noise
         else:
-            eps = torch.FloatTensor(std.size()).normal_() #random normalized noise
+            eps = torch.FloatTensor(std.size()).normal_()  #random normalized noise
         eps = Variable(eps)
         return eps.mul(std).add_(mu)
 
@@ -41,31 +41,38 @@ class _Encoder(nn.Module):
         assert n>=3,'image_size must be at least 8'
         n=int(n)
 
-        num_lat_dim = max(num_lat_dim // (4*4), 1) * 4 * 4 #ensure multiple of 16
+        num_lat_dim = max(num_lat_dim // (8*8), 1) * 8 * 8 #ensure multiple of 16
 
         self.encoder = nn.Sequential()
         self.encoder.add_module('input-conv', nn.Conv2d(num_channels, num_filt_gen, 3, 1, 0))
         self.encoder.add_module('input-relu', nn.ReLU(inplace=False))
-        for i in range(n-3):
+        for i in range(n-4):
             #Convolutions have stride 2 !
             self.encoder.add_module('conv_{}'.format(i),
                 nn.Conv2d(num_filt_gen*2**(i), num_filt_gen * 2**(i+1), 3, 1, padding=0))
             self.encoder.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_gen * 2**(i+1)))
             self.encoder.add_module('relu_{}'.format(i), nn.ReLU(inplace=False))
             self.encoder.add_module('pool{}'.format(i), nn.MaxPool2d(2, stride=2))
-        #Output is 4x4
-        self.encoder.add_module('output-conv', nn.Conv2d(num_filt_gen * 2**(n-3), num_lat_dim // (4*4), 3, 1, 0))
+        #Output is 8x8
+        self.encoder.add_module('output-conv0', nn.Conv2d(num_filt_gen * 2**(n-4), num_lat_dim // (8*8), 3, 1, 0))
+        self.encoder.add_module('output-conv1', nn.Conv2d(num_lat_dim // (8 * 8), num_lat_dim // (8 * 8), 3, 1, 0))
         #total number of outputs is == num_lat_dim
+
+        self.intermediate0 = nn.Linear(num_lat_dim, num_lat_dim)
+        self.intermediate1 = nn.Linear(num_lat_dim, num_lat_dim)
+        self.relu = nn.ReLU(inplace=False)
 
         #Compute std and variance
         self.means = nn.Linear(num_lat_dim, num_lat_dim)
         self.varn = nn.Linear(num_lat_dim, num_lat_dim)
 
     def forward(self, input):
-        output = self.encoder(input)
-        mu = self.means(output.view(output.size(0), -1))
-        sig = self.varn(output.view(output.size(0), -1))
-        return mu.view(mu.size(0), mu.size(1) // (4*4), 4, 4), sig.view(sig.size(0), sig.size(1) // (4*4), 4, 4)
+        output = nn.functional.interpolate(self.encoder(input), (8,8))
+        inter0 = self.relu(self.intermediate0(output.view(output.size(0), -1)))
+        inter1 = self.relu(self.intermediate1(inter0))
+        mu = self.means(inter1)
+        sig = self.varn(inter1)
+        return mu.view(mu.size(0), mu.size(1) // (8*8), 8, 8), sig.view(sig.size(0), sig.size(1) // (8*8), 8, 8)
 
 class VAE(nn.Module):
     def __init__(self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
@@ -74,8 +81,9 @@ class VAE(nn.Module):
         self.sampler = _Sampler()
         self.encoder = _Encoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
         self.iscuda = torch.cuda.is_available() and ngpu > 0
-        num_lat_dim = max(num_lat_dim // (4 * 4), 1) * 4 * 4  # ensure multiple of 16
+        num_lat_dim = max(num_lat_dim // (8 * 8), 1) * 8 * 8  # ensure multiple of 64
         self.nz = num_lat_dim #to create noise for later
+        self.image_size = image_size
 
         n = math.log2(image_size)
 
@@ -83,22 +91,31 @@ class VAE(nn.Module):
         assert n>=3,'image_size must be at least 8'
         n=int(n)
 
-        self.decoder = nn.Sequential()
-        # input is Z
-        self.decoder.add_module('input-conv',
-                nn.ConvTranspose2d(num_lat_dim // (4*4), num_filt_gen * 2**(n-3), 3, 1, padding=0))
-        self.decoder.add_module('input-norm', nn.InstanceNorm2d(num_filt_gen * 2**(n-3)))
-        self.decoder.add_module('input-relu', nn.ReLU(inplace=False))
+        self.decoder = nn.Sequential(
+            nn.Conv2d(num_lat_dim // (8 * 8), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(num_filt_gen * 2 ** (n - 4), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
+            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4)),
+            nn.ReLU(inplace=True),
+            nn.Upsample(size=(16, 16))
+        )
 
-        for i in range(n-3, 0, -1):
+        for i in range(n-4, 0, -1):
             self.decoder.add_module('conv_{}'.format(i),
-                        nn.ConvTranspose2d(num_filt_gen * 2**i, num_filt_gen * 2**(i-1), 3, 2, padding=0, output_padding=1))
+                        nn.ConvTranspose2d(num_filt_gen * 2**i, num_filt_gen * 2**(i-1), 3, 2, padding=0, output_padding=0))
                         #output_padding=1 specifies correct size for 3x3 convolution kernel with stride 2
             self.decoder.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_gen * 2**(i-1)))
-            self.decoder.add_module('relu_{}'.format(i), nn.ReLU(inplace=False))
+            self.decoder.add_module('relu_{}'.format(i), nn.ReLU(inplace=True))
 
-        self.decoder.add_module('ouput-conv', nn.ConvTranspose2d(num_filt_gen, num_channels, 3, 1, padding=0))
-        self.decoder.add_module('output-sigmoid', nn.Sigmoid())
+        self.final = nn.Sequential( nn.Upsample((self.image_size, self.image_size)),
+                                    nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
+                                    nn.ReLU(inplace=True),
+                                    nn.Conv2d(num_filt_gen, num_channels, 1, 1, padding=1),
+                                    nn.Tanh()
+        )
+        self.decoder.add_module('final', self.final)
 
         #where is the upsampling done in the decoder ????
 
@@ -110,7 +127,7 @@ class VAE(nn.Module):
         reconstructed = self.decoder(sampled)
 
         # Sample from prior
-        noise = torch.normal(torch.zeros((N, self.nz // (4*4), 4, 4)), torch.ones((N, self.nz // (4*4), 4, 4))) #feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
+        noise = torch.normal(torch.zeros((N, self.nz // (8*8), 8, 8)), torch.ones((N, self.nz // (8*8), 8, 8))) #feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
         if self.iscuda: noise = noise.cuda()
         generated = self.decoder(noise)
         return encoded, reconstructed, generated
@@ -156,6 +173,8 @@ class Discriminator(nn.Module):
             nn.InstanceNorm2d(num_filt_discr * 2 ** (4 + 1)),
             nn.ReLU(inplace=False)
         )
+
+        #TODO could use more than one layer and sum MSEs
 
         self.end = nn.Sequential(
             nn.MaxPool2d(2, stride=2),

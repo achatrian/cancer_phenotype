@@ -4,6 +4,8 @@ import cv2
 import random
 import numbers
 import re
+from pathlib import Path
+from itertools import product
 
 import numpy as np
 from scipy.stats import mode
@@ -15,28 +17,27 @@ from imgaug import augmenters as iaa
 
 class CK5Dataset(Dataset):
 
-    def __init__(self, dir_, mode, augment=False):
+    def __init__(self, dir_, mode, augment=False, tile_size=299):
         self.mode = mode
 
-        self.file_list = []
         self.label = []
         self.augment = augment
+        self.tile_size = tile_size
 
-        thedir = os.path.join(dir_, mode)
-        folders = [ name for name in os.listdir(thedir) if os.path.isdir(os.path.join(thedir, name)) ]
+        # Read data paths (images containing gland parts)
+        self.gt_files = glob.glob(os.path.join(dir_, mode, '**','gland_gt_[0-9]_([0-9],[0-9]).png'), recursive=True)
+        n = "[0-9]"
+        for gl_idx, x, y in product(range(1, 4), range(1, 5), range(1, 5)):
+            to_glob = os.path.join(dir_, mode, '**', 'gland_gt_' + n*gl_idx + '_(' + n*x + ',' + n*y + ').png')
+            self.gt_files += glob.glob(to_glob, recursive=True)
 
-        #Read data paths (images containing full glands)
-        self.gt_files = glob.glob(os.path.join(dir, mode, '**','gland_gt_[0-9].png'), recursive=True)
-        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9].png'), recursive=True))
-        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9][0-9].png'), recursive=True))
-        self.gt_files.extend(glob.glob(os.path.join(dir, mode, '**', 'gland_gt_[0-9][0-9][0-9][0-9].png'), recursive=True))
-        assert(self.gt_files); "Cannot be empty"
+        assert self.gt_files; r"Cannot be empty"
         self.img_files = [re.sub('gt', 'img', gtfile) for gtfile in self.gt_files]
-        assert (self.img_files)
+        assert self.img_files
 
         self.dir = dir_
 
-        self.randomcrop = RandomCrop(512)
+        self.randomcrop = RandomCrop(299)  # for inception patches are 299
 
         sometimes = lambda aug: iaa.Sometimes(0.5, aug)
 
@@ -118,7 +119,7 @@ class CK5Dataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.file_list)
+        return len(self.gt_files)
 
     def adjust_gamma(self, img, gamma=1.0):
         # build a lookup table mapping the pixel values [0, 255] to
@@ -140,11 +141,28 @@ class CK5Dataset(Dataset):
         img = cv2.merge([r, g, b])  # switch it to rgb
         gt = cv2.imread(gt_name, -1)
 
-        # scale img
-        img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
+        bg_mask = np.isclose(gt.squeeze(), 0)  # background mask
+        stromal_mean = [np.mean(img[bg_mask, 0]), np.mean(img[bg_mask, 1]), np.mean(img[bg_mask, 1])]
 
-        # im aug
-        img = self.randomcrop(img)
+        # im cropping / padding
+        if img.shape[0] < self.tile_size or img.shape[1] < self.tile_size:
+            left = (self.tile_size - img.shape[1]) // 2
+            right = (self.tile_size - img.shape[1]) - left
+            bottom = (self.tile_size - img.shape[0]) // 2
+            top = (self.tile_size - img.shape[0]) - bottom
+
+            left, right, bottom, top = max(left, 0), max(right, 0), max(bottom, 0), max(top, 0)
+
+            img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=stromal_mean)
+            gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0])
+
+        if img.shape[0] >= self.tile_size or img.shape[1] >= self.tile_size:
+            img = self.randomcrop(img)
+
+        #img[gt == 0, 0] = stromal_mean[0]
+        #img[gt == 0, 1] = stromal_mean[1]
+        #img[gt == 0, 2] = stromal_mean[2]
+
         if self.augment:
             img = self.seq.augment_image(img)
 
@@ -159,9 +177,12 @@ class CK5Dataset(Dataset):
         label = mode(gt[np.logical_and(gt > 0, gt != 4)], axis=None)[0]
         label = label if label.size > 0 else 0  # if no glands, give 0 label
 
+        if label == 3:
+            label = 1  # 3 classes need labels from 0 to 2 in loss computation
+
         # convert to torch tensor
         img = torch.from_numpy(img).type(torch.float)
-        label = torch.from_numpy(label).type(torch.long)
+        label = torch.tensor(label).type(torch.long).squeeze()
 
         return img, label
 
@@ -181,8 +202,11 @@ class RandomCrop(object):
     def __call__(self, img):
         w, h = img.shape[1], img.shape[0]
         th, tw = self.size
+
         if w == tw and h == th:
             return img
+        elif w < tw or h < th:
+            raise ValueError("Desired dim ({}x{}) are larger than image dims ({}x{})".format(th, tw, h, w))
 
         x1 = random.randint(0, w - tw)
         y1 = random.randint(0, h - th)

@@ -4,9 +4,10 @@ import argparse
 from warnings import warn
 from pathlib import Path
 from numbers import Integral
+import time
 
 import numpy as np
-from scipy.stats import kurtosis, skew, mode, entropy
+from scipy.stats import mode
 import torch
 from torch import cuda, load
 from torch.nn import DataParallel
@@ -14,15 +15,13 @@ from torch.utils.data import DataLoader
 from torch import nn
 from torch.autograd import Variable
 import cv2
-from tqdm import tqdm
 from imageio import imwrite
 from skimage.filters import gabor_kernel
 from scipy import ndimage as ndi
 from imgaug import augmenters as iaa
 import imgaug as ia
 from torch.nn.functional import avg_pool2d
-from torch.multiprocessing import Pool  # wrapper areound original mp method to share tensors in memory
-from itertools import chain
+import torch.multiprocessing as tmp
 
 from gland_dataset import GlandPatchDataset
 
@@ -151,8 +150,13 @@ def get_stats(n, feature_maps, downsampled_gts, down_sizes):
     gland_feature_maps = [fm[n, ...] for fm in feature_maps]  # get feature maps for one gland
     for i, fm in enumerate(gland_feature_maps):
         gtd = downsampled_gts[down_sizes.index(fm.shape[-1])][n, ...]
-        fm_gland = fm[:, gtd.squeeze()]
-        means = fm_gland.mean(dim=1)
+        try:
+            fm_gland = fm[:, gtd.squeeze()]
+            means = fm_gland.mean(dim=1)
+        except RuntimeError:
+            # when gt is empty -- fail fast and fill with zeros
+            fm_gland = torch.zeros(fm.shape[0], 1).cuda()
+            means = fm_gland.mean(dim=1)
         medians = fm_gland.mean(dim=1)
         varns = fm_gland.var(dim=1)
         maxs = fm_gland.max(dim=1)[0]
@@ -164,7 +168,7 @@ def get_stats(n, feature_maps, downsampled_gts, down_sizes):
     return all_gland_stats
 
 
-
+intrplt = lambda gts, sl: torch.nn.functional.interpolate(gts, size=(sl, sl), mode='bilinear')
 def summary_net_features_torch(gts, feature_maps):
     """
     :param gts: NCHW
@@ -176,45 +180,16 @@ def summary_net_features_torch(gts, feature_maps):
     """
 
     glands_features = []
-    fm_smaller_side_lens = sorted(list(set((fm.shape[3] for fm in feature_maps if fm.shape[3] < gts.shape[3]))),
-                                  reverse=True)
-    down_sizes = [gts.shape[3]]
-    avg = lambda gt, pad: avg_pool2d(gt.float(), kernel_size=2, padding=pad)  # maxpool with kernel 2 in unet
-    downsampled_gts = [gts.byte()]
-    gtd = avg(gts, 1)
-    for sl in fm_smaller_side_lens:
-        while gtd.shape[3] >= sl*2:
-            gtd = avg(gtd, 0)
-        first = abs(sl - gtd.shape[3]) // 2
-        second = abs(sl - gtd.shape[3]) - first
-        if sl > gtd.shape[3]:
-            gtd = torch.nn.functional.pad(gtd, (first, second, first, second))
-        elif sl < gtd.shape[3]:
-            ds = slice(first, -second)
-            gtd = gtd[..., ds, ds]
-        else:
-            pass
-
-        if sl != gtd.shape[3]:
-            raise ValueError("GET IT RIGHT MAN!")
-
-        downsampled_gts.append(gtd > 0.0)  # binarizes (since gt is from 0.0 to 1.0)
-        down_sizes.append(gtd.shape[3])
+    fm_side_lens = sorted(list(set((fm.shape[3] for fm in feature_maps))), reverse=True)
+    gt_sizes = [gts.shape[3]] + fm_side_lens
+    matched_gts = [gts.byte()]
+    matched_gts += [intrplt(gts, sl).byte() for sl in fm_side_lens]
 
     # TODO what about the upsampling path
 
-    # pool = Pool(4)
-    # for fm in feature_maps:
-    #     fm = fm.share_memory_()  # doesn't work for cuda tensors?
-    # for gts in downsampled_gts:
-    #     gts = gts.share_memory_()
-    inputs4stats = [(n, feature_maps, downsampled_gts, down_sizes) for n in range(gts.shape[0])]
-    # glands_features = pool.starmap(get_stats, inputs4stats)  # unpacks tuple to pass arguments to func
-
-    
     glands_features = []
     for n in range(gts.shape[0]):
-       glands_features.append(get_stats(*inputs4stats[n]))
+       glands_features.append(get_stats(n, feature_maps, matched_gts, gt_sizes))
     glands_features = torch.stack(glands_features, dim=0)
     return glands_features
 
@@ -325,23 +300,7 @@ def create_sprite_image(images):
     return spriteimage
 
 
-def write_metadata(filename, labels):
-    """
-            Create a metadata file image consisting of sample indices and labels
-            :param filename: name of the file to save on disk
-            :param shape: tensor of labels
-    """
-    with open(filename, 'w') as f:
-        f.write("Index\tLabel\n")
-        for index, label in enumerate(labels):
-            f.write("{}\t{}\n".format(index, label))
-
-    print('Metadata file saved in {}'.format(filename))
-
-
-
 sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-
 ia.seed(7)
 alpha = 0.3
 seq = iaa.Sequential(
@@ -452,10 +411,100 @@ def to_tensor(na):
     return na
 
 
+class FeatureSummariser(tmp.Process):
+
+    def __init__(self, input_queue, output_queue, id, features_net, thumbnail_size, avail_cuda):
+        #################################
+        tmp.Process.__init__(self, name='FeatureSummariser')
+        self.daemon = True  # required (should read about it)
+        #################################
+        self.input_queue = input_queue
+        self.output_queue = output_queue
+        self.id = id
+        self.features_net = features_net
+        # shouldn't need this, but there is a bug in 4.1 that doesn't allow model sharing
+        # https://github.com/pytorch/pytorch/issues/9996
+        self.th_size = (thumbnail_size, ) * 2
+        self.avail_cuda = avail_cuda
+
+    def run(self):
+        count = 0
+        if self.avail_cuda:
+            self.features_net = self.features_net.cuda()
+
+        while True:
+            data = self.input_queue.get()
+            #print("[p{}] unpickled data".format(self.id))
+
+            if data is None:
+                self.input_queue.task_done()
+                self.output_queue.put("done")
+                break  # exit from infini   te loop
+
+            inputs = data[0]
+            gts = data[1]
+            colours_n_size = data[2].cpu().numpy()
+            num = inputs.shape[0]  # remember how many different gland images are there
+
+            assert np.any(np.array(inputs.shape))  # non empty data
+
+            imgs = inputs.cpu().numpy().transpose(0, 2, 3, 1)
+            gts = gts.cpu().numpy().transpose(0, 2, 3, 1)
+            imgs, gts = augment_glands(imgs, gts, N=FLAGS.augment_num)
+
+            labels = data[3]
+            labels = list(labels.cpu().numpy())
+
+            print("[p{}] getting features".format(self.id))
+            with torch.no_grad():  # speeds up computations and uses less RAM
+                inputs = to_tensor(imgs)
+                inputs = Variable(inputs)
+                inputs = inputs.cuda() if self.avail_cuda else inputs
+                feature_maps = self.features_net(inputs)  # Channel as last dimension
+
+                assert feature_maps  # non empty feature map list
+                if FLAGS.torch_feats:
+                    gts = to_tensor(gts)
+                    gts = gts.cuda() if self.avail_cuda else gts
+                    glands_features = summary_net_features_torch(gts, feature_maps)
+                else:
+                    feature_maps = [block_fms.cpu().numpy() for block_fms in feature_maps]
+                    glands_features = summary_net_features(gts, feature_maps)
+
+                if FLAGS.augment_num:
+                    # started with M images, added M*N with augmentation, now take mean of N+1 responses
+                    glands_features = glands_features.reshape((glands_features.shape[0] // (FLAGS.augment_num + 1),
+                                                               (FLAGS.augment_num + 1), -1))
+                    glands_features = glands_features.mean(dim=1)
+
+                X_chunk = np.concatenate((glands_features.cpu().numpy(), colours_n_size), axis=1)
+
+                #TODO add controls for bad inputs
+
+            # Save original images
+            print("[p{}] saving thumbnails".format(self.id))
+            thumbnails = []
+            to_save = zip(imgs[0::num, ...], labels)  # only original images
+            for j, (img, label) in enumerate(to_save):
+                tn = make_thumbnail(img, self.th_size, label=label)
+                thumbnails.append(tn)
+
+            # if self.id == 0:
+            #     # Ensure thumbnail generation works
+            #     imwrite(Path(FLAGS.save_dir).expanduser() / "thumbnail_test.png", tn)
+
+            count += 1
+            print("[p{}] processed {} batches".format(self.id, count))
+            self.output_queue.put([X_chunk, thumbnails, labels])
+            self.input_queue.task_done()
+
+
 def main(FLAGS):
 
     # Set network up
-    if cuda.is_available():
+    avail_cuda = False
+    #avail_cuda = cuda.is_available()  # does cuda.is_available inside processes with tmp break cuda?
+    if avail_cuda:
         if isinstance(FLAGS.gpu_ids, Integral):
             cuda.set_device(FLAGS.gpu_ids)
         else:
@@ -470,133 +519,95 @@ def main(FLAGS):
     except FileNotFoundError as err:
         print("Settings could not be loaded - using network {} with {} filters".format(FLAGS.network_id, FLAGS.num_filters))
 
-    parallel = not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available()
-    inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters}
-    if FLAGS.network_id == "UNet1":
-        net = UNet1(**inputs).cuda() if cuda.is_available() else UNet1(**inputs)
-    elif FLAGS.network_id == "UNet2":
-        net = UNet2(**inputs).cuda() if cuda.is_available() else UNet2(**inputs)
-    elif FLAGS.network_id == "UNet3":
-        net = UNet3(**inputs).cuda() if cuda.is_available() else UNet3(**inputs)
-    elif FLAGS.network_id == "UNet4":
-        net = UNet4(**inputs).cuda() if cuda.is_available() else UNet4(**inputs)
+    with torch.no_grad():
+        parallel = not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and avail_cuda
+        inputs = {'num_classes' : FLAGS.num_class, 'num_channels' : FLAGS.num_filters}
+        if FLAGS.network_id == "UNet1":
+            net = UNet1(**inputs).cuda() if avail_cuda else UNet1(**inputs)
+        elif FLAGS.network_id == "UNet2":
+            net = UNet2(**inputs).cuda() if avail_cuda else UNet2(**inputs)
+        elif FLAGS.network_id == "UNet3":
+            net = UNet3(**inputs).cuda() if avail_cuda else UNet3(**inputs)
+        elif FLAGS.network_id == "UNet4":
+            net = UNet4(**inputs).cuda() if avail_cuda else UNet4(**inputs)
 
-    dev = None if cuda.is_available() else 'cpu'
-    state_dict = load(str(ckpt_path.expanduser() / exp_name / FLAGS.snapshot), map_location=dev)
-    state_dict = {key[7:]: value for key, value in state_dict.items()}  # never loading parallel as feature_net is later loaded as parallel
-    net.load_state_dict(state_dict)
-    net.eval()
+        dev = None if avail_cuda else 'cpu'
+        state_dict = load(str(ckpt_path.expanduser() / exp_name / FLAGS.snapshot), map_location=dev)
+        state_dict = {key[7:]: value for key, value in state_dict.items()}  # never loading parallel as feature_net is later loaded as parallel
+        net.load_state_dict(state_dict)
+        net.eval()
 
-    #feature_blocks = ['enc4', 'enc5', 'enc6', 'center']
-    feature_blocks = ['enc6', 'center']
-    #downsamplings = [4, 5, 6, 6]  # how many times the original dimensions have been downsampled at output of module
-    downsamplings = [6, 6]
+        feature_blocks = ['input_block', 'enc1', 'enc2', 'enc3', 'enc4', 'enc5', 'enc6', 'center']
+        features_net = FeatureExtractor(net, feature_blocks)
+        if avail_cuda:
+            features_net = features_net.cuda()
+        if parallel:
+            features_net = DataParallel(features_net, device_ids=FLAGS.gpu_ids).cuda()
 
-    features_net = FeatureExtractor(net, feature_blocks)
-    if cuda.is_available():
-        features_net = features_net.cuda()
-    if parallel:
-        features_net = DataParallel(features_net, device_ids=FLAGS.gpu_ids).cuda()
+        features_net.eval()  # extracting features only
 
-    features_net.eval()  # extracting features only
-
-    # if FLAGS.use_resnet:
-    #     resnet50 = resnet50(pretrained=True)  # FIXME why is this local ?
-    #     resnet50 = resnet50.eval()
-    #     resnet_layers = ['conv1', 'bn1', 'relu', 'maxpool', 'layer1', 'layer2', 'layer', 'layer4', 'avgpool', 'fc']
-    #     features_resnet = FeatureExtractor(resnet50, extracted_layers=['layer4'], layers=resnet_layers)
-    #     if parallel:
-    #         features_resnet = DataParallel(features_resnet, device_ids=FLAGS.gpu_ids).cuda()
-
-    datasets = [GlandPatchDataset(FLAGS.data_dir, mode, return_cls=FLAGS.get_tumour_cls) for mode in ['train', 'val', 'test']]
+    datasets = [GlandPatchDataset(FLAGS.data_dir, mode, return_cls=True) for mode in ['train', 'val', 'test']]
     #datasets = [GlandPatchDataset(FLAGS.data_dir, mode) for mode in ['train']]
-    loaders = [DataLoader(ds, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.workers) for ds in datasets]
+    loaders = [DataLoader(ds, batch_size=FLAGS.batch_size, shuffle=False, num_workers = 0) for ds in datasets]
 
-    tqdm.write("Generating features and thumbnails ...")
+    features_net.share_memory()  # ensure memory of network is shared so different processes can use it
+    #SHOULD FREAKING WORK BUT THERE IS AN ERROR IN 4.1 ...
+    #features_net = features_net.cuda()
+
+    INPUT_QUEUE_SIZE = 2 * FLAGS.workers
+    input_queue = tmp.Queue(maxsize=INPUT_QUEUE_SIZE)
+    output_queue = tmp.Queue(maxsize=10000)
+    print("Spawning processes ...")
+    start_time = time.time()
+
+    avail_cuda = True  # to fix bug
+
+    for i in range(FLAGS.workers):
+        FeatureSummariser(input_queue, output_queue, i, features_net, FLAGS.thumbnail_size, avail_cuda).start()
+
     X = []  # feature matrix
     thumbnails = []
-    th_size = (FLAGS.thumbnail_size,) * 2
     labels = []
 
+    running = FLAGS.workers  # to join output queue
     for loader, mode in zip(loaders, ['train', 'val', 'test']):
-        tqdm.write("... for {} data ...".format(mode))
+        print("[main] loading {} data".format(mode))
         # Use train test and validate datasets
-        for i, data in enumerate(tqdm(loader)):
-
-            inputs = data[0]
-            gts = data[1]
-            colours_n_size = data[2].numpy()
-            num = inputs.shape[0]  # remember how many different gland images are there
-
-            assert np.any(np.array(inputs.shape))  # non empty data
-
-            imgs = inputs.numpy().transpose(0, 2, 3, 1)
-            gts = gts.numpy().transpose(0, 2, 3, 1)
-            imgs, gts = augment_glands(imgs, gts, N=FLAGS.augment_num)
-
-            if FLAGS.get_tumour_cls:
-                tumour_cls = data[3]
-                tumour_cls = list(tumour_cls.numpy())
-
-            with torch.no_grad():  # speeds up computations and uses less RAM
-                inputs = to_tensor(imgs)
-                inputs = Variable(inputs)
-                inputs = inputs.cuda() if cuda.is_available() else inputs
-                feature_maps = features_net(inputs)  # Channel as last dimension
-
-                assert feature_maps  # non empty feature map list
-                if FLAGS.torch_feats:
-                    gts = to_tensor(gts)
-                    gts = gts.cuda() if cuda.is_available() else gts
-                    glands_features = summary_net_features_torch(gts, feature_maps)
+        for i, data in enumerate(loader):
+            if not output_queue.empty():
+                print("[main] getting chunks {}/{} ({} elapsed)".format(i, len(loader), time.time() - start_time))
+                processed = output_queue.get_nowait()
+                if processed == "done":
+                    running -= 1
                 else:
-                    feature_maps = [block_fms.cpu().numpy() for block_fms in feature_maps]
-                    glands_features = summary_net_features(gts, feature_maps)
+                    x_chunk, tns_chunk, lbls_chunk = processed
+                    X.append(x_chunk)
+                    thumbnails.extend(tns_chunk)
+                    labels.extend(lbls_chunk)
+                output_queue.task_done()
+            input_queue.put(data)
 
-                if FLAGS.augment_num:
-                    # started with M images, added M*N with augmentation, now take mean of N+1 responses
-                    glands_features = glands_features.reshape((glands_features.shape[0] // (FLAGS.augment_num + 1),
-                                                               (FLAGS.augment_num + 1), -1))
-                    glands_features = glands_features.mean(dim=1)
+    print("[main] sending end signals")
+    for i in range(FLAGS.workers):
+        input_queue.put(None)
 
-            # if FLAGS.use_resnet:
-            #     rn_feature_maps = features_resnet(inputs)
-            #     rn_feature_maps = [fm.detach().cpu().numpy() for fm in rn_feature_maps]
-            #     assert rn_feature_maps
-            #     rn_glands_features = summary_net_features(gts, rn_feature_maps)
-            #     glands_features = np.concatenate((glands_features, rn_glands_features), axis=1)
+    input_queue.join()
+    while bool(running):
+        processed = output_queue.get()
+        if processed == "done":
+            running -= 1
+            print("Still running = {}".format(running))
+        else:
+            x_chunk, tns_chunk, lbls_chunk = processed
+            X.append(x_chunk)
+            thumbnails.extend(tns_chunk)
+            labels.extend(lbls_chunk)
+        output_queue.task_done()
 
-            bad_imgs = []
-            for j, gl_features in enumerate(glands_features):
-                # Checks FIXME should not have to do this
-                gl_features = gl_features.numpy()
-                if gl_features.dtype != np.float32:
-                    bad_imgs.append(j)  # nan response
-                    continue
-                X.append(gl_features)  # feature vector
-                X[-1] = np.concatenate((gl_features, colours_n_size[j, ...]))
-
-            # Save original images
-            to_save = zip(imgs[0::num, ...],  # only originals
-                          tumour_cls) if FLAGS.get_tumour_cls else imgs[0::num, ...]
-            for j, in_data in enumerate(to_save):
-                if j in bad_imgs:
-                    continue  # skip if nan response
-                if FLAGS.get_tumour_cls:
-                    img = in_data[0]
-                    label = in_data[1]
-                else:
-                    img = in_data
-                tn = make_thumbnail(img, th_size, label=label if FLAGS.get_tumour_cls else None)
-                thumbnails.append(tn)
-                if FLAGS.get_tumour_cls:
-                    labels.append(label)
-
-                if i == 0:
-                    imwrite(Path(FLAGS.save_dir).expanduser() / "thumbnail_test.png", tn)
+    output_queue.join()
 
     # Save features
-    X = np.array(X)
+    X = np.concatenate(X, axis=0)
     header = "mean_1,std_1,max_1,mean_2,std_2,max_2,..._{}x{}_{}".format(X.shape[0], X.shape[1], FLAGS.snapshot)
     save_file = Path(FLAGS.save_dir).expanduser()/("feats_" + FLAGS.snapshot[:-4] + ".csv")
     with open(str(save_file), 'w') as feature_file:
@@ -605,23 +616,23 @@ def main(FLAGS):
 
     # Save thumbnails
     thumbnails = np.array(thumbnails)
-    spriteimage = create_sprite_image(thumbnails.astype(np.uint8))
+    spriteimage = create_sprite_image(thumbnails).astype(np.uint8)
     save_file = Path(FLAGS.save_dir).expanduser() /("sprite_" + FLAGS.snapshot[:-4] + ".png")
     imwrite(save_file, spriteimage)
+    print("Saved {}x{} sprite image".format(*spriteimage.shape))
     save_file = Path(FLAGS.save_dir).expanduser() / ("thumbnails_" + FLAGS.snapshot[:-4] + ".npy")  # format for saving numpy data (not compressed)
     # Revert to RGB:
     thumbnails = thumbnails.astype(np.uint8)
     with open(str(save_file), 'wb') as thumbnails_file:  # it uses pickle, hence need to open file in binary mode
         np.save(thumbnails_file, thumbnails)
-    print("Saved {} ({}x{} thumbnails".format(*thumbnails.shape))
+    print("Saved {} ({}x{} thumbnails)".format(*thumbnails.shape))
 
-    if FLAGS.get_tumour_cls:
-        labels = np.array(labels)
-        # Save labels:
-        save_file = Path(FLAGS.save_dir).expanduser() / ("labels_" + FLAGS.snapshot[:-4] + ".tsv")
-        with open(str(save_file), 'w') as labels_file:
-            np.savetxt(labels_file, labels, delimiter='\t')
-        print("Saved labels ({}) - {} tumour and {} gland".format(labels.size, np.sum(labels == 2), np.sum(labels == 3)))
+    labels = np.array(labels)
+    # Save labels:
+    save_file = Path(FLAGS.save_dir).expanduser() / ("labels_" + FLAGS.snapshot[:-4] + ".tsv")
+    with open(str(save_file), 'w') as labels_file:
+        np.savetxt(labels_file, labels, delimiter='\t')
+    print("Saved labels ({}) - {} tumour and {} gland".format(labels.size, np.sum(labels == 2), np.sum(labels == 3)))
 
     print("Done!")
 
@@ -633,12 +644,19 @@ def thumbnails_size_check(str_size):
     return size
 
 if __name__ == '__main__':
+    try:
+        tmp.set_start_method('spawn')
+    except RuntimeError:
+        # because it's needed but sometimes it's already set and it fails ...
+        pass
+    # https://pytorch.org/docs/master/notes/multiprocessing.html#sharing-cuda-tensors
+    # https://discuss.pytorch.org/t/a-call-to-torch-cuda-is-available-makes-an-unrelated-multi-processing-computation-crash/4075/2?u=smth
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-chk', '--checkpoint_folder', required=True, type=str, help='checkpoint folder')
     parser.add_argument('-snp', '--snapshot', required=True, type=str, help='model file')
     parser.add_argument('-sd', '--save_dir', default="/gpfs0/well/win/users/achatrian/ProstateCancer/Results")
-    parser.add_argument('-tc', '--get_tumour_cls', type=str2bool, default='n')
     parser.add_argument('--thumbnail_size', default=64, type=thumbnails_size_check)
     parser.add_argument('--augment_num', type=int, default=0)
     parser.add_argument('--torch_feats', type=str2bool, default='y')
@@ -648,7 +666,7 @@ if __name__ == '__main__':
 
     parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
     parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
-    parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
+    parser.add_argument('--workers', default=2, type=int, help='the number of workers to load the data')
 
     parser.add_argument('--num_class', type=int, default=1)
     parser.add_argument('-nf', '--num_filters', type=int, default=64, help='mcd number of filters for unet conv layers')
