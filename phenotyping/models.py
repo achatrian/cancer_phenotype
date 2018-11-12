@@ -45,45 +45,40 @@ class _Encoder(nn.Module):
 
         self.encoder = nn.Sequential()
         self.encoder.add_module('input-conv', nn.Conv2d(num_channels, num_filt_gen, 3, 1, 0))
-        self.encoder.add_module('input-relu', nn.ReLU(inplace=False))
+        self.encoder.add_module('input-relu', nn.LeakyReLU(inplace=False))
         for i in range(n-4):
             #Convolutions have stride 2 !
             self.encoder.add_module('conv_{}'.format(i),
                 nn.Conv2d(num_filt_gen*2**(i), num_filt_gen * 2**(i+1), 3, 1, padding=0))
+            self.encoder.add_module('dropout_{}'.format(i), nn.Dropout(p=0.3))
             self.encoder.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_gen * 2**(i+1)))
-            self.encoder.add_module('relu_{}'.format(i), nn.ReLU(inplace=False))
-            self.encoder.add_module('pool{}'.format(i), nn.MaxPool2d(2, stride=2))
+            self.encoder.add_module('relu_{}'.format(i), nn.LeakyReLU(inplace=False))
+            self.encoder.add_module('pool{}'.format(i), nn.AvgPool2d(2, stride=2))
         #Output is 8x8
         self.encoder.add_module('output-conv0', nn.Conv2d(num_filt_gen * 2**(n-4), num_lat_dim // (8*8), 3, 1, 0))
-        self.encoder.add_module('output-conv1', nn.Conv2d(num_lat_dim // (8 * 8), num_lat_dim // (8 * 8), 3, 1, 0))
+        self.encoder.add_module('output_norm0', nn.InstanceNorm2d(num_lat_dim // (8*8)))
+        self.encoder.add_module('dropout0', nn.Dropout(p=0.3))
         #total number of outputs is == num_lat_dim
 
         self.intermediate0 = nn.Linear(num_lat_dim, num_lat_dim)
-        self.intermediate1 = nn.Linear(num_lat_dim, num_lat_dim)
-        self.relu = nn.ReLU(inplace=False)
+        self.instnorm = nn.LayerNorm(num_lat_dim, elementwise_affine=False)
+        self.relu = nn.LeakyReLU(inplace=False)
 
         #Compute std and variance
-        self.means = nn.Linear(num_lat_dim, num_lat_dim)
-        self.varn = nn.Linear(num_lat_dim, num_lat_dim)
+        self.means = nn.Linear(num_lat_dim, num_lat_dim * 2)
+        self.varn = nn.Linear(num_lat_dim, num_lat_dim * 2)
 
     def forward(self, input):
         output = nn.functional.interpolate(self.encoder(input), (8,8))
-        inter0 = self.relu(self.intermediate0(output.view(output.size(0), -1)))
-        inter1 = self.relu(self.intermediate1(inter0))
-        mu = self.means(inter1)
-        sig = self.varn(inter1)
+        inter0 = self.relu(self.instnorm(self.intermediate0(output.view(output.size(0), -1))))
+        mu = self.means(inter0)
+        sig = self.varn(inter0)
         return mu.view(mu.size(0), mu.size(1) // (8*8), 8, 8), sig.view(sig.size(0), sig.size(1) // (8*8), 8, 8)
 
-class VAE(nn.Module):
-    def __init__(self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
-        super(VAE, self).__init__()
-        self.ngpu = ngpu
-        self.sampler = _Sampler()
-        self.encoder = _Encoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
-        self.iscuda = torch.cuda.is_available() and ngpu > 0
-        num_lat_dim = max(num_lat_dim // (8 * 8), 1) * 8 * 8  # ensure multiple of 64
-        self.nz = num_lat_dim #to create noise for later
-        self.image_size = image_size
+
+class _Decoder(nn.Module):
+    def __init__(self, image_size, num_filt_gen, num_lat_dim, num_channels=3):
+        super(_Decoder, self).__init__()
 
         n = math.log2(image_size)
 
@@ -91,33 +86,60 @@ class VAE(nn.Module):
         assert n>=3,'image_size must be at least 8'
         n=int(n)
 
-        self.decoder = nn.Sequential(
-            nn.Conv2d(num_lat_dim // (8 * 8), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
-            nn.ReLU(inplace=True),
+        num_lat_dim = max(num_lat_dim // (8*8), 1) * 8 * 8 #ensure multiple of 16
+
+        self.input_block = nn.Sequential(
+            nn.Upsample(size=(16, 16), mode="bilinear"),
+            nn.Conv2d(num_lat_dim * 2 // (8 * 8), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
+            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout(p=0.3),
             nn.Conv2d(num_filt_gen * 2 ** (n - 4), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
-            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4)),
-            nn.ReLU(inplace=True),
-            nn.Upsample(size=(16, 16))
-        )
+            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout(p=0.3)
+            )
 
+        self.upscale = nn.Sequential(nn.Upsample(size=(16, 16), mode="bilinear"))
         for i in range(n-4, 0, -1):
-            self.decoder.add_module('conv_{}'.format(i),
-                        nn.ConvTranspose2d(num_filt_gen * 2**i, num_filt_gen * 2**(i-1), 3, 2, padding=0, output_padding=0))
+            self.upscale.add_module('conv_{}'.format(i), nn.Conv2d(num_filt_gen * 2**i,
+                                                                  num_filt_gen * 2**(i-1), 3, 1, padding=1))
+            self.upscale.add_module('dropout{}'.format(i), nn.Dropout(p=0.3))
                         #output_padding=1 specifies correct size for 3x3 convolution kernel with stride 2
-            self.decoder.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_gen * 2**(i-1)))
-            self.decoder.add_module('relu_{}'.format(i), nn.ReLU(inplace=True))
+            self.upscale.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_gen * 2**(i-1), affine=False))
+            self.upscale.add_module('relu_{}'.format(i), nn.LeakyReLU(inplace=True))
+            self.upscale.add_module('upsample_{}'.format(i), nn.Upsample(scale_factor=2, mode="bilinear"))
 
-        self.final = nn.Sequential( nn.Upsample((self.image_size, self.image_size)),
-                                    nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
-                                    nn.ReLU(inplace=True),
-                                    nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
-                                    nn.ReLU(inplace=True),
-                                    nn.Conv2d(num_filt_gen, num_channels, 1, 1, padding=1),
-                                    nn.Tanh()
-        )
-        self.decoder.add_module('final', self.final)
+        self.final = nn.Sequential(nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
+                                   nn.InstanceNorm2d(num_filt_gen, track_running_stats=True),
+                                   nn.LeakyReLU(inplace=True),
+                                   nn.Dropout(p=0.3),
+                                   nn.Conv2d(num_filt_gen, num_filt_gen, 2, 1, padding=0),
+                                   nn.InstanceNorm2d(num_filt_gen, track_running_stats=True),
+                                   nn.LeakyReLU(inplace=True),
+                                   nn.Dropout(p=0.1),
+                                   nn.Conv2d(num_filt_gen, num_channels, 1, 1, padding=1),
+                                   nn.Sigmoid()
+                                   )
 
-        #where is the upsampling done in the decoder ????
+    def forward(self, inputs):
+        inputs = self.input_block(inputs)
+        upscaled = self.upscale(inputs)
+        final = self.final(upscaled)
+        return final
+
+
+class VAE(nn.Module):
+    def __init__(self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
+        super(VAE, self).__init__()
+        self.ngpu = ngpu
+        self.sampler = _Sampler()
+        self.iscuda = torch.cuda.is_available() and ngpu > 0
+        self.nz = num_lat_dim #to create noise for later
+        self.image_size = image_size
+
+        self.encoder = _Encoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
+        self.decoder = _Decoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
 
     def forward(self, input):
         #Reconstruct
@@ -127,10 +149,15 @@ class VAE(nn.Module):
         reconstructed = self.decoder(sampled)
 
         # Sample from prior
-        noise = torch.normal(torch.zeros((N, self.nz // (8*8), 8, 8)), torch.ones((N, self.nz // (8*8), 8, 8))) #feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
+        noise = torch.normal(torch.zeros((N, self.nz * 2 // (8*8), 8, 8)), torch.ones((N, self.nz * 2 // (8*8), 8, 8))) #feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
         if self.iscuda: noise = noise.cuda()
         generated = self.decoder(noise)
         return encoded, reconstructed, generated
+
+    def sample_from(self, mu, logvar):
+        sampled = self.sampler((mu, logvar))
+        reconstructed = self.decoder(sampled)
+        return reconstructed, sampled
 
 
 class Discriminator(nn.Module):
@@ -143,60 +170,72 @@ class Discriminator(nn.Module):
         assert n==round(n),'image_size must be a power of 2'
         assert n>=3,'image_size must be at least 8'
         n=int(n)
+        m = n - 4
 
         #Main downsamples 3 times
-        self.main = nn.Sequential(
-            nn.Conv2d(num_channels, num_filt_discr, 3),
-            nn.InstanceNorm2d(num_filt_discr),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(num_filt_discr, num_filt_discr*2, 3),
-            nn.InstanceNorm2d(num_filt_discr*2),
-            nn.ReLU(inplace=False),
-            nn.MaxPool2d(2, stride=2),
-            nn.Conv2d(num_filt_discr * 2 ** (1), num_filt_discr * 2 ** (1 + 1), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (1 + 1)),
-            nn.ReLU(inplace=False),
-            nn.MaxPool2d(2, stride=2),
-            nn.Conv2d(num_filt_discr * 2 ** (2), num_filt_discr * 2 ** (2 + 1), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (2 + 1)),
-            nn.ReLU(inplace=False),
-            nn.MaxPool2d(2, stride=2),
-            nn.Conv2d(num_filt_discr * 2 ** (3), num_filt_discr * 2 ** (3 + 1), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (3 + 1)),
-            nn.ReLU(inplace=False),
-            nn.MaxPool2d(2, stride=2)
+        self.main = nn.Sequential(nn.Conv2d(num_channels, num_filt_discr * 2 ** (0), 3, 1, 0))
+        self.main.add_module('input-relu', nn.LeakyReLU(inplace=False))
+
+        for i in range(m):
+            # Convolutions have stride 2 !
+            self.main.add_module('conv_{}'.format(i),
+                                    nn.Conv2d(num_filt_discr * 2 ** (i), num_filt_discr * 2 ** (i + 1), 3, 1, padding=1))
+            self.main.add_module('dropout_{}'.format(i), nn.Dropout(p=0.3))
+            self.main.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_discr * 2 ** (i + 1), affine=False))
+            self.main.add_module('relu_{}'.format(i), nn.LeakyReLU(inplace=False))
+            self.main.add_module('pool{}'.format(i), nn.AvgPool2d(2, stride=2))
+
+
+        # Feature map used for style loss
+        self.features0 = nn.Sequential(
+            nn.Conv2d(num_filt_discr * 2 ** (m + 1 -1 ), num_filt_discr * 2 ** (m + 2), 3),
+            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 2), affine=False),
+            nn.LeakyReLU(inplace=False),
+            nn.AvgPool2d(2, stride=2)
         )
 
+
+
         #Feature map used for style loss
-        self.features = nn.Sequential(
-            nn.Conv2d(num_filt_discr * 2 ** (4), num_filt_discr * 2 ** (4 + 1), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (4 + 1)),
-            nn.ReLU(inplace=False)
+        self.features1 = nn.Sequential(
+            nn.Conv2d(num_filt_discr * 2 ** (m + 2), num_filt_discr * 2 ** (m + 3), 3, padding=1),
+            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 3), affine=False),
+            nn.LeakyReLU(inplace=False)
         )
 
         #TODO could use more than one layer and sum MSEs
 
         self.end = nn.Sequential(
-            nn.MaxPool2d(2, stride=2),
-            nn.Conv2d(num_filt_discr * 2 ** (4+1), num_filt_discr * 2 ** (4+1), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (4 + 1)),
-            nn.ReLU(inplace=False)
+            nn.AvgPool2d(2, stride=2),
+            nn.Conv2d(num_filt_discr * 2 ** (m + 3), num_filt_discr * 2 ** (m + 4), 3, padding=1),
+            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 4), affine=False),
+            nn.LeakyReLU(inplace=False),
+            nn.AvgPool2d(2, stride=2)
         )
 
         #Classifier
         self.classifier = nn.Sequential(
-                        nn.Linear(4*4*num_filt_discr * 2 ** (4 + 1), 300), #padding issues
-                        nn.ReLU(inplace=False),
-                        nn.Linear(300,1),
+                        nn.Linear(num_filt_discr * 2 ** (m + 4) * 1 * 1, 300), #padding issues
+                        nn.LeakyReLU(inplace=False),
+                        nn.Linear(300, 1),
                         nn.Sigmoid()
                         )
 
+        self.aux_classifier = nn.Sequential(
+            nn.Linear(num_filt_discr * 2 ** (m + 4) * 1 * 1, 300),  # padding issues
+            nn.LeakyReLU(inplace=False),
+            nn.Linear(300, 1),
+            nn.Sigmoid()
+        )
+
     def forward(self, input, output_layer=False):
         output = self.main(input)
-        features = self.features(output)
+        features0 = self.features0(output)
+        features1 = self.features1(features0)
         if output_layer:
-            return features  #return layer activation
-        output = self.end(features)
+            return features0, features1  #return layer activation
+        output = self.end(features1)
         output = output.view(output.size(0), -1) #reshape tensor
         y = self.classifier(output)  #return class probability
-        return y
+        c = self.aux_classifier(output)
+        return y, c

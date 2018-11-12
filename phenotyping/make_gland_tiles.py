@@ -1,4 +1,4 @@
-#get glands
+# get glands
 
 import os, sys
 import multiprocessing as mp
@@ -12,7 +12,7 @@ import warnings
 import numpy as np
 import cv2
 
-sys.path.append("../mymodel")
+sys.path.append("../segment")
 from utils import check_mkdir
 
 class InstanceSaver(mp.Process):
@@ -35,6 +35,11 @@ class InstanceSaver(mp.Process):
                 break
 
             idx, img, gt, glandspath = data
+            #Change colours to make gt visible
+            gt[gt == 1] = 120
+            gt[gt == 2] = 160
+            gt[gt == 3] = 200
+            gt[gt == 4] = 250
             gt2, contours, hierarchy = cv2.findContours(gt,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
             for c_idx, contour in enumerate(contours):
                 if self.min_gland_area and cv2.contourArea(contour) < self.min_gland_area:
@@ -57,7 +62,7 @@ class InstanceSaver(mp.Process):
                     gland_gt = gland_gt.transpose(1,0)
                     x,y,w,h = y,x,h,w
 
-                #Resize
+                # Resize
                 oh = self.out_size
                 ow = round((oh / float(h)) * float(w))  #rounding is done towards the even choice (NB need even size for dcgan-vae implementation)
                 top, bottom = 0,0
@@ -65,13 +70,11 @@ class InstanceSaver(mp.Process):
                 left, right = delta_w // 2, delta_w - (delta_w // 2)
                 gland_img = cv2.resize(gland_img, dsize=(ow, oh), interpolation=cv2.INTER_CUBIC)
                 gland_gt = cv2.resize(gland_gt, dsize=(ow, oh), interpolation=cv2.INTER_CUBIC)
-                gland_img = cv2.copyMakeBorder(gland_img, top, bottom, left, right, cv2.BORDER_CONSTANT,
-                                                   value=[0, 0, 0])
-                gland_gt = cv2.copyMakeBorder(gland_gt, top, bottom, left, right, cv2.BORDER_CONSTANT,
-                                               value=[0])  # pad short dimension
+                gland_img = cv2.copyMakeBorder(gland_img, top, bottom, left, right, cv2.BORDER_REFLECT)
+                gland_gt = cv2.copyMakeBorder(gland_gt, top, bottom, left, right, cv2.BORDER_REFLECT)  # pad short dimension
 
-                imageio.imwrite(self.dir / glandspath / "gland_img_{}.png".format(c_idx), gland_img)
-                imageio.imwrite(self.dir / glandspath / "gland_gt_{}.png".format(c_idx), gland_gt)
+                imageio.imwrite(str(self.dir / glandspath / "gland_img_{}{}.png".format(idx, c_idx)), gland_img)
+                imageio.imwrite(str(self.dir / glandspath / "gland_gt_{}{}.png".format(idx, c_idx)), gland_gt)
                 count += 1
                 if count % 100 == 0:
                     print("Process {} saved ~{} glands".format(self.id, count))
@@ -101,18 +104,20 @@ def main(FLAGS):
         queue.put((idx, img, gt, glandspath))
 
     for i in range(FLAGS.workers):
-        queue.put(None)  #why?
+        queue.put(None)  # why?
     queue.join()
+
+    print("Done !")
 
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
+    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/cancer_phenotype/Dataset")
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to make gland data')
-    parser.add_argument('--image_size', type=int, default=256)
-    parser.add_argument('--min_gland_area', type=int, default=10000)
+    parser.add_argument('--image_size', type=int, default=299)
+    parser.add_argument('--min_gland_area', type=int, default=6000)
     parser.add_argument('-ib','--increase_bounding_box', type=float, default=0.1)
     mp.set_start_method('spawn')
 

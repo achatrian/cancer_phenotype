@@ -15,5 +15,5 @@ module load cuda/8.0
 module load cudnn/6.0-8.0
 source /users/win/achatrian/pytorch-v0.4.0-cuda8.0-py3.5-venv/bin/activate
 cd ~/ProstateCancer/mymodel
-python /users/win/achatrian/ProstateCancer/phenotyping/make_gland_tiles_full.py -d $DATA_DIR
+python /users/win/achatrian/ProstateCancer/phenotyping/make_gland_tiles_full.py -d $DATA_DIR --fix_image_size
 echo "Done running script"

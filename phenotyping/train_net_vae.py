@@ -15,7 +15,7 @@ import torchvision.utils as vutils
 from tensorboardX import SummaryWriter
 from torch.autograd import Variable
 from torch.backends import cudnn
-from torch.nn import DataParallel, MSELoss
+from torch.nn import DataParallel, L1Loss, BCELoss, parallel
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -24,8 +24,6 @@ from cv2 import cvtColor, COLOR_GRAY2RGB
 #from torchnet.logger import MeterLogger
 
 import warnings
-
-from gland_dataset import GlandPatchDataset
 
 def on_cluster():
     import socket, re
@@ -39,146 +37,163 @@ def on_cluster():
     return bool(match1 or match2 or match3 or match4 or match5)
 
 if on_cluster():
-    sys.path.append(os.path.expanduser('~') + 'ProstateCancer/mymodel')
+    sys.path.append(os.path.expanduser('~') + '/cancer_phenotype')
 else:
-    sys.path.append(os.path.expanduser('~') + '/Documents/Repositories/ProstateCancer/mymodel')
-from models import VAE, Discriminator, weights_init
-from utils import get_time_stamp, check_mkdir, str2bool, evaluate_multilabel, colorize, MultiLabelSoftDiceLoss, AverageMeter
+    sys.path.append(os.path.expanduser('~') + '/Documents/Repositories/cancer_phenotype')
 
-from clr import CyclicLR
+from phenotyping.gland_dataset import GlandPatchDataset, GlandDataset
+from phenotyping.models import VAE, Discriminator, weights_init
+from segment.utils import get_time_stamp, check_mkdir, str2bool, evaluate_multilabel, colorize, MultiLabelSoftDiceLoss, AverageMeter
+from segment.clr import CyclicLR
 
 cudnn.benchmark = True
 
 timestamp = get_time_stamp()
-ckpt_path = "/well/win/users/achatrian/ProstateCancer/logs/" + "vae" + timestamp + "/ckpt" if on_cluster() \
-                            else os.path.expanduser('~') + "/ProstateCancer/Logs/" + "vae" + timestamp + "/ckpt"
+ckpt_path = "/well/win/users/achatrian/cancer_phenotype/logs/" + "vae" + timestamp + "/ckpt" if on_cluster() \
+                            else os.path.expanduser('~') + "/cancer_phenotype/Logs/" + "vae" + timestamp + "/ckpt"
 exp_name = ''
 writer = SummaryWriter(os.path.join(ckpt_path, exp_name))
 visualize = ToTensor()
 FAKE_LABEL = 0
 
-equilibrium = 0.68
-margin = 0.35
+equilibrium = 0.5
+margin = 0.3
 
-def get_gaussian_blur(step, alpha=0.1):
-    # Set these to whatever you want for your gaussian filter
-    kernel_size = 15
 
-    sigma = 5 * math.exp(- alpha*step)
+# def get_gaussian_blur(step, alpha=0.1):
+#     # Set these to whatever you want for your gaussian filter
+#     kernel_size = 15
+#
+#     sigma = 2.0 * math.exp(- alpha*step)
+#
+#     # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
+#     x_cord = torch.arange(kernel_size)
+#     x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
+#     y_grid = x_grid.t()
+#     xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
+#
+#     mean = (kernel_size - 1) / 2.
+#     variance = sigma ** 2.
+#
+#     # Calculate the 2-dimensional gaussian kernel which is
+#     # the product of two gaussian distributions for two different
+#     # variables (in this case called x and y)
+#     gaussian_kernel = (1. / (2. * math.pi * variance)) * \
+#                       torch.exp(
+#                           -torch.sum((xy_grid - mean) ** 2., dim=-1) / \
+#                           (2 * variance)
+#                       )
+#     # Make sure sum of values in gaussian kernel equals 1.
+#     gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
+#
+#     # Reshape to 2d depthwise convolutional weight
+#     gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
+#     gaussian_kernel = gaussian_kernel.repeat(3, 3, 1, 1)
+#
+#     gaussian_filter = torch.nn.Conv2d(in_channels=3, out_channels=3,
+#                                 kernel_size=kernel_size, bias=False, padding=1)
+#
+#     gaussian_filter.weight.data = gaussian_kernel
+#     gaussian_filter.weight.requires_grad = False
+#     return gaussian_filter
 
-    # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
-    x_cord = torch.arange(kernel_size)
-    x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
-    y_grid = x_grid.t()
-    xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
 
-    mean = (kernel_size - 1) / 2.
-    variance = sigma ** 2.
-
-    # Calculate the 2-dimensional gaussian kernel which is
-    # the product of two gaussian distributions for two different
-    # variables (in this case called x and y)
-    gaussian_kernel = (1. / (2. * math.pi * variance)) * \
-                      torch.exp(
-                          -torch.sum((xy_grid - mean) ** 2., dim=-1) / \
-                          (2 * variance)
-                      )
-    # Make sure sum of values in gaussian kernel equals 1.
-    gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
-
-    # Reshape to 2d depthwise convolutional weight
-    gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
-    gaussian_kernel = gaussian_kernel.repeat(3, 3, 1, 1)
-
-    gaussian_filter = torch.nn.Conv2d(in_channels=3, out_channels=3,
-                                kernel_size=kernel_size, bias=False, padding=1)
-
-    gaussian_filter.weight.data = gaussian_kernel
-    gaussian_filter.weight.requires_grad = False
-    return gaussian_filter
-
-def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, opt_vae, schedulers, gamma=1.0, epoch=1, load_weightmap=False, print_freq=10):
+def train(train_loader, vae, discr, nz, l1, opt_enc, opt_dec, opt_dis, opt_vae, schedulers, gamma=1.0, epoch=1, load_weightmap=False, print_freq=10):
     train_loss_enc = AverageMeter()
     train_loss_dec = AverageMeter()
     train_loss_gan = AverageMeter()
     train_loss_rec = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
-    train_dec, train_dis = True, True
-    if epoch < 20:
-        gaussian_filter = get_gaussian_blur(epoch, alpha=0.1)
-    mse_rec = MSELoss(size_average=False, reduce=False)
+    global margin
+    margin *= 0.99
+    # if epoch < 20:
+    #     gaussian_filter = get_gaussian_blur(epoch, alpha=0.1)
+    l1_rec = L1Loss(size_average=False, reduce=False)
+    ce = BCELoss(size_average=True)
     for i, data in enumerate(tqdm(train_loader)):
 
         inputs = data[0]
         gts = data[1]
-        gts = gts / gts.max() * 4 + 1.0
+        gts = torch.clamp(gts, 1)
+        gts_weight = gts * 4 + 1.0  # turn to 0-1 first, then scale and use as weightmap
         N, y, x = inputs.size(0), inputs.size(2), inputs.size(3)
 
-        if epoch < 20:
-            inputs = gaussian_filter(inputs)
-            inputs = inputs / max(inputs.max(), abs(inputs.min()))  # normalize so that images are still in range [-1, 1]
-            left = max(0, (x - inputs.size(3)) // 2)
-            right = max(0, x - inputs.size(3) - left)
-            bottom = max(0, (y - inputs.size(2)) // 2)
-            top = max(0, y - inputs.size(2) - bottom)
-            inputs = torch.nn.functional.pad(inputs, (left, right, top, bottom), mode='reflect')
+        # if False:
+        #     # disabled
+        #     inputs = gaussian_filter(inputs)
+        #     inputs = (inputs - inputs.mean()) / inputs.std()
+        #     inputs /= max(inputs.max(), abs(inputs.min())) # normalize so that images are still in range [-1, 1]
+        #     left = max(0, (x - inputs.size(3)) // 2)
+        #     right = max(0, x - inputs.size(3) - left)
+        #     bottom = max(0, (y - inputs.size(2)) // 2)
+        #     top = max(0, y - inputs.size(2) - bottom)
+        #     inputs = torch.nn.functional.pad(inputs, (left, right, top, bottom), mode='reflect')
 
         inputs = Variable(inputs)
-        labels = Variable((torch.zeros(N) if not FAKE_LABEL else torch.ones(N)).type(torch.FloatTensor))
         if torch.cuda.is_available():
             inputs = inputs.cuda()
-            gts = gts.cuda()
-            labels = labels.cuda()
+            gts_weight = gts_weight.cuda()
 
         encoded, reconstructed, generated = vae(inputs)  # generated does not depend on inputs
 
         mu = encoded[0]
         logvar = encoded[1] # !!! log of sigma^2
-        ###Prior loss (KL div between recognition model and prior)#######
+        # Prior loss (KL div between recognition model and prior)#######
         kld_elements = (mu.pow(2) + logvar.exp() - 1 - logvar) / 2  #log of variance learned by network (why??)
         kld_loss = torch.clamp(torch.mean(kld_elements), max=1e15)
 
-        #MSE loss between discriminator layers for reconstructed and real input
-        l_rec = discr(reconstructed, output_layer=True)
-        l_real = Variable(discr(inputs, output_layer=True), requires_grad=False)
-        mse_loss = torch.clamp(mse(l_rec, l_real), max=1e15)
+        # l1 loss between discriminator layers for reconstructed and real input
+        l_rec0, l_rec1 = discr(reconstructed, output_layer=True)
+        l_real0, l_real1 = discr(inputs, output_layer=True)
+        l_real0 = Variable(l_real0, requires_grad=False)
+        l_real1 = Variable(l_real1, requires_grad=False)
+        l1_loss = torch.clamp(l1(l_rec0, l_real0), max=1e15) + torch.clamp(l1(l_rec1, l_real1), max=1e15)
 
-        #GAN loss:
-        gts_3ch = gts.repeat(1, 3, 1, 1) / 5  # help discriminator focus on gland ?
-        d_x = discr(inputs * gts_3ch)
-        d_g_z = discr(reconstructed * gts_3ch)
-        d_g_zp = discr(generated * gts_3ch)
-        dis_loss = - torch.mean(torch.log(d_x + 1e-3) + torch.log(1 - d_g_z + 1e-3) +
-                    torch.log(1 - d_g_zp + 1e-3)) #need to ascend its opposite !
-        gen_loss = torch.mean(torch.log(1 - d_g_z + 1e-3) + torch.log(1 - d_g_zp + 1e-3))
+        # GAN loss:
+        d_x = discr(inputs)
+        d_g_z = discr(reconstructed)
+        d_g_zp = discr(generated)
+        # Smooth labels
+        outputs_dis = torch.cat((d_x, d_g_z, d_g_zp), dim=0)
+        targets = torch.cat((torch.rand(d_x.shape[0]) * 0.19 + 0.8,
+                             torch.rand(d_g_z.shape[0] + d_g_zp.shape[0]) * 0.2), dim=0)
+        if torch.cuda.is_available():
+            outputs_dis = outputs_dis.cuda()
+            targets = targets.cuda()
+        dis_loss = ce(outputs_dis, targets)
+        gen_loss = - dis_loss
 
-        #Disable training of either decoder or discriminator if optimization becomes unbalanced
-        #(as measured by comparing to some predefined bounds) (as in https://github.com/lucabergamini/VAEGAN-PYTORCH/blob/master/main.py)
-        if torch.mean(- torch.log(d_x + 1e-3)).data.item() < equilibrium - margin or \
-            torch.mean(- torch.log(1 - d_g_zp + 1e-3)) < equilibrium - margin:
+        # Disable training of either decoder or discriminator if optimization becomes unbalanced
+        # (as measured by comparing to some predefined bounds) (as in https://github.com/lucabergamini/VAEGAN-PYTORCH/blob/master/main.py)
+
+        if torch.mean(d_x).data.item() > equilibrium + margin and \
+            torch.mean(d_g_z) < equilibrium - margin and torch.mean(d_g_zp) < equilibrium + margin:
             train_dis = False
-        if torch.mean(- torch.log(d_x + 1e-3)).data.item() > equilibrium + margin or \
-                torch.mean(- torch.log(1 - d_g_zp + 1e-3)) > equilibrium + margin:
-            train_dec = False
+        else:
+            train_dis = True
 
-        if not any((train_dis, train_dec)):
-            train_dis, train_dec = True, True
+        if torch.mean(d_x).data.item() < equilibrium - margin and \
+                torch.mean(d_g_z) > equilibrium + margin and torch.mean(d_g_zp) > equilibrium + margin:
+            train_dec = False
+        else:
+            train_dec = True
 
         #Optimize:
         opt_enc.zero_grad()
-        loss_enc = kld_loss + mse_loss
-        loss_enc.backward(retain_graph=True)  # since mse loss is used again in decoder optimization
+        loss_enc = kld_loss + l1_loss
+        loss_enc.backward(retain_graph=True)  # since l1 loss is used again in decoder optimization
         opt_enc.step()  # encoder
         train_loss_enc.update(loss_enc.data.item(), N)
         #del kld_loss  # release graph on unneeded loss
 
+        loss_dec = gamma * l1_loss + gen_loss
+        train_loss_dec.update(loss_dec.data.item(), N)
         if train_dec:
             opt_dec.zero_grad()
-            loss_dec = gamma * mse_loss + gen_loss
             loss_dec.backward(retain_graph=True)   # since gan loss is used again
             opt_dec.step()  # decoder
-        train_loss_dec.update(loss_dec.data.item(), N)
-            #del loss_enc, mse_loss  # release graph on unneeded loss
+
+            #del loss_enc, l1_loss  # release graph on unneeded loss
 
         if train_dis:
             opt_dis.zero_grad()
@@ -190,27 +205,26 @@ def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, opt_vae,
         #del dis_loss, generated, l_rec
 
 
-        # Optimize encoder w.r. to MSE loss for reconstruction (calculated later to save gpu space)
+        # Optimize encoder w.r. to l1 loss for reconstruction (calculated later to save gpu space)
 
-        #opt_enc.zero_grad()  # training through reconstruction can be done through whole network !
-        #opt_dec.zero_grad()
         opt_vae.zero_grad()
-        rec_loss = torch.sum(mse_rec(reconstructed, inputs) * gts)
-        rec_loss.backward()
-        #opt_enc.step()
-        #opt_dec.step()
+        rec_loss = torch.sum(l1_rec(reconstructed, inputs) * gts_weight)
+        vae_loss = rec_loss + l1_loss  # I added l1 loss here ...
+        vae_loss.backward()
         opt_vae.step()
         train_loss_rec.update(rec_loss.data.item(), N)
-        #####
+
 
         schedulers['enc'].batch_step()
         schedulers['dec'].batch_step()
         schedulers['dis'].batch_step()
+        schedulers['vae'].batch_step()
 
         if i % print_freq == 0:
             tqdm.write('[epoch %d][batch %d] losses: enc: %.4E, dec: %.4E, gan: %.4E, rec %.4E | D(x): %.4f D(G(z)): %.4f / %.4f'
                 % (epoch, i, train_loss_enc.avg, train_loss_dec.avg, train_loss_gan.avg, train_loss_rec.avg,
                    d_x.mean().item(), d_g_z.mean().data.item(), d_g_zp.mean().data.item()))
+
 
         #del d_x, d_g_z, d_g_zp
 
@@ -219,7 +233,7 @@ def train(train_loader, vae, discr, nz, mse, opt_enc, opt_dec, opt_dis, opt_vae,
         writer.add_scalar('dec_loss', train_loss_dec.avg, curr_iter)
         writer.add_scalar('dis_loss', train_loss_gan.avg, curr_iter)
 
-def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best_record=None,
+def validate(val_loader, discr, vae, nz, l1, optimizers, gamma=1, epoch=1, best_record=None,
              val_imgs_sample_rate=0.1, val_save_to_img_file=True):
     discr.eval() # !!
     vae.eval()  # !!
@@ -229,11 +243,11 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
     val_loss_dec = AverageMeter()
     val_loss_gan = AverageMeter()
     inputs_smpl, reconstructions_smpl = [], []
-    mse_rec = MSELoss(size_average=False, reduce=False)
+    l1_rec = L1Loss(size_average=False, reduce=False)
     for vi, data in enumerate(val_loader): #pass over whole validation dataset
         inputs = data[0]
         gts = data[1]
-        gts = gts / gts.max() * 4 + 1
+        gts = torch.clamp(gts, 1) * 4 + 1.0  # turn to 0-1 first, then scale and use as weightmap
         N = inputs.size(0)
         #Validate discrimination by D net
         with torch.no_grad(): #don't track variable history for backprop (to avoid out of memory)
@@ -253,24 +267,25 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
             kld_elements = (mu.pow(2) + logvar.exp() - 1 - logvar) / 2  # log of variance learned by network (why??)
             kld_loss = - torch.mean(kld_elements)
 
-            # MSE loss between discriminator layers for reconstructed and real input
-            l_rec = discr(reconstructed, output_layer=True)
-            l_real = discr(inputs, output_layer=True)
-            mse_loss = mse(l_rec, l_real)
+            # l1 loss between discriminator layers for reconstructed and real input
+            l_rec0, l_rec1 = discr(reconstructed, output_layer=True)
+            l_real0, l_real1 = discr(inputs, output_layer=True)
+            l_real0 = Variable(l_real0, requires_grad=False)
+            l_real1 = Variable(l_real1, requires_grad=False)
+            l1_loss = torch.clamp(l1(l_rec0, l_real0), max=1e15) + torch.clamp(l1(l_rec1, l_real1), max=1e15)
 
             # GAN loss:
-            gts_3ch = gts.repeat(1, 3, 1, 1) / 5
-            d_x = discr(inputs * gts_3ch)
-            d_g_z = discr(reconstructed * gts_3ch)
-            d_g_zp = discr(generated * gts_3ch)
+            d_x = discr(inputs)
+            d_g_z = discr(reconstructed)
+            d_g_zp = discr(generated)
             dis_loss = - torch.mean(torch.log(d_x + 1e-3) + torch.log(1 - d_g_z + 1e-3) +
                                     torch.log(1 - d_g_zp + 1e-3))
             gen_loss = torch.mean(torch.log(1 - d_g_z + 1e-3) + torch.log(1 - d_g_zp + 1e-3))
 
             # Losses:
-            loss_enc = kld_loss + mse_loss
-            loss_dec = gamma * mse_loss + gen_loss
-            loss_rec = mse_rec(reconstructed, inputs) * gts
+            loss_enc = kld_loss + l1_loss
+            loss_dec = gamma * l1_loss + gen_loss
+            loss_rec = l1_rec(reconstructed, inputs) * gts  # used scaled ground - truth as weightmap
             loss_rec = loss_rec.sum()
             val_loss_enc.update(loss_enc.data.item(), N)
             val_loss_dec.update(loss_dec.data.item(), N)
@@ -285,7 +300,7 @@ def validate(val_loader, discr, vae, nz, mse, optimizers, gamma=1, epoch=1, best
             inputs_smpl.append(inputs[idx, ...].data.cpu().numpy())
             reconstructions_smpl.append(reconstructed[idx,...].data.cpu().numpy())
 
-    if val_loss_rec.avg < best_record['loss_rec']:
+    if val_loss_rec.avg < best_record['loss_rec'] or val_loss_enc.avg < best_record['loss_enc']:
         best_record['loss_enc'] = val_loss_enc.avg
         best_record['loss_dec'] = val_loss_dec.avg
         best_record['loss_gan'] = val_loss_gan.avg
@@ -389,9 +404,9 @@ def main(FLAGS):
 
     ###CRITERIONS####
     reduce = not FLAGS.load_weightmap
-    mse = MSELoss(size_average=True)
+    l1 = L1Loss(size_average=True)
     if torch.cuda.is_available():
-        mse = mse.cuda()
+        l1 = l1.cuda()
     #################
 
     if parallel:
@@ -425,12 +440,14 @@ def main(FLAGS):
     with open(os.path.join(ckpt_path, exp_name, str(timestamp) + '.txt'), 'w') as argsfile:
         argsfile.write(str(FLAGS) + '\n\n')
 
-    #Train
-    #train_dataset = GlandDataset(FLAGS.data_dir, "train", augment=True)
-    train_dataset = GlandPatchDataset(FLAGS.data_dir, "train", tile_size=256, augment=True)
+    # Train
+    if FLAGS.full_glands:
+        train_dataset = GlandDataset(FLAGS.data_dir, "train", tile_size=FLAGS.image_size, augment=True, blur=True)
+        val_dataset = GlandDataset(FLAGS.data_dir, "val", tile_size=FLAGS.image_size, blur=True)
+    else:
+        train_dataset = GlandPatchDataset(FLAGS.data_dir, "train", tile_size=FLAGS.image_size, augment=True)
+        val_dataset = GlandPatchDataset(FLAGS.data_dir, "val", tile_size=FLAGS.image_size)
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)
-    #val_dataset = GlandDataset(FLAGS.data_dir, "val")
-    val_dataset = GlandPatchDataset(FLAGS.data_dir, "val", tile_size=256)
     val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)
     #scheduler_enc = ReduceLROnPlateau(opt_enc, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
     #scheduler_dec = ReduceLROnPlateau(opt_dec, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
@@ -438,6 +455,8 @@ def main(FLAGS):
     sche_enc = CyclicLR(opt_enc, base_lr=FLAGS.learning_rate/10, max_lr=FLAGS.learning_rate, step_size=1200, mode ='triangular')
     sche_dec = CyclicLR(opt_dec, base_lr=FLAGS.learning_rate/10, max_lr=FLAGS.learning_rate, step_size=1200, mode ='triangular')
     sche_dis = CyclicLR(opt_dis, base_lr=FLAGS.learning_rate/10, max_lr=FLAGS.learning_rate, step_size=1200, mode ='triangular')
+    sche_vae = CyclicLR(opt_vae, base_lr=FLAGS.learning_rate / 10, max_lr=FLAGS.learning_rate, step_size=1200,
+                        mode='triangular')
 
 
     model_parameters_discr = filter(lambda p: p.requires_grad, discr.parameters())
@@ -446,8 +465,8 @@ def main(FLAGS):
     params_vae = sum([np.prod(p.size()) for p in model_parameters_vae])
     #if parallel:
     #   module_devs = {'discr' : }
-    #print("Running on GPUs: {} - discr on cuda{}, vae on cuda:{}, mse on cuda:{} :".format(
-    #        # FLAGS.gpu_ids, discr.parameters().get_device().index, vae.get_device().index, mse.get_device().index))
+    #print("Running on GPUs: {} - discr on cuda{}, vae on cuda:{}, l1 on cuda:{} :".format(
+    #        # FLAGS.gpu_ids, discr.parameters().get_device().index, vae.get_device().index, l1.get_device().index))
     print("Running on GPUs: {}".format(FLAGS.gpu_ids))
     print("Memory: Image size: {}, Batch size: {}".format(FLAGS.image_size, FLAGS.batch_size))
     print("Hidden dim: {}, discr filter num: {}, vae filter num: {}".format(FLAGS.num_lat_dim, FLAGS.num_filt_discr, FLAGS.num_filt_gen))
@@ -456,11 +475,12 @@ def main(FLAGS):
     print("Begin training ...")
 
     for epoch in range(curr_epoch, FLAGS.epochs):
-        train(train_loader, vae, discr, FLAGS.num_lat_dim, mse, opt_enc, opt_dec, opt_dis, opt_vae, schedulers={'enc': sche_enc, 'dec': sche_dec, 'dis': sche_dis},
+        train(train_loader, vae, discr, FLAGS.num_lat_dim, l1, opt_enc, opt_dec, opt_dis, opt_vae,
+              schedulers={'enc': sche_enc, 'dec': sche_dec, 'dis': sche_dis, 'vae' : sche_vae},
               epoch=epoch, load_weightmap=FLAGS.load_weightmap, print_freq=FLAGS.print_freq)
         if epoch % 10 == 1: #so it validates at first epoch too
             optimizers = {'enc': opt_enc, 'dec': opt_dec, 'dis': opt_dis}
-            losses = validate(val_loader, discr, vae, FLAGS.num_lat_dim, mse, optimizers, epoch=epoch, best_record=best_record,
+            losses = validate(val_loader, discr, vae, FLAGS.num_lat_dim, l1, optimizers, epoch=epoch, best_record=best_record,
                                 val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=True)
             tqdm.write("Epoch {} val losses: rec: {:.2E}, enc: {:.2E}, dec: {:.2E}, gan: {:.2E}".format(epoch, *losses))
         #sche_enc.step(val_loss_rec)
@@ -472,6 +492,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--image_size', type=int, default=256, help='the height / width of the input image to network')
+    parser.add_argument('--full_glands', type=str2bool, default='y')
 
     parser.add_argument('--epochs', default=4000, type=int)
     parser.add_argument('--batch_size', default=16, type=int)
@@ -491,7 +512,7 @@ if __name__ == '__main__':
     parser.add_argument('--val_imgs_sample_rate', default=0.05, type=float)
     parser.add_argument('--snapshot', default='')
 
-    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
+    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/cancer_phenotype/Dataset")
     parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
     parser.add_argument('--checkpoint_folder', default='checkpoints', type=str, help='checkpoint folder')

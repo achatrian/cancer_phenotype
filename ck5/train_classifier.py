@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
-import datetime
-import os, sys
+import os
+import sys
 import random
 import argparse
 from pathlib import Path
@@ -23,7 +23,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from imageio import imwrite
-from inception import Inception
+from inception import Inception, DenseNet
 
 def on_cluster():
     import socket
@@ -38,23 +38,21 @@ def on_cluster():
     return bool(match1 or match2 or match3 or match4 or match5)
 
 if on_cluster():
-    sys.path.append("/gpfs0/users/win/achatrian/ProstateCancer")
+    sys.path.append("/gpfs0/users/win/achatrian/cancer_phenotype")
 else:
-    sys.path.append("/Users/andreachatrian/Documents/Repositories/ProstateCancer")
+    sys.path.append("/Users/andreachatrian/Documents/Repositories/cancer_phenotype")
 
-from ck5.ck5_dataset import CK5Dataset
-from ck5.ck5_utils import eval_classification
-from mymodel.utils import on_cluster, get_time_stamp, check_mkdir, str2bool, colorize, AverageMeter, get_flags
-from mymodel.clr import CyclicLR
+from ck5.ck5_dataset import CK5Dataset, CK5GlandDataset
+from ck5.ck5_utils import eval_classification, DiceLoss
+from segment.utils import on_cluster, get_time_stamp, check_mkdir, str2bool, colorize, AverageMeter, get_flags
+from segment.clr import CyclicLR
 
 cudnn.benchmark = True
 
-ckpt_path = ''
-writer = None
+warnings.filterwarnings("ignore")  # CAREFUL WITH THIS !!!!!!!
 
-def train(train_loader, net, criterion, optimizer, epoch, print_freq, scheduler=None):
-    global ckpt_path
-    ckpt_path = ckpt_path  # update with global value
+exp_name=''
+def train(train_loader, net, criterion, optimizer, epoch, writer, print_freq, scheduler=None):
 
     train_loss = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
@@ -95,16 +93,19 @@ def train(train_loader, net, criterion, optimizer, epoch, print_freq, scheduler=
         writer.add_scalar('train_dice', dice, curr_iter)
         if i % print_freq == 0:
             tqdm.write('epoch: {}, batch: {} - train - loss: {:.5f}, acc: {:.2f}, acc_cls: {}. dice: {:.2f}, dice_cls: {}'.format(
-            epoch, i,  train_loss.avg, acc, acc_cls, dice, dice_cls))
+            epoch, i, train_loss.avg, acc, acc_cls, dice, dice_cls))
 
-def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs_sample_rate=0.05, val_save_to_img_file=False):
-    global ckpt_path, writer
-    ckpt_path, writer = ckpt_path, writer  # update with global value
+        return {'loss': train_loss.avg, 'acc': acc, 'acc_cls': acc_cls, 'dice': dice, 'dice_cls': dice_cls}
+
+def validate(val_loader, net, criterion, optimizer, epoch, ckpt_path, writer, best_record,
+             val_imgs_sample_rate=0.05, val_save_to_img_file=False):
 
     net.eval() #!!
 
     val_loss = AverageMeter()
     inputs_smpl, targets_smpl, predictions_smpl = [], [], []
+    val_preds = []
+    val_labels = []
     with no_grad():  # don't track variable history for backprop (to avoid out of memory)
         # NB @pytorch variables and tensors will be merged in the future
         for vi, data in enumerate(val_loader):  # pass over whole validation dataset
@@ -112,8 +113,10 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
             N = inputs.size(0)
 
             inputs = Variable(inputs).cuda() if cuda.is_available() else Variable(inputs)
-            labels = Variable(labels).cuda() if cuda.is_available() else Variable(inputs)
+            labels = Variable(labels).cuda() if cuda.is_available() else Variable(labels)
             outputs = net(inputs)
+            val_labels.append(labels.cpu().numpy())
+            val_preds.append(np.argmax(outputs.data.cpu().numpy(), axis=1))
 
             # calculate loss
             if isinstance(outputs, tuple):
@@ -132,9 +135,10 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     targets_smpl = np.stack(targets_smpl, axis=0)
     predictions_smpl = np.stack(predictions_smpl, axis=0)
 
-    #Compute metrics
-    class_preds = np.argmax(outputs.data.cpu().numpy(), axis=1)  # when evaluating, output comes only from main clf
-    acc, acc_cls, dice, dice_cls = eval_classification(class_preds, labels.cpu().numpy())
+    # Compute metrics
+    val_preds = np.concatenate(val_preds, axis=0)
+    val_labels = np.concatenate(val_labels, axis=0)
+    acc, acc_cls, dice, dice_cls = eval_classification(val_preds, val_labels)
     print('epoch: {:d}, val loss: {:.5f}, acc: {:.5f}, acc_cls: {}, dice {:.5f}, dice_cls: {}'.format(
         epoch, val_loss.avg, acc, acc_cls, dice, dice_cls))
 
@@ -176,7 +180,8 @@ def validate(val_loader, net, criterion, optimizer, epoch, best_record, val_imgs
     writer.add_scalar('lr', optimizer.param_groups[1]['lr'], epoch)
 
     net.train() #reset network state to train (e.g. for batch norm)
-    return val_loss.avg
+    return {'loss': val_loss.avg, 'acc': acc, 'acc_cls': acc_cls, 'dice': dice, 'dice_cls': dice_cls}
+
 
 def main(FLAGS):
     global ckpt_path, writer
@@ -201,7 +206,12 @@ def main(FLAGS):
     parallel = not isinstance(FLAGS.gpu_ids, Integral) and len(FLAGS.gpu_ids) > 1 and cuda.is_available()
 
     # Model:
-    net = Inception(num_classes=3)
+    if FLAGS.network_id == "inception_v3":
+        net = Inception(num_classes=3)
+    elif FLAGS.network_id == "densenet169":
+        net = DenseNet(num_classes=3)
+    else:
+        raise ValueError("\"{}\" is not a correct model id".format(FLAGS.network_id))
     if cuda.is_available():
         net = net.cuda()
     print("Loaded inception model")
@@ -234,13 +244,15 @@ def main(FLAGS):
         val_loss = best_record['val_loss']
 
     #criterion = BCEWithLogitsLoss(size_average=reduce, reduce=reduce, weight=FLAGS.class_weights)
-    criterion = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
-    #criterion_val = BCEWithLogitsLoss(size_average=True, reduce=reduce, weight=FLAGS.class_weights)
-    criterion_val = CrossEntropyLoss(size_average=True, weight=FLAGS.class_weights)
-
+    criterion1 = CrossEntropyLoss(size_average=True, weight=torch.tensor([0.1, 1, 1]))
+    criterion2 = DiceLoss(weight=torch.tensor([0.1, 1, 1]))
     if cuda.is_available():
-        criterion = criterion.cuda()
-        criterion_val = criterion_val.cuda()
+        criterion1 = criterion1.cuda()
+        criterion2 = criterion2.cuda()
+    criterion = lambda preds, targets : criterion1(preds, targets) + criterion2(preds, targets)
+
+    #criterion_val = BCEWithLogitsLoss(size_average=True, reduce=reduce, weight=FLAGS.class_weights)
+    criterion_val = criterion
 
     optimizer = optim.Adam([
         {'params': [param for name, param in net.named_parameters() if name[-4:] == 'bias'],
@@ -261,9 +273,17 @@ def main(FLAGS):
         argsfile.write(str(FLAGS) + '\n\n')
 
     # Train
-    train_dataset = CK5Dataset(str(FLAGS.data_dir), "train", augment=True)
+    if FLAGS.full_glands:
+        train_dataset = CK5Dataset(str(FLAGS.data_dir), "train", augment=True)
+        val_dataset = CK5Dataset(str(FLAGS.data_dir), "val", augment=False)
+    else:
+        if FLAGS.augment_dir:
+            train_dataset = AugDataset(str(FLAGS.data_dir), "train", tile_size=FLAGS.image_size, augment=True)
+        else:
+            train_dataset = CK5GlandDataset(str(FLAGS.data_dir), "train", tile_size=FLAGS.image_size, augment=True)
+        val_dataset = CK5GlandDataset(str(FLAGS.data_dir), "val", tile_size=FLAGS.image_size, augment=False)
+
     train_loader = DataLoader(train_dataset, batch_size=FLAGS.batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)  # batch norm needs to drop last
-    val_dataset = CK5Dataset(str(FLAGS.data_dir), "val", augment=False)
     val_loader = DataLoader(val_dataset, batch_size=FLAGS.val_batch_size, drop_last=True, shuffle=True, num_workers=FLAGS.workers)
     #scheduler = ReduceLROnPlateau(optimizer, 'min', patience=FLAGS.learning_rate_patience, min_lr=1e-10)
     scheduler = CyclicLR(optimizer, base_lr=FLAGS.learning_rate/10, max_lr=FLAGS.learning_rate, step_size=180*40, mode='triangular2')
@@ -278,9 +298,9 @@ def main(FLAGS):
     print("Begin training ...")
 
     for epoch in range(curr_epoch, FLAGS.epochs):
-        train(train_loader, net, criterion, optimizer, epoch, FLAGS.print_freq, scheduler=scheduler)
-        if epoch % 10 == 1: #so it validates at first epoch too
-            val_loss = validate(val_loader, net, criterion_val, optimizer, epoch,
+        train(train_loader, net, criterion, optimizer, epoch, writer, FLAGS.print_freq, scheduler=scheduler)
+        if epoch % 3 == 1: #so it validates at first epoch too
+            val_loss = validate(val_loader, net, criterion_val, optimizer, epoch, ckpt_path, writer,
                         best_record, val_imgs_sample_rate=FLAGS.val_imgs_sample_rate, val_save_to_img_file=False)
         #scheduler.step(val_loss)
 
@@ -289,13 +309,14 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--image_size', type=int, default=512, help='the height / width of the input image to network')
+    parser.add_argument('--image_size', type=int, default=299)
     parser.add_argument('--downsample', type=float, default=2.0)
+    parser.add_argument('--full_glands', type=str2bool, default="y")
 
     parser.add_argument('--epochs', default=4000, type=int)
     parser.add_argument('--batch_size', default=8, type=int)
 
-    parser.add_argument('--network_id', type=str, default="inceptionv4")
+    parser.add_argument('--network_id', type=str, default="inception_v3")
     parser.add_argument('--num_class', type=int, default=3)
     parser.add_argument('-nf', '--num_filters', type=int, default=64, help='mcd number of filters for unet conv layers')
     parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
@@ -303,14 +324,13 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', default=5e-4, type=float)
     #parser.add_argument('--momentum', default=0.95, type=float) #for SGD not ADAM
     parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
-    parser.add_argument('--class_weights', default=None)
 
     parser.add_argument('--print_freq', default=10, type=int)
     parser.add_argument('--val_batch_size', default=40, type=int)
     parser.add_argument('--val_imgs_sample_rate', default=0.05, type=float)
     parser.add_argument('--snapshot', default='')
 
-    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
+    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/cancer_phenotype/Dataset")
     parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
     parser.add_argument('--checkpoint_folder', default='', type=str, help=None)
@@ -320,9 +340,9 @@ if __name__ == '__main__':
 
     timestamp = get_time_stamp()
     if on_cluster():
-        ckpt_path = "/well/win/users/achatrian/ProstateCancer/logs/" + timestamp + "/ckpt"
+        ckpt_path = "/well/win/users/achatrian/cancer_phenotype/logs/" + "ck5_" + timestamp + "/ckpt"
     else:
-        ckpt_path = "/Users/andreachatrian/Documents/Repositories/ProstateCancer/Logs"
+        ckpt_path = "/Users/andreachatrian/Documents/Repositories/cancer_phenotype/Logs"
     exp_name = ''
     writer = SummaryWriter(os.path.join(str(ckpt_path), exp_name if not FLAGS.snapshot else exp_name + "_" + FLAGS.snapshot))
     visualize = ToTensor()

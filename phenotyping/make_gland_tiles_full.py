@@ -13,7 +13,7 @@ from itertools import product
 import numpy as np
 import cv2
 
-sys.path.append("../mymodel")
+sys.path.append("../segment")
 def check_mkdir(dir_name):
     try:
         os.mkdir(str(dir_name))
@@ -24,7 +24,7 @@ class InstanceSaver(mp.Process):
     """
     Groups together
     """
-    def __init__(self, queue, id, dir, out_size, min_gland_area=6000, bb_margin=0.1):
+    def __init__(self, queue, id, dir, out_size, min_gland_area=6000, bb_margin=0.1, fix_image_size=False):
         mp.Process.__init__(self, name='InstanceSaver')
         self.daemon = True  # required
         self.id = id
@@ -33,6 +33,7 @@ class InstanceSaver(mp.Process):
         self.max_out_size = out_size
         self.min_gland_area = min_gland_area
         self.bb_margin = bb_margin
+        self.fix_image_size=fix_image_size
 
     def run(self):
         count = 0
@@ -46,9 +47,15 @@ class InstanceSaver(mp.Process):
             assert img.size
             assert gt.size
 
+            #Recolour to make gt visible
+            gt[gt == 1] = 120
+            gt[gt == 2] = 160
+            gt[gt == 3] = 200
+            gt[gt == 4] = 250
+
             # Resize as during training
-            img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
-            gt = cv2.resize(gt, (0, 0), fx=0.5, fy=0.5)
+            img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)  # to 512x512
+            gt = cv2.resize(gt, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST)
 
             gt2, contours, hierarchy = cv2.findContours(gt, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             for c_idx, contour in enumerate(contours):
@@ -61,8 +68,14 @@ class InstanceSaver(mp.Process):
                 # Slightly increase bounding Box
                 x = max(x - round(w * self.bb_margin), 0)
                 y = max(y - round(h * self.bb_margin), 0)
-                w += min(round(w * self.bb_margin) * 2, img.shape[1] - x) # overall increases by size * margin percentage
+                w += min(round(w * self.bb_margin) * 2,
+                         img.shape[1] - x)  # overall increases by size * margin percentage
                 h += min(round(h * self.bb_margin) * 2, img.shape[0] - y)
+                if self.fix_image_size:
+                    w = self.max_out_size
+                    h = self.max_out_size
+                    x = max(min(x, img.shape[1] - w), 0)
+                    y = max(min(y, img.shape[0] - h), 0)
 
                 if w > self.max_out_size:
                     # For glands bigger than the desired tile size
@@ -96,8 +109,8 @@ class InstanceSaver(mp.Process):
                     gland_gt = gt_temp[yt: yt + ht, xt: xt + wt]
                     assert gland_img.size  # must be non-empty
                     assert gland_gt.size # must be non-empty
-                    imageio.imwrite(self.dir / glandspath / "gland_img_{}_({},{}).png".format(c_idx, xt, yt), gland_img)
-                    imageio.imwrite(self.dir / glandspath / "gland_gt_{}_({},{}).png".format(c_idx, xt, yt), gland_gt)
+                    imageio.imwrite(self.dir / glandspath / "gland_img_{}{}_({},{}).png".format(idx, c_idx, xt, yt), gland_img)
+                    imageio.imwrite(self.dir / glandspath / "gland_gt_{}{}_({},{}).png".format(idx, c_idx, xt, yt), gland_gt)
 
                 count += 1
                 if count % 100 == 0:
@@ -105,18 +118,16 @@ class InstanceSaver(mp.Process):
 
             self.queue.task_done()
 
-
-
 def main(FLAGS):
 
     #Load large images containing whole glands
-    gt_files = glob.glob(os.path.join(FLAGS.data_dir, '**','*_mask.png'), recursive=True) # for 1,1 patch
+    gt_files = glob.glob(os.path.join(FLAGS.data_dir, '**','*_mask.png'), recursive=True)  # for 1,1 patch
     img_files = [re.sub('mask', 'img', gtfile) for gtfile in gt_files]
 
     queue = mp.JoinableQueue(maxsize=2*FLAGS.workers)  #what determines good size?
     for i in range(FLAGS.workers):
         InstanceSaver(queue, i, dir=FLAGS.data_dir, out_size=FLAGS.max_image_size,
-                      min_gland_area=FLAGS.min_gland_area).start()
+                      min_gland_area=FLAGS.min_gland_area, fix_image_size=FLAGS.fix_image_size).start()
 
     for idx, (img_file, gt_file) in enumerate(zip(img_files, gt_files)):
         img = imageio.imread(img_file)
@@ -138,10 +149,11 @@ def main(FLAGS):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset")
+    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/cancer_phenotype/Dataset")
     parser.add_argument('--workers', default=4, type=int, help='the number of workers to make gland data')
     parser.add_argument('--max_image_size', type=int, default=512)
     parser.add_argument('--min_gland_area', type=int, default=6000)
+    parser.add_argument('--fix_image_size', action="store_true")
     mp.set_start_method('spawn')
 
     FLAGS, unparsed = parser.parse_known_args()
