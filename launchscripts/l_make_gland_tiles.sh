@@ -9,11 +9,11 @@ echo "Username: "`whoami`
 echo "Started at: "`date`
 echo "************************************************************************************"
 
-DATA_DIR=/gpfs0/well/win/users/achatrian/ProstateCancer/Dataset
+DATA_DIR=/gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset
 
 module load cuda/8.0
 module load cudnn/6.0-8.0
-source /users/win/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
+source /users/rittscher/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
 cd ~/ProstateCancer/mymodel
-python /users/win/achatrian/ProstateCancer/phenotyping/make_gland_tiles.py -d $DATA_DIR
+python /users/rittscher/achatrian/ProstateCancer/phenotyping/make_gland_tiles.py -d $DATA_DIR
 echo "Done running script"

@@ -21,7 +21,7 @@ def main(FLAGS):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/win/users/achatrian/cancer_phenotype/Dataset")
+    parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/rittscher/users/achatrian/cancer_phenotype/Dataset")
 
     FLAGS, unparsed = parser.parse_known_args()
     if unparsed: warnings.warn("Unparsed arguments")

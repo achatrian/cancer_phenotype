@@ -11,7 +11,7 @@ echo "**************************************************************************
 
 module load cuda/9.0
 module load cudnn/7.0-9.0
-source /users/win/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
-cd /users/win/achatrian/ProstateCancer/ck5
+source /users/rittscher/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
+cd /users/rittscher/achatrian/ProstateCancer/ck5
 echo "Start"
 python3 train_classifier.py --gpu_ids 0 1 --batch_size 140

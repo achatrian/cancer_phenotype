@@ -19,5 +19,5 @@ echo "Saving at: " $SAVE_DIR
 
 source ~/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
 cd ~/ProstateCancer/phenotyping
-python /users/win/achatrian/ProstateCancer/phenotyping/cluster_feats.py -f $FEATS -lf $LABELS -sd $SAVE_DIR
+python /users/rittscher/achatrian/ProstateCancer/phenotyping/cluster_feats.py -f $FEATS -lf $LABELS -sd $SAVE_DIR
 echo "Done running script"
