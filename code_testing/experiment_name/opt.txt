@@ -1,0 +1,54 @@
+----------------- Options ---------------
+             aspect_ratio: 1.0                           
+                  augment: 0                             
+              augment_dir:                               
+            augment_level: 0                             
+               batch_size: 16                            
+          check_tile_blur: False                         
+          check_tile_fold: False                         
+          checkpoints_dir:                               
+                crop_size: 1024                          
+                 data_dir: /gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset
+              data_fields: case_submitter_id,sample_id,case_id,sample_submitter_id,is_ffpe,sample_type,state,oct_embedded
+             dataset_name: tcga                          
+            deployer_name: segment                       
+               deployment: y                             
+                    depth: 6                             
+          display_winsize: 256                           
+                    dummy: dummy                         
+                     eval: False                         
+          experiment_name: experiment_name               
+          field_datatypes: text,text,text,text,text,text,text,text
+         filter_multiples:                               
+                fine_size: 512                           
+           fork_processes: False                         
+                  gpu_ids: -1                            
+                      ids: c,a,s                         
+                init_gain: 0.02                          
+                init_type: normal                        
+           input_channels: 3                             
+                 is_train: False                         	[default: None]
+            learning_rate: 0.0001                        
+   learning_rate_patience: 50                            
+               load_epoch: latest                        
+                load_iter: 0                             
+                load_size: 512                           
+              loss_weight: None                          
+                 losstype: ce                            
+             max_multiple: 32                            
+             metadata_dir: /well/rittscher/projects/TCGA_prostate/TCGA/data/datacopy
+                    model: UNet                          
+          ndeploy_workers: 1                             
+                num_class: 2                             
+              num_filters: 15                            
+                    phase: train                         
+               print_freq: 100                           
+              results_dir: /well/rittscher/users/achatrian/Results/applied
+          sample_id_pivot: case_submitter_id             
+      set_visible_devices: True                          	[default: y]
+                     task: segment                       
+                  verbose: False                         
+             weight_decay: 0.0005                        
+                  workers: 4                             
+           wsi_read_level: 2                             
+----------------- End -------------------

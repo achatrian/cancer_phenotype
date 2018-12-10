@@ -286,10 +286,6 @@ def colorize(gt):
 
 
 #### pix2pix/cyclegan utils ####
-
-
-
-
 # Converts a Tensor into an image array (numpy)
 # |imtype|: the desired type of the converted numpy array
 def tensor2im(input_image, segmap=False, imtype=np.uint8):

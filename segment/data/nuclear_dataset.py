@@ -110,4 +110,4 @@ class NuclearDataset(BaseDataset):
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
         gt = torch.from_numpy(gt.copy()).long()  # change to FloatTensor for BCE
-        return {'input': image, 'target': gt}
+        return {'input': image, 'target': gt, 'input_path': img_name, 'target_path': gt_name}

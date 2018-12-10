@@ -56,44 +56,6 @@ equilibrium = 0.5
 margin = 0.3
 
 
-# def get_gaussian_blur(step, alpha=0.1):
-#     # Set these to whatever you want for your gaussian filter
-#     kernel_size = 15
-#
-#     sigma = 2.0 * math.exp(- alpha*step)
-#
-#     # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
-#     x_cord = torch.arange(kernel_size)
-#     x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
-#     y_grid = x_grid.t()
-#     xy_grid = torch.stack([x_grid, y_grid], dim=-1).float()
-#
-#     mean = (kernel_size - 1) / 2.
-#     variance = sigma ** 2.
-#
-#     # Calculate the 2-dimensional gaussian kernel which is
-#     # the product of two gaussian distributions for two different
-#     # variables (in this case called x and y)
-#     gaussian_kernel = (1. / (2. * math.pi * variance)) * \
-#                       torch.exp(
-#                           -torch.sum((xy_grid - mean) ** 2., dim=-1) / \
-#                           (2 * variance)
-#                       )
-#     # Make sure sum of values in gaussian kernel equals 1.
-#     gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
-#
-#     # Reshape to 2d depthwise convolutional weight
-#     gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
-#     gaussian_kernel = gaussian_kernel.repeat(3, 3, 1, 1)
-#
-#     gaussian_filter = torch.nn.Conv2d(in_channels=3, out_channels=3,
-#                                 kernel_size=kernel_size, bias=False, padding=1)
-#
-#     gaussian_filter.weight.data = gaussian_kernel
-#     gaussian_filter.weight.requires_grad = False
-#     return gaussian_filter
-
-
 def train(train_loader, vae, discr, nz, l1, opt_enc, opt_dec, opt_dis, opt_vae, schedulers, gamma=1.0, epoch=1, load_weightmap=False, print_freq=10):
     train_loss_enc = AverageMeter()
     train_loss_dec = AverageMeter()
@@ -113,17 +75,6 @@ def train(train_loader, vae, discr, nz, l1, opt_enc, opt_dec, opt_dis, opt_vae, 
         gts = torch.clamp(gts, 1)
         gts_weight = gts * 4 + 1.0  # turn to 0-1 first, then scale and use as weightmap
         N, y, x = inputs.size(0), inputs.size(2), inputs.size(3)
-
-        # if False:
-        #     # disabled
-        #     inputs = gaussian_filter(inputs)
-        #     inputs = (inputs - inputs.mean()) / inputs.std()
-        #     inputs /= max(inputs.max(), abs(inputs.min())) # normalize so that images are still in range [-1, 1]
-        #     left = max(0, (x - inputs.size(3)) // 2)
-        #     right = max(0, x - inputs.size(3) - left)
-        #     bottom = max(0, (y - inputs.size(2)) // 2)
-        #     top = max(0, y - inputs.size(2) - bottom)
-        #     inputs = torch.nn.functional.pad(inputs, (left, right, top, bottom), mode='reflect')
 
         inputs = Variable(inputs)
         if torch.cuda.is_available():

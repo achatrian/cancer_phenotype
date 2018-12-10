@@ -14,6 +14,7 @@ def weights_init(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
+
 class _Sampler(nn.Module):
     def __init__(self):
         super(_Sampler, self).__init__()
@@ -30,6 +31,7 @@ class _Sampler(nn.Module):
             eps = torch.FloatTensor(std.size()).normal_()  #random normalized noise
         eps = Variable(eps)
         return eps.mul(std).add_(mu)
+
 
 class _Encoder(nn.Module):
     def __init__(self, image_size, num_filt_gen, num_lat_dim, num_channels=3):

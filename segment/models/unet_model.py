@@ -2,7 +2,8 @@ import warnings
 import numpy as np
 import torch
 from base.models.base_model import BaseModel
-from .networks import UNet, dice_coeff
+import base.models.networks as base_networks
+from .networks import UNet
 
 
 class UNetModel(BaseModel):
@@ -32,6 +33,7 @@ class UNetModel(BaseModel):
         self.input = None
         self.target = None
         self.output = None
+        self.image_paths = None
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -90,7 +92,7 @@ class UNetModel(BaseModel):
             pred = output[:, c, ...].flatten()
             gt = target[:, c, ...].flatten() if target.shape[1] == output.shape[1] else (target == c).astype(np.float).flatten()
             class_acc.append(round(float(np.mean(np.array(pred.round() == gt))), 2))
-            class_dice.append(round(float(dice_coeff(pred, gt)), 2))
+            class_dice.append(round(float(base_networks.dice_coeff(pred, gt)), 2))
         acc = float(np.mean(class_acc))
         dice = float(np.mean(class_dice))
         self.metric_acc = acc

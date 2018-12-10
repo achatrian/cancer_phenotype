@@ -1,4 +1,4 @@
-import time
+from pathlib import Path
 from itertools import accumulate
 from .base_dataset import BaseDataset
 from utils import utils
@@ -18,25 +18,27 @@ class WSIDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
+        parser.add_argument('--wsi_read_level', type=int, default=2, help="Resolution at which slides are read")
+        parser.add_argument('--check_tile_blur', action='store_true', help="Reject tiles that result blurred according to my criterion")
+        parser.add_argument('--check_tile_fold', action='store_true', help="Reject tiles that contain a fold according to my criterion")
         return parser
 
     def name(self):
         return "WSIDataset"
 
-    def setup(self, files):
+    def setup(self):
         # Lazy set up as it can be slow
         # Determine tile locations in all the images
-        time_meter = utils.AverageMeter()
-        for file in files:
+        root_path = Path(self.opt.dataroot)
+        paths = root_path.glob('**/*.svs')
+        self.files = sorted(str(path) for path in paths)
+        for file in self.files:
             if not utils.is_pathname_valid(file):
                 raise FileNotFoundError("Invalid path: {}".format(file))
-            scan_start_time = time.time()
             slide = WSIReader(self.opt, file).find_good_locations()
-            time_meter.update(time.time() - scan_start_time, 1)
             self.tiles_per_slide.append(len(slide))
             self.slides.append(slide)
         self.tile_idx_per_slide = list(accumulate(self.tiles_per_slide))  # to index tiles quickly
-        return time_meter.avg
 
     def __len__(self):
         return sum(self.tiles_per_slide)

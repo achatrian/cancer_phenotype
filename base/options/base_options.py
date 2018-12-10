@@ -16,6 +16,7 @@ class BaseOptions:
 
         parser.add_argument('--task', type=str, default='segment', help="Defines structure of problem - to load config of other files")
         parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset")
+        parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
         parser.add_argument('--dataset_name', type=str, default="glandseg")
         parser.add_argument('--crop_size', type=int, default=1024, help='crop images to this size')
         parser.add_argument('--fine_size', type=int, default=512, help='then scale to this size')
@@ -34,8 +35,8 @@ class BaseOptions:
         parser.add_argument('--loss_weight', default=None)
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization [normal|xavier|kaiming|orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
-        #parser.add_argument('--gpu_ids', default=0, nargs='+', type=int, help='gpu ids')
         parser.add_argument('--gpu_ids', default='0', type=str, help='gpu ids (comma separated numbers - e.g. 1,2,3')
+        parser.add_argument('--set_visible_devices', type=utils.str2bool, default='y', help="whether to choose visible devices inside script")
         parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
         parser.add_argument('--experiment_name', default="experiment_name", type=str)
         parser.add_argument('--checkpoints_dir', default='', type=str, help='checkpoint folder')
@@ -44,6 +45,7 @@ class BaseOptions:
         parser.add_argument('-ad', '--augment_dir', type=str, default='')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--fork_processes', action='store_true', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
+        parser.add_argument('--augment_level', type=int, default=0, help='level of augmentation applied to input when training (my_opt)')
         #parser.add_argument('--generated_only', action="store_true") # replace by making dataset
 
         self.parser = parser
@@ -56,7 +58,7 @@ class BaseOptions:
 
         # load task module and task-specific options
         task_name = opt.task
-        task_options = importlib.import_module("{}.options.task_options".format(task_name))  # must be defined in each task folder
+        task_options = importlib.import_module("{0}.options.{0}_options".format(task_name))  # must be defined in each task folder
         self.parser = argparse.ArgumentParser(parents=[self.parser, task_options.TaskOptions().parser])
         opt, _ = self.parser.parse_known_args()
 
@@ -117,7 +119,7 @@ class BaseOptions:
             id = int(str_id)
             if id >= 0:
                 opt.gpu_ids.append(id)
-        if len(opt.gpu_ids) > 0:
+        if len(opt.gpu_ids) > 0 and opt.set_visible_devices:
             torch.cuda.set_device(opt.gpu_ids[0])
 
         # set multiprocessing

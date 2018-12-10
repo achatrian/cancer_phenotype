@@ -1,6 +1,7 @@
-from pathlib import Path
+from itertools import cycle
+import copy
+from contextlib import contextmanager
 import torch.multiprocessing as mp
-from base.data import create_dataset, create_dataloader
 
 # Which philosophy should one embrace ? Build initial good document describing dataset, or deal with multiple documents in code?
 # When is it convenient to do both?
@@ -12,8 +13,6 @@ class BaseDeployer:
     def __init__(self, opt):
         super(BaseDeployer, self).__init__()
         self.opt = opt
-        self.data_fields = (self.opt.sample_id_name,)
-        self.fields_datatype = ('text',)
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -30,51 +29,43 @@ class BaseDeployer:
     def name(self):
         return "BaseDeployer"
 
-    def setup(self):
+    @contextmanager
+    def start_data_loading(self):
+        # __enter__
+        queue = mp.JoinableQueue(2 * self.opt.ndeploy_workers)
+        yield queue
+        # __exit__
+        for i in range(len(self.opt.ndeploy_workers)):
+            queue.put(None)  # workers terminate as they read the None
+        queue.join()
 
-        # assign a split to each child process
-        n_slides_per_child = len(self.sample_id_names) // self.opt.ndeploy_workers
-        n_child0 = n_slides_per_child + len(self.sample_id_names) % self.opt.ndeploy_workers
-        splits_bounds = (0, n_child0) + tuple(n_child0 + n_slides_per_child * i for i in range(self.opt.ndeploy_workers))
-        splits_bounds = tuple((splits_bounds[i], splits_bounds[i+1]) for i in range(self.opt.ndeploy_workers))
-        self.splits = tuple(
-            {name: getattr(self, name)[slice(*b)] for name in [self.opt.sample_id_name] + meta_field_names}
-            for b in splits_bounds)
-
-    def make_workers(self, model):
+    def get_workers(self, model, queue):
         """
         Give different splits of the data to different workers
         :return:
         """
+        # set GPU allocation
+        self.worker_gpu_ids = []
+        for gpu_id, worker_id in zip(cycle(self.opt.gpu_ids), range(self.opt.ndeploy_workers)):
+            # cycle over gpu assignment - each worker has 1 gpu only
+            self.worker_gpu_ids.append([gpu_id])
+
         workers = []
-        for i in self.opt.ndeploy_workers:
-            dataset = self.create_dataset(i)
-            dataloader = create_dataloader(dataset)
-            worker = mp.Process(target=self.run_deployment_worker,
-                       args=(dataset, model, self.opt))
+        for i in range(self.opt.ndeploy_workers):
+            opt = copy.copy(self.opt)
+            opt.gpu_ids = self.worker_gpu_ids[i]
+            args = (i, opt, model, queue)
+            worker = mp.Process(target=self.run_worker,
+                                args=args)
             workers.append(worker)
         return workers
 
-    def create_dataset(self, split, validation_phase=False):
-        if self.opt.is_train and split > 1:
-            raise ValueError("During training, only split = 0 for training and = 1 for validation is supported")
-        dataset = create_dataset(self.opt, validation_phase)
-        try:
-            dataset.assign_data(files=self.splits[split][self.opt.sample_id_name],
-                                metadata=self.splits[split])
-        except AttributeError as exc:
-            raise ValueError("Dataset {} cannot be used for deployment to database".format(dataset.name())) from exc
-        return dataset
-
     @staticmethod
-    def run_deployment_worker(dataloader, model, opt, queue=None):
+    def run_worker(process_id, opt, model, queue):
         """
         ABSTRACT METHOD: implemented in subclasses to run multiprocessing on workers that use/update the model
-        :param dataloader:
-        :param model:
-        :param opt:
-        :param queue:
-        :return:
+        Rules:
+        workers must terminate if they get a None from the queue
         """
         pass
 

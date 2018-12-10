@@ -21,12 +21,16 @@ class BaseDataset(data.Dataset):
     def __len__(self):
         return 0
 
+    def make_subset(self, indices):
+        return data.Subset(self, indices)
+
 
 # Transforms
 
 def get_augment_seq(augment_level):
 
-    assert 0 < augment_level < 5
+    if not 0 < augment_level < 5:
+        raise ValueError("Level of augmentation must be between 1 and 5 (input was {})".format(augment_level))
 
     def sometimes(aug):
         return iaa.Sometimes(0.5, aug)

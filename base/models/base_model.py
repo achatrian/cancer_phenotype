@@ -52,12 +52,17 @@ class BaseModel:
         return parser
 
     def set_input(self, data):
-        self.input = data['input']
-        self.target = data['target']
+        self.input = data['input']  # 1
+        self.target = data['target']  # 2
+        self.image_paths = []
+        self.image_paths.append(data['input_path'])  # and 3 must be returned by dataset
+        try:
+            self.image_paths.append(data['target_path'])  # 4 is optional, only for when available
+        except KeyError:
+            pass  # when applying network, there is no target
         if self.opt.gpu_ids and (self.input.device.type == 'cpu' or self.target.device.type == 'cpu'):
-            self.input = self.input.cuda()
-            self.target = self.target.cuda()
-
+            self.input = self.input.cuda(device=self.device)
+            self.target = self.target.cuda(device=self.device)
 
     def forward(self):
         pass
@@ -75,11 +80,10 @@ class BaseModel:
         """
         if self.gpu_ids:
             self.net = networks.init_net(self.net, self.opt.init_type, self.opt.init_gain,
-                                self.opt.gpu_ids)  # takes care of pushing net to cuda
+                                         self.opt.gpu_ids)  # takes care of pushing net to cuda
             assert torch.cuda.is_available()
             for loss_name in self.loss_names:
-                loss = getattr(self, loss_name).cuda()
-                loss = loss.to(self.device)
+                loss = getattr(self, loss_name).cuda(device=self.device)
                 setattr(self, loss_name, loss)
         if self.is_train:
             self.schedulers = [networks.get_scheduler(optimizer, self.opt) for optimizer in self.optimizers]
@@ -184,6 +188,10 @@ class BaseModel:
                 visual_ret[name + "_" + kind] = getattr(self, name)
         return visual_ret
 
+    # get image paths
+    def get_image_paths(self):
+        return self.image_paths
+
     # save models to the disk
     def save_networks(self, epoch):
         for name in self.module_names:
@@ -223,7 +231,8 @@ class BaseModel:
                 print('loading the model from %s' % load_path)
                 # if you are using PyTorch newer than 0.4 (e.g., built from
                 # GitHub source), you can remove str() on self.device
-                state_dict = torch.load(load_path, map_location=str(self.device))
+                state_dict = torch.load(load_path, map_location=torch.device('cpu'))
+                #state_dict = OrderedDict((key, value.cuda(device=self.device)) for key,value in state_dict.items())
                 if hasattr(state_dict, '_metadata'):
                     del state_dict._metadata
 
@@ -261,7 +270,6 @@ class BaseModel:
 
     # shares modules memory, so that models can be used in multiprocessing
     def share_memory(self):
-        # TODO is this necessary for cuda weights?
         for module_name in self.module_names:
             net = getattr(self, 'net' + module_name)
             if net is not None:

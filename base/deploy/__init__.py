@@ -32,22 +32,3 @@ def create_deployer(opt):
     instance = deployer(opt)
     print('dataset [{}] was created'.format(instance.name()))
     return instance
-
-
-
-def is_HnE(image, threshold=0.5):
-    image_hist_R = np.histogram(image[..., 0])
-    image_hist_G = np.histogram(image[..., 1])
-    image_hist_B = np.histogram(image[..., 2])
-    if image_hist_R[-1]/255 < threshold:
-        return False
-    else:
-        return True
-
-
-def is_blurred(image):
-    return False
-
-
-def is_folded(image):
-    return False
