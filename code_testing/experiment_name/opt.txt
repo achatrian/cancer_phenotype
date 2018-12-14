@@ -4,13 +4,12 @@
               augment_dir:                               
             augment_level: 0                             
                batch_size: 16                            
-          check_tile_blur: False                         
-          check_tile_fold: False                         
           checkpoints_dir:                               
+            cna_tablefile: /home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt	[default: ]
                 crop_size: 1024                          
                  data_dir: /gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset
               data_fields: case_submitter_id,sample_id,case_id,sample_submitter_id,is_ffpe,sample_type,state,oct_embedded
-             dataset_name: tcga                          
+             dataset_name: table                         	[default: tcga]
             deployer_name: segment                       
                deployment: y                             
                     depth: 6                             
@@ -50,5 +49,5 @@
                   verbose: False                         
              weight_decay: 0.0005                        
                   workers: 4                             
-           wsi_read_level: 2                             
+            wsi_tablefile: /home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/biospecimen.project-TCGA-PRAD.2018-10-05/sample.tsv	[default: ]
 ----------------- End -------------------

@@ -11,22 +11,27 @@ class TableDataset(BaseDataset):
         self.table = TableReader(self.opt)
 
         # Assign wsi data
-        self.table.read_singleentry_data([self.opt.wsi_tablefile], name='wsi_metadata')
+        wsi_replacements = {
+            'FALSE': False,
+            'TRUE': True,
+            'released': True
+        }
+        self.table.read_singleentry_data(self.opt.wsi_tablefile, name='wsi_metadata', replace_dict=wsi_replacements)
         wsi_metadata = self.table.pivot_data(name='wsi_metadata', pivot_id=self.opt.sample_id_pivot)
-        wsi_metadata.query("is_ffpe == 'released'", inplace=True)  # remove all slides that are not FFPE
+        wsi_metadata.query("is_ffpe == True", inplace=True)  # remove all slides that are not FFPE
         setattr(self.table, 'wsi_metadata', wsi_metadata)  # overwrite after trimming out non-ffpe
         # Assign CNA data
-        self.table.read_matrix_data([self.opt.cna_tablefile], yfield='Hugo_Symbol', xfield=0, name='cna_data')
+        self.table.read_matrix_data(self.opt.cna_tablefile, yfield='Hugo_Symbol', xfield=(0, 2), name='cna_data')
         self.table.pivot_data(name='cna_data')
-        self.table.get_merge_tables('wsi_metadata', merge_se_id=self.opt.sample_id_pivot)
+        self.table.get_merge_tables('wsi_metadata', 'cna_data', merge_se_id=self.opt.sample_id_pivot)
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
         """
         Adds arguments that determine organization of the table
         """
-        parser.add_argument('--wsi_tablefile', type=str, defaut='', help='file with wsi metadata')
-        parser.add_argument('--cna_tablefile', type=str, defaut='', help='file with cna data')
+        parser.add_argument('--wsi_tablefile', type=str, default='', help='file with wsi metadata')
+        parser.add_argument('--cna_tablefile', type=str, default='', help='file with cna data')
         data_fields = ('case_submitter_id', 'sample_id', 'case_id', 'sample_submitter_id', 'is_ffpe', 'sample_type',
         'state', 'oct_embedded')
         fields_datatype = tuple('text' for field_name in data_fields)

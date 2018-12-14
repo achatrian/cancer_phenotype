@@ -15,6 +15,8 @@ def wsi_file():
     '''Returns an example WSI file path'''
     if utils.on_cluster():
         return '/well/rittscher/projects/TCGA_prostate/TCGA/ff46403a-5498-4ffa-bf85-73afb558eb95/TCGA-J4-A67R-01Z-00-DX1.833DA729-D98E-44F8-A437-1B5BF52071BD.svs'
+    elif sys.platform == 'linux':
+        return '/home/sedm5660/Documents/Temp/Data/cancer_phenotype/17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi'
     else:
         return '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi'
 
@@ -23,11 +25,16 @@ def wsi_file():
 def tcga_data():
     if utils.on_cluster():
         return None  # TODO look path up
+    elif sys.platform == 'linux':
+        sample_path = '/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_clinical_sample.txt'
+        cna_path = '/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt'
     else:
-        return {
-            'sample': '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_clinical_sample.txt',
-            'cna': '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt'
-        }
+        sample_path = '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_clinical_sample.txt'
+        cna_path = '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt'
+    return {
+        'sample': sample_path,
+        'cna': cna_path
+    }
 
 
 

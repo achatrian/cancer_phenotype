@@ -68,7 +68,7 @@ class BaseOptions:
         parser = model_option_setter(self.parser, self.is_train)
         opt, _ = parser.parse_known_args()  # parse again with the new defaults
 
-        # modify dataset-related parser options fsldkn
+        # modify dataset-related parser options
         dataset_name = opt.dataset_name
         dataset_option_setter = data.get_option_setter(dataset_name, task_name)
         parser = dataset_option_setter(parser, self.is_train)

@@ -1,3 +1,4 @@
+import os
 import re
 import csv
 import math
@@ -23,9 +24,9 @@ class TableReader:
         self.table_types = dict()
         self.pivoted = dict()
 
-    def read_singleentry_data(self, filenames, nsniff=30, name='data'):
+    def read_singleentry_data(self, filenames, name='data', replace_dict=None):
         """
-        Rows are datapoints
+        Rows are data-points, entries are separated by tabs (.tsv)
         For reading many fields - single entry per field - table
         NB: fields might have duplicates across different datapoints (rows)
         """
@@ -35,8 +36,7 @@ class TableReader:
         datamat = []
         for filename in filenames:
             with open(filename, 'r') as metadata_file:
-                dialect = csv.Sniffer().sniff(metadata_file.read(nsniff))  # detects delimiter and others - TODO: this is fiddly, change with delimeter specification ?
-                reader = csv.DictReader(metadata_file, dialect=dialect)  # , delimiter='\t')  first row must contain text describing the fields
+                reader = csv.DictReader(metadata_file, delimiter='\t')  # , delimiter='\t')  first row must contain text describing the fields
                 for row in reader:
                     datamat.append([])
                     for field_name in self.field_names:
@@ -44,7 +44,9 @@ class TableReader:
                         try:
                             value = row[field_name]
                             value = re.sub(r'\W+', '', value)  # strip punctuation
-                            if field_type == 'text':
+                            if replace_dict and value in replace_dict.keys():
+                                value = replace_dict[value]
+                            elif field_type == 'text':
                                 value = value
                             elif field_type == 'number':
                                 value = value if value.isdigit() else math.nan  # using nan to denote missing fields https://jakevdp.github.io/PythonDataScienceHandbook/03.04-missing-values.html
@@ -53,58 +55,62 @@ class TableReader:
                         except KeyError:
                             value = '' if field_type == 'text' else math.nan
                         datamat[-1].append(value)  # compose final row
-        datamat = np.array(datamat)
+        datamat = np.array(datamat, dtype=object)  # allows storage of bools strings and numbers in one array
         data = pd.DataFrame(data=datamat, columns=self.field_names)
         setattr(self, name, data)
         self.table_names.append(name)
         self.table_types[name] = 'single_entry'
 
-    def read_matrix_data(self, filenames, yfield, xfield, name='datamat', nsniff=30):
+    def read_matrix_data(self, filenames, yfield, xfield, data_type=int, name='datamat'):
         """
         Reading data in matrix format, i.e. there is one entry per x field per y field |x|*|y|
+        xfield or yfield can be tuples of integers - in which case they are considered as location for the field id values -
+        or strings  - in which case they are used to detect the starting row / column by the field name
+        Data is assumed to start from (y + 1, x + 1). where y <- max(y_xfield, y_yfield), x <- max(x_xfield, x_yfield)
         """
         if type(filenames) is not list:
             filenames = [filenames]
+        datamat = []
         for filename in filenames:
             with open(filename, 'r') as metadata_file:
-                dialect = csv.Sniffer().sniff(metadata_file.read(nsniff))  # detects delimiter and others - TODO: this is fiddly, change with delimeter specification ? could use csv.excel_tab
-                reader = csv.reader(metadata_file, dialect=dialect)  # , delimiter='\t')  first row must contain text describing the fields
-                reader_iter = iter(reader)
-                ycoord_xfield, xcoord_yfield, i = math.nan, math.nan, 0
-                while math.isnan(ycoord_xfield) or math.isnan(xcoord_yfield):
-                    if i > 4:
-                        raise ValueError('Unable to find table entry ids within first 4 rows')
+                reader = csv.reader(metadata_file, delimiter='\t')  # , delimiter='\t')  first row must contain text describing the fields
+                coords_xfield, coords_yfield, i = None, None, 0
+                while not coords_xfield or not coords_yfield:
+                    if i > 10:
+                        raise ValueError('Unable to find table entry ids within first 10 rows')
                     # find row and column where data ids are
-                    row = next(reader_iter)
-                    if isinstance(yfield, str):
-                        xcoord_yfield = next(i for i, field in enumerate(first_row) if field == yfield)
-                    elif isinstance(yfield, Integral):
-                        xcoord_yfield = yfield
-                    else:
-                        raise ValueError(f"Invalid yfield object type: {type(yfield)}")
-                    if isinstance(xfield, str):
-                        ycoord_xfield = next(i for i, field in enumerate(first_row) if field == xfield)
-                    elif isinstance(yfield, Integral):
-                        ycoord_xfield = xfield
-                    else:
-                        raise ValueError(f"Invalid xfield object type: {type(xfield)}")
+                    row = next(reader)
+                    try:
+                        if isinstance(yfield, str):
+                            coords_yfield = (i + 1, next(j for j, field in enumerate(row) if field == yfield))
+                        elif isinstance(yfield, tuple):
+                            coords_yfield = yfield  # tuple given for unlabelled ids
+                        else:
+                            raise ValueError(f"Invalid yfield object type: {type(yfield)}")
+                        if isinstance(xfield, str):
+                            coords_xfield = (i + 1, next(j for j, field in enumerate(row) if field == xfield))
+                        elif isinstance(xfield, tuple):
+                            coords_xfield = xfield  # tuple given for unlabelled ids
+                        else:
+                            raise ValueError(f"Invalid xfield object type: {type(xfield)}")
+                    except StopIteration:
+                        pass
                     i += 1
-
                 # once structure of matrix is understood, read data in
-                reader_iter = iter(reader)
-                first_row = next(reader_iter)
-                yfield_entries = []
-                datamat = []
-                for j, row in enumerate(reader_iter):
-                    if row[xcoord_yfield]:
-                        # append indices
-                        yfield_entries.append(row[xcoord_yfield])
-                    if j < ycoord_xfield:
-                        continue
-                    if j == xcoord_yfield:
-                        xfield_entries = row
-                    datamat.append(row)
-            datamat = pd.DataFrame(data=datamat, index=yfield_entries, columns=xfield_entries)
+                ids_yfield = []
+                metadata_file.seek(0, os.SEEK_SET)  # move file pointer back to the beginning of the file (SEEK_SET + 0)
+                for i, row in enumerate(reader):
+                    if i == coords_xfield[0]:
+                        start = coords_xfield[1]
+                        ids_xfield = row[start:]  # store ids for x field
+                    if i >= coords_yfield[0]:
+                        ids_yfield.append(row[coords_yfield[1]])  # store ids for y field
+                    # coords are for ids, data is assumed to start from next entry
+                    y_start = max(coords_xfield[0], coords_yfield[0])
+                    if i >= y_start:
+                        x_start = max(coords_xfield[1], coords_yfield[1])
+                        datamat.append([data_type(entry) for entry in row[x_start:]])
+            datamat = pd.DataFrame(data=np.array(datamat), index=ids_yfield, columns=ids_xfield)
             setattr(self, name, datamat)
             self.table_names.append(name)
             self.table_types[name] = 'matrix'
@@ -118,34 +124,30 @@ class TableReader:
                 pivot_values = data[pivot_id]
             except KeyError as err:
                 raise ValueError(f"'{pivot_id}' is not a recorded data field") from err
-            fields_minus_pivot = data.columns.values
+            fields_minus_pivot = list(data.columns.values)
             pivot_loc = fields_minus_pivot.index(pivot_id)
             fields_minus_pivot.remove(pivot_id)
             datamat = data.values[:, list(range(pivot_loc)) + list(range(pivot_loc+1, data.values.shape[1]))]
             pivoted_data = pd.DataFrame(index=pivot_values, data=datamat, columns=fields_minus_pivot)
-        elif self.table_types[name] == 'single_entry':
+        elif self.table_types[name] == 'matrix':
             pivoted_data = data  # no need to pivot for matrix table
         else:
-            raise ValueError(f"Invalid table type {self.table_types[name]}")
+            raise ValueError(f"Invalid table type '{self.table_types[name]}'")
         setattr(self, name, pivoted_data)
         self.pivoted[name] = True
         return pivoted_data
 
-    # def __getitem__(self, item):
-    #     return self.data[item]
-
-    def get_merge_tables(self, name0, name1, merge_se_id=None, merge_mat_dir='y'):
-        assert merge_mat_dir == 'x' or merge_mat_dir == 'y'
+    def get_merge_tables(self, name0, name1, merge_se_id=None, merge_mat_dir=('y', 'y')):
+        assert all(mdir == 'x' or mdir == 'y' for mdir in merge_mat_dir)
         if not self.pivoted[name0] and self.table_types[name0] == 'single_entry':
             self.pivot_data(name0, merge_se_id)
         if not self.pivoted[name1] and self.table_types[name1] == 'single_entry':
             self.pivot_data(name0, merge_se_id)
         table0 = getattr(self, name0)
         table1 = getattr(self, name1)
-        if merge_mat_dir == 'x':
-            if self.table_types[name0] == 'matrix':
+        if merge_mat_dir[0] == 'x' and self.table_types[name0] == 'matrix':
                 table0 = table0.transposed()
-            if self.table_types[name1] == 'matrix':
+        if merge_mat_dir[1] == 'x' and self.table_types[name1] == 'matrix':
                 table1 = table1.transposed()
 
         def merge_se_tables(se, se0):

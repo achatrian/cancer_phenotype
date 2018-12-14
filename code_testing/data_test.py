@@ -42,11 +42,15 @@ def test_wsi_reader(apply_options, wsi_file):
 
 
 def test_table_dataset(apply_options, tcga_data):
+    import sys
     options = apply_options
-    options.parser.set_default(dataset_name='table')
+    sys.argv.extend(['--dataset_name=table',
+                     '--wsi_tablefile=/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/biospecimen.project-TCGA-PRAD.2018-10-05/sample.tsv',
+                     '--cna_tablefile=/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt'
+                     ])
     opt = options.parse()
     table_dataset = data.create_dataset(opt)
-    8
+
 
 
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData">
+    <serverData>
+      <paths name="achatrian@localhost:6700">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/well/rittscher/users/achatrian/cancer_phenotype" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+  </component>
+</project>
