@@ -9,7 +9,7 @@
           checkpoints_dir:                               
             cna_tablefile:                               
                 crop_size: 1024                          
-                 data_dir: /gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset
+                 data_dir: /home/sedm5660/Documents/Temp/Data/cancer_phenotype	[default: /gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset]
               data_fields: case_submitter_id,sample_id,case_id,sample_submitter_id,is_ffpe,sample_type,state,oct_embedded
              dataset_name: tcga                          
             deployer_name: segment                       

@@ -31,6 +31,7 @@ def test_is_HnE(wsi_file):
 
 def test_wsi_reader(apply_options, wsi_file):
     assert utils.is_pathname_valid(wsi_file)
+    sys.argv.extend(['--data_dir=/home/sedm5660/Documents/Temp/Data/cancer_phenotype']),
     opt = apply_options.parse()
     slide = data.wsi_reader.WSIReader(opt, wsi_file)
     slide.find_good_locations()

@@ -1,4 +1,3 @@
 {
-  "data_test.py::test_table_dataset": true,
-  "data_test.py::test_wsi_reader": true
+  "data_test.py::test_table_dataset": true
 }
