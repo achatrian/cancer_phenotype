@@ -1,9 +1,11 @@
 import os
 import warnings
+import csv
 from openslide import OpenSlide
 import numpy as np
 import cv2
 from skimage.morphology import remove_small_objects
+from base.utils import utils
 
 
 class WSIReader(OpenSlide):
@@ -15,24 +17,59 @@ class WSIReader(OpenSlide):
             warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
         self.opt = opt
         self.file_name = file_name
+        self.good_locations = []
+        self.locations = []
+        self.tile_info = dict()
 
     def find_good_locations(self):
         """
         Perform quality control on regions of slide by examining each tile
         :return:
         """
-        good_locations = []
-        # look at image with 1/16 the resolution of slide (alternative is to use get_thumbnail method for retrieving the whole slide)
-        qc_level = 4 if self.level_count > 4 else self.level_count - 1  # qc stands for quality control
-        qc_sizes = (self.opt.crop_size * (2 ** (qc_level - self.opt.wsi_read_level)),) * 2
-        for x in range(0, self.level_dimensions[0][0],  qc_sizes[0]):  # dimensions = (width, height)
-            for y in range(0, self.level_dimensions[0][1], qc_sizes[1]):
-                tile = self.read_region((x, y), qc_level, qc_sizes)
-                tile = np.array(tile)  # convert from PIL.Image
-                if is_HnE(tile, self.level_dimensions[0]) and not (self.opt.check_tile_blur and is_blurred(tile)) and not (
-                         self.opt.check_tile_fold and is_folded(tile)):
-                    good_locations.append((x, y))
-        self.good_locations = good_locations
+        try:
+            self.read_locations()
+        except FileNotFoundError:
+            good_locations = []
+            # scan image with 1/16 the resolution of slide (alternative is to use get_thumbnail method for retrieving the whole slide)
+            qc_level = 4 if self.level_count > 4 else self.level_count - 1  # qc stands for quality control
+            qc_sizes = (self.opt.crop_size * (2 ** (qc_level - self.opt.wsi_read_level)),) * 2
+            stride = self.opt.crop_size * (2 ** qc_level)
+            for x in range(0, self.level_dimensions[0][0], stride):  # dimensions = (width, height)
+                for y in range(0, self.level_dimensions[0][1], stride):
+                    tile = self.read_region((x, y), qc_level, qc_sizes)
+                    tile = np.array(tile)  # convert from PIL.Image
+                    self.locations.append((x, y))
+                    if not is_HnE(tile, self.level_dimensions[0]):
+                        self.tile_info[f'{x},{y}'] = 'empty'
+                    elif not (self.opt.check_tile_blur and is_blurred(tile)):
+                        self.tile_info[f'{x},{y}'] = 'blur'
+                    elif not (self.opt.check_tile_fold and is_folded(tile)):
+                        self.tile_info[f'{x},{y}'] = 'folded'
+                    else:
+                        self.tile_info[f'{x},{y}'] = 'good'
+                        good_locations.append((x, y))
+            self.good_locations = good_locations
+            self.save_locations()  # overwrite if existing
+
+    def save_locations(self):
+        slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'tile_locations', self.file_name)
+        utils.mkdirs(os.path.join(self.opt.data_dir, 'data', 'tile_locations'))
+        with open(slide_loc_path, 'w') as slide_loc_file:
+            writer = csv.writer(slide_loc_file, delimiter='\t')
+            for x, y in self.locations:
+                loc = f'{x},{y}'
+                writer.writerow((loc, self.tile_info[loc]))
+
+    def read_locations(self):
+        slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'tile_locations', self.file_name)
+        with open(slide_loc_path, 'w') as slide_loc_file:
+            reader = csv.reader(slide_loc_file, delimiter='\t')
+            for loc, info in reader:
+                self.tile_info[loc] = info
+                loc = tuple(int(d) for d in loc.split(','))
+                self.locations.append(loc)
+                if info == 'good':
+                    self.good_locations.append(loc)
 
     def __len__(self):
         return len(self.good_locations)
@@ -40,8 +77,9 @@ class WSIReader(OpenSlide):
     def __getitem__(self, item):
         return self.read_region(self.good_locations[item], self.opt.wsi_read_level, (self.opt.crop_size, ) * 2)
 
-    def get_locations_repr(self):
-        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x,y) for x,y in self.good_locations])
+    def __repr__(self):
+        # TODO what should this return
+        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.good_locations])
 
 
 # functions for quality control on histology tiles

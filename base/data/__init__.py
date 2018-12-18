@@ -4,7 +4,6 @@ from .base_dataset import BaseDataset
 
 from . import wsi_reader
 from . import table_reader
-from . import table_dataset
 
 
 def find_dataset_using_name(dataset_name, task_name):

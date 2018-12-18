@@ -4,12 +4,14 @@
               augment_dir:                               
             augment_level: 0                             
                batch_size: 16                            
+          check_tile_blur: False                         
+          check_tile_fold: False                         
           checkpoints_dir:                               
-            cna_tablefile: /home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt	[default: ]
+            cna_tablefile:                               
                 crop_size: 1024                          
                  data_dir: /gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset
               data_fields: case_submitter_id,sample_id,case_id,sample_submitter_id,is_ffpe,sample_type,state,oct_embedded
-             dataset_name: table                         	[default: tcga]
+             dataset_name: tcga                          
             deployer_name: segment                       
                deployment: y                             
                     depth: 6                             
@@ -22,7 +24,6 @@
                 fine_size: 512                           
            fork_processes: False                         
                   gpu_ids: -1                            
-                      ids: c,a,s                         
                 init_gain: 0.02                          
                 init_type: normal                        
            input_channels: 3                             
@@ -43,11 +44,12 @@
                     phase: train                         
                print_freq: 100                           
               results_dir: /well/rittscher/users/achatrian/Results/applied
-          sample_id_pivot: case_submitter_id             
+             sample_index: sample_submitter_id           
       set_visible_devices: True                          	[default: y]
                      task: segment                       
                   verbose: False                         
              weight_decay: 0.0005                        
                   workers: 4                             
-            wsi_tablefile: /home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/biospecimen.project-TCGA-PRAD.2018-10-05/sample.tsv	[default: ]
+           wsi_read_level: 2                             
+            wsi_tablefile:                               
 ----------------- End -------------------

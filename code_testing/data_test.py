@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from itertools import product
 sys.path.extend(['../', '../base/', '../base/options/*', '../base/data/*'])
 import base.data as data
+from base.utils import utils
 
 
 def test_is_HnE(wsi_file):
@@ -29,6 +30,7 @@ def test_is_HnE(wsi_file):
 
 
 def test_wsi_reader(apply_options, wsi_file):
+    assert utils.is_pathname_valid(wsi_file)
     opt = apply_options.parse()
     slide = data.wsi_reader.WSIReader(opt, wsi_file)
     slide.find_good_locations()
@@ -41,15 +43,15 @@ def test_wsi_reader(apply_options, wsi_file):
     plt.show()
 
 
-def test_table_dataset(apply_options, tcga_data):
+def test_tcga_dataset(apply_options, tcga_data):
     import sys
     options = apply_options
-    sys.argv.extend(['--dataset_name=table',
+    sys.argv.extend(['--dataset_name=tcga',
                      '--wsi_tablefile=/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/biospecimen.project-TCGA-PRAD.2018-10-05/sample.tsv',
                      '--cna_tablefile=/home/sedm5660/Documents/Temp/Data/cancer_phenotype/tcga_data_info/prad_tcga_pan_can_atlas_2018/data_CNA.txt'
                      ])
     opt = options.parse()
-    table_dataset = data.create_dataset(opt)
+    tcga_dataset = data.create_dataset(opt)
 
 
 

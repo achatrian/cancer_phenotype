@@ -1,5 +1,4 @@
 import os
-import re
 import csv
 import math
 import pandas as pd
@@ -13,18 +12,16 @@ __author__ = "andreachatrian"
 
 class TableReader:
 
-    def __init__(self, opt):
-        self.opt = opt
+    def __init__(self, field_names=tuple(), field_datatypes=tuple()):
+        assert len(field_names) == len(field_datatypes)
         self.read_table_files = []
-        self.field_names = self.opt.data_fields.split(',')
-        self.field_types = {name: dtype for name, dtype in zip(self.field_names, self.opt.field_datatypes.split(','))}
-        ids = self.opt.ids if type(self.opt.ids) is list else self.opt.ids.split(',')
-        self.ids = ids
-        self.table_names = []
-        self.table_types = dict()
-        self.pivoted = dict()
+        self.field_names = field_names
+        self.field_types = {name: dtype for name, dtype in zip(self.field_names, field_datatypes)}
+        self.table_type = ''
+        self.indexed = False
+        self.data = None
 
-    def read_singleentry_data(self, filenames, name='data', replace_dict=None):
+    def read_singleentry_data(self, filenames, replace_dict=None):
         """
         Rows are data-points, entries are separated by tabs (.tsv)
         For reading many fields - single entry per field - table
@@ -43,25 +40,23 @@ class TableReader:
                         field_type = self.field_types[field_name]
                         try:
                             value = row[field_name]
-                            value = re.sub(r'\W+', '', value)  # strip punctuation
-                            if replace_dict and value in replace_dict.keys():
-                                value = replace_dict[value]
-                            elif field_type == 'text':
-                                value = value
+                            if field_type == 'text':
+                                pass
                             elif field_type == 'number':
                                 value = value if value.isdigit() else math.nan  # using nan to denote missing fields https://jakevdp.github.io/PythonDataScienceHandbook/03.04-missing-values.html
                             else:
                                 raise NotImplementedError("Field type '{}' is not supported".format(field_type))
+                            if replace_dict and value in replace_dict.keys():
+                                value = replace_dict[value]
                         except KeyError:
                             value = '' if field_type == 'text' else math.nan
                         datamat[-1].append(value)  # compose final row
         datamat = np.array(datamat, dtype=object)  # allows storage of bools strings and numbers in one array
         data = pd.DataFrame(data=datamat, columns=self.field_names)
-        setattr(self, name, data)
-        self.table_names.append(name)
-        self.table_types[name] = 'single_entry'
+        self.data = data
+        self.table_type = 'single_entry'
 
-    def read_matrix_data(self, filenames, yfield, xfield, data_type=int, name='datamat'):
+    def read_matrix_data(self, filenames, yfield, xfield, data_type=int):
         """
         Reading data in matrix format, i.e. there is one entry per x field per y field |x|*|y|
         xfield or yfield can be tuples of integers - in which case they are considered as location for the field id values -
@@ -111,73 +106,64 @@ class TableReader:
                         x_start = max(coords_xfield[1], coords_yfield[1])
                         datamat.append([data_type(entry) for entry in row[x_start:]])
             datamat = pd.DataFrame(data=np.array(datamat), index=ids_yfield, columns=ids_xfield)
-            setattr(self, name, datamat)
-            self.table_names.append(name)
-            self.table_types[name] = 'matrix'
-            self.pivoted[name] = True  # matrix tables are already pivoted by x or y
+            self.data = datamat
+            self.table_type = 'matrix'
+            self.indexed = True  # matrix tables are already indexed by x or y
 
-    def pivot_data(self, name, pivot_id=None):
-        pivot_id = pivot_id or self.opt.sample_id_pivot
-        data = getattr(self, name)
-        if self.table_types[name] == 'single_entry':
+    def index_data(self, index=None):
+        """
+        Choose id for indexing data.
+        For single entry tables: the field 'index' is used as index for the data
+        For matrix data: matrix is stored as is, or is transposed beforehand.
+        :param name:
+        :param index: column name that is used for indexing the data / direction of indexing
+        :return: data indexed
+        """
+        index = index or self.opt.sample_id_index
+        data = self.data
+        if self.table_type == 'single_entry':
             try:
-                pivot_values = data[pivot_id]
+                index_values = data[index]
             except KeyError as err:
-                raise ValueError(f"'{pivot_id}' is not a recorded data field") from err
-            fields_minus_pivot = list(data.columns.values)
-            pivot_loc = fields_minus_pivot.index(pivot_id)
-            fields_minus_pivot.remove(pivot_id)
-            datamat = data.values[:, list(range(pivot_loc)) + list(range(pivot_loc+1, data.values.shape[1]))]
-            pivoted_data = pd.DataFrame(index=pivot_values, data=datamat, columns=fields_minus_pivot)
-        elif self.table_types[name] == 'matrix':
-            pivoted_data = data  # no need to pivot for matrix table
+                raise ValueError(f"'{index}' is not a recorded data field") from err
+            fields_minus_index = list(data.columns.values)
+            index_loc = fields_minus_index.index(index)
+            fields_minus_index.remove(index)
+            datamat = data.values[:, list(range(index_loc)) + list(range(index_loc+1, data.values.shape[1]))]
+            indexed_data = pd.DataFrame(index=index_values, data=datamat, columns=fields_minus_index)
+        elif self.table_type == 'matrix':
+            assert index in ('x', 'y')
+            indexed_data = data.transpose() if index == 'y' else data
         else:
-            raise ValueError(f"Invalid table type '{self.table_types[name]}'")
-        setattr(self, name, pivoted_data)
-        self.pivoted[name] = True
-        return pivoted_data
+            raise ValueError(f"Invalid table type '{self.table_type}'")
+        self.data = indexed_data
+        self.indexed = True
+        return indexed_data
 
-    def get_merge_tables(self, name0, name1, merge_se_id=None, merge_mat_dir=('y', 'y')):
-        assert all(mdir == 'x' or mdir == 'y' for mdir in merge_mat_dir)
-        if not self.pivoted[name0] and self.table_types[name0] == 'single_entry':
-            self.pivot_data(name0, merge_se_id)
-        if not self.pivoted[name1] and self.table_types[name1] == 'single_entry':
-            self.pivot_data(name0, merge_se_id)
-        table0 = getattr(self, name0)
-        table1 = getattr(self, name1)
-        if merge_mat_dir[0] == 'x' and self.table_types[name0] == 'matrix':
-                table0 = table0.transposed()
-        if merge_mat_dir[1] == 'x' and self.table_types[name1] == 'matrix':
-                table1 = table1.transposed()
-
-        def merge_se_tables(se, se0):
-            return se.join(se0)  # joins two DataFrames with same indices
-
-        def merge_se_mat_tables(se, mat):
-            return se.join(mat)
-
-        def merge_mat_tables(mat, mat0):
-            return mat.join(mat0)
-
-        table_type_err = ValueError("Invalid table type")
-        if self.table_types[name0] == 'single_entry':
-            if self.table_types[name1] == 'single_entry':
-                merged_data = merge_se_tables(table0, table1)
-            elif self.table_types[name1] == 'matrix':
-                merged_data = merge_se_mat_tables(table0, table1)
-            else:
-                raise table_type_err
-        elif self.table_types[name0] == 'matrix':
-            if self.table_types[name1] == 'single_entry':
-                merged_data = merge_se_mat_tables(table1, table0)
-            elif self.table_types[name1] == 'matrix':
-                merged_data = merge_mat_tables(table0, table1)
-            else:
-                raise table_type_err
+    def join(self, table, criterion='all'):
+        """
+        Assuming table 'name0' and table 'name1' are indexed according to the same values,
+        the DataFrames are merged into one.
+        """
+        if not table.indexed:
+            raise ValueError("Unable to match index with unindexed table")
+        table0 = self.data
+        table1 = table.data
+        # Check overlap of index values
+        common_indices = set(table0.index.values).intersection(table1.index.values)
+        if criterion == 'all':
+            merged_data = table0.join(table1)
+        elif criterion == 'minimal':
+            merged_data = pd.merge(table0.loc[list(common_indices)],
+                                   table1.loc[list(common_indices)],
+                                   right_index=True, left_index=True)
+        elif criterion == '0':
+            merged_data = table0.join(table1.loc[list(common_indices)])
+        elif criterion == '1':
+            merged_data = table1.join(table0.loc[list(common_indices)])
         else:
-            raise table_type_err
-
-        self.merged_data = merged_data
+            raise ValueError(f"Invalid merge criterion '{criterion}'")
+        self.data = merged_data
         return merged_data
 
 
@@ -196,7 +182,7 @@ class MultipleIdMap:
         # ids -> data : different entry ids for same sample can be present, code ensures that they map to same entry
 
     def link_id_pair(self, id_type0, id0_value, id_type1, id1_value):
-        assert id_type0 in self.id_types and id_type1 in self.id_types; "pivots not among specified ones"
+        assert id_type0 in self.id_types and id_type1 in self.id_types; "indexs not among specified ones"
         id_store0 = self.id_data[id_type0][id0_value]
         id_store0[id_type0] = id0_value
         id_store0[id_type1] = id1_value

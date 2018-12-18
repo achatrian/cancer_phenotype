@@ -1,3 +1,10 @@
+"""
+Utility functions for translating binary masks into vertice mappings.
+Supports:
+PaperJS Path format
+QuPath annotations object
+"""
+
 import numpy as np
 import cv2
 import json
@@ -6,18 +13,19 @@ import imageio
 import matplotlib.pyplot as plt
 
 
-def save_paperjs_path_json(filename, mask, x_offset, y_offset):
+def save_paperjs_path_json(filename, mask, x_offset, y_offset, annotation='qupath'):
+    assert annotation in ['qupath', 'paperjs']
     contours = get_mask_contours(mask, x_offset, y_offset)
-    path_array = [PaperJSPathEmulator(contour) for contour in contours]
-
-    def encode_path_array(path_emulator):
-        if isinstance(path_emulator, PaperJSPathEmulator):
-            return ['Path', path_emulator.__dict__]
-        else:
-            raise TypeError(f"Object of type '{path_emulator.__class__.__name__}' is not JSON serializable")
+    if annotation == 'paperjs':
+        path_emul = PaperJSPathEmulator
+    elif annotation == 'qupath':
+        path_emul = QuPathAnnotationEmulator
+    else:
+        raise NotImplementedError(f"Annotation type '{annotation}' is not supported (Supported: ['qupath', paperjs']")
+    path_array = [path_emul(contour, None) for contour in contours]
 
     with open(filename, 'w') as path_file:
-        json.dump(path_array, indent=1, fp=path_file, default=encode_path_array)
+        json.dump(path_array, indent=1, fp=path_file, default=path_emul.encode_path_array)
 
 
 def get_mask_contours(mask, x_offset, y_offset, dist_threshold=0.1):
@@ -69,8 +77,16 @@ class PaperJSPathEmulator:
     """
     Can use __dict__ property to generate same dict as would paper.Path objects in JS
     """
-    def __init__(self, contour, handles=False, stroke_color=(0, 0, 1)):
-        contour = contour.squeeze().tolist()
+
+    @classmethod
+    def encode_path_array(cls, path_emulator):
+        if isinstance(path_emulator, cls):
+            return ['Path', path_emulator.__dict__]
+        else:
+            raise TypeError(f"Object of type '{path_emulator.__class__.__name__}' is not JSON serializable")
+
+    def __init__(self, contour, label, handles=False, stroke_color=(0, 0, 1)):
+        contour = contour.squeeze().tolist()  # work with opencv contour output (numpy array)
         if handles:
             self.segments = [[coords, [0, 0], [0, 0]] for coords in contour]
         else:
@@ -79,6 +95,20 @@ class PaperJSPathEmulator:
         self.applyMatrix = True
         self.closed = True
         self.strokeColor = list(stroke_color)
+
+
+class QuPathAnnotationEmulator:
+
+    @classmethod
+    def encode_path_array(cls, path_emulator):
+        if isinstance(path_emulator, cls):
+            return ['Path', path_emulator.__dict__]
+        else:
+            raise TypeError(f"Object of type '{path_emulator.__class__.__name__}' is not JSON serializable")
+
+    def __init__(self, contour, label):
+        contour = contour.squeeze().tolist()
+
 
 
 # Tests
