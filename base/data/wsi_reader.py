@@ -21,6 +21,7 @@ class WSIReader(OpenSlide):
         self.good_locations = []
         self.locations = []
         self.tile_info = dict()
+        self.qc = None
 
     def save_locations(self):
         name_ext = re.sub('\.(ndpi|svs)', '', os.path.basename(self.file_name)) + '.tsv'  # strip extension and add .txt
@@ -56,7 +57,7 @@ class WSIReader(OpenSlide):
         except FileNotFoundError:
             good_locations = []
             # scan image with 1/16 the resolution of slide (alternative is to use get_thumbnail method for retrieving the whole slide)
-            qc_level = 4 if self.level_count > 4 else self.level_count - 1  # qc stands for quality control
+            qc_level = 3 if self.level_count > 3 else self.level_count - 1  # qc stands for quality control
             qc_sizes = (self.opt.crop_size * (2 ** (qc_level - self.opt.wsi_read_level)),) * 2
             qc_stride = self.opt.crop_size * (2 ** qc_level)
             for x in range(0, self.level_dimensions[0][0], qc_stride):  # dimensions = (width, height)
@@ -90,7 +91,6 @@ class WSIReader(OpenSlide):
 # functions for quality control on histology tiles
 def is_HnE(image, size_wsi, threshold=0.5):
     """Returns true if slide contains tissue or just background"""
-    # FIXME still not working properly - check all cases !
     hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
     empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
     empirical = empirical/np.max(empirical)*255  # found by Ka Ho to work

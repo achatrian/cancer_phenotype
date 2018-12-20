@@ -11,9 +11,10 @@ import json
 import pytest
 import imageio
 import matplotlib.pyplot as plt
+from base.utils import utils
 
 
-def save_paperjs_path_json(filename, mask, x_offset, y_offset, annotation='qupath'):
+def save_annotation_to_json(filename, mask, x_offset, y_offset, annotation='qupath'):
     assert annotation in ['qupath', 'paperjs']
     contours = get_mask_contours(mask, x_offset, y_offset)
     if annotation == 'paperjs':
@@ -110,11 +111,10 @@ class QuPathAnnotationEmulator:
         contour = contour.squeeze().tolist()
 
 
-
 # Tests
 @pytest.mark.parametrize('x_offset,y_offset', [(0, 0), (100, 100)])
 def test_save_paperjs_path_json(filename, mask, x_offset, y_offset):
-    save_paperjs_path_json(filename, mask, x_offset, y_offset)
+    save_annotation_to_json(filename, mask, x_offset, y_offset)
 
 
 @pytest.mark.parametrize('x_offset,y_offset', [(0, 0), (100, 100)])

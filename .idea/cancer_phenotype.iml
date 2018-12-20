@@ -5,11 +5,11 @@
       <sourceFolder url="file://$MODULE_DIR$/base" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/code_testing" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/aux" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/pix2pix_cyclegan" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/generate" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/segment" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/phenotype" isTestSource="false" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.7 (cancer_phenotype)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Remote Python 3.7.0 (sftp://achatrian@localhost:6700/well/rittscher/users/achatrian/.conda/envs/pyenvclone/bin/python3.7)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" name="R User Library" level="project" />
     <orderEntry type="library" name="R Skeletons" level="application" />

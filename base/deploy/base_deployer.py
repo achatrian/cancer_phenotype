@@ -3,10 +3,6 @@ import copy
 from contextlib import contextmanager
 import torch.multiprocessing as mp
 
-# Which philosophy should one embrace ? Build initial good document describing dataset, or deal with multiple documents in code?
-# When is it convenient to do both?
-# In TCGA, there are many fields for each one of the data modalities, and thus the data are split
-
 
 class BaseDeployer:
 

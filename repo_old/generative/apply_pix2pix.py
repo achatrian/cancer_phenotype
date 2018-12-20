@@ -19,12 +19,12 @@ def on_cluster():
     return bool(match1 or match2 or match3 or match4 or match5)
 if on_cluster():
     sys.path.append("/gpfs0/users/rittscher/achatrian/cancer_phenotype")
-    sys.path.append("/gpfs0/users/rittscher/achatrian/cancer_phenotype/pix2pix_cyclegan")
+    sys.path.append("/gpfs0/users/rittscher/achatrian/cancer_phenotype/generate")
 else:
     sys.path.append("/Users/andreachatrian/Documents/Repositories/cancer_phenotype")
-    sys.path.append("/Users/andreachatrian/Documents/Repositories/cancer_phenotype/pix2pix_cyclegan")
+    sys.path.append("/Users/andreachatrian/Documents/Repositories/cancer_phenotype/generate")
 from repo_old.generative.utils import save_images, TestOptions
-from pix2pix_cyclegan.models import create_model
+from generate.models import create_model
 
 def make_input(segmaps):
     segmaps_temp = []

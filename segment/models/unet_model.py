@@ -86,7 +86,7 @@ class UNetModel(BaseModel):
             output = torch.nn.functional.sigmoid(output, dim=1)
         output = output.cpu().numpy()
         target = self.target.detach().cpu().numpy()
-            
+
         class_acc, class_dice = [], []
         for c in range(output.shape[1]):
             pred = output[:, c, ...].flatten()
@@ -100,10 +100,3 @@ class UNetModel(BaseModel):
         for c in range(len(class_acc)):
             setattr(self, 'metric_acc{}'.format(c), class_acc[c])
             setattr(self, 'metric_dice{}'.format(c), class_dice[c])
-
-
-
-
-
-
-

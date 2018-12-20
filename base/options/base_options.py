@@ -2,18 +2,15 @@ import os
 import argparse
 import multiprocessing as mp
 import torch
-import importlib
-import pkgutil
 from base import models
 from base import data
 from base.utils import utils
+from options.task_options import get_task_options
 
 
 class BaseOptions:
     def __init__(self):
-        parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                         add_help=False)  # TODO - check that help is still displayed
-
+        parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
         parser.add_argument('--task', type=str, default='segment', help="Defines structure of problem - to load config of other files")
         parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset")
         parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
@@ -24,7 +21,7 @@ class BaseOptions:
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--batch_size', default=16, type=int)
         parser.add_argument('--augment', type=int, default=0)
-        parser.add_argument('--model', type=str, default="UNet", choices=["UNet"], help="The network model used for segmentation")
+        parser.add_argument('--model', type=str, default="UNet", help="The network model that will be used")
         parser.add_argument('--eval', action='store_true', help='use eval mode during validation / test time.')
         parser.add_argument('--num_class', type=int, default=2)
         parser.add_argument('-nf', '--num_filters', type=int, default=15, help='mcd number of filters for unet conv layers')
@@ -58,14 +55,14 @@ class BaseOptions:
 
         # load task module and task-specific options
         task_name = opt.task
-        task_options = importlib.import_module("{0}.options.{0}_options".format(task_name))  # must be defined in each task folder
-        self.parser = argparse.ArgumentParser(parents=[self.parser, task_options.TaskOptions().parser])
-        opt, _ = self.parser.parse_known_args()
+        task_options = get_task_options(task_name)
+        parser = task_options.add_actions(self.parser)
+        opt, _ = parser.parse_known_args()
 
         # modify model-related parser options
         model_name = opt.model
         model_option_setter = models.get_option_setter(model_name, task_name)
-        parser = model_option_setter(self.parser, self.is_train)
+        parser = model_option_setter(parser, self.is_train)
         opt, _ = parser.parse_known_args()  # parse again with the new defaults
 
         # modify dataset-related parser options

@@ -1,6 +1,7 @@
 import torch
 from torchvision.models import inception_v3, resnet152, densenet169
 import torch.utils.model_zoo as model_zoo
+from pretrainedmodels import inceptionv4
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -13,13 +14,14 @@ model_urls = {
     'densenet201': 'https://download.pytorch.org/models/densenet201-c1103571.pth',
     'densenet161': 'https://download.pytorch.org/models/densenet161-8d451a50.pth',
     'inception_v3_google': 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth',
+    'inceptionv4': 'https://s3.amazonaws.com/pytorch/models/inceptionv4-58153ba9.pth'
 }
 
 
 class Inception(torch.nn.Module):
     def __init__(self, num_classes, pretrained=False):
         super(Inception, self).__init__()
-        self.net = inception_v3(pretrained=False, num_classes=num_classes, aux_logits=True, transform_input=True)
+        self.net = inceptionv4(pretrained=False, num_classes=num_classes)
 
         if pretrained:
             pretrained_dict = model_zoo.load_url(model_urls['inception_v3_google'])

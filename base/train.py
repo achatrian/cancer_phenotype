@@ -1,4 +1,6 @@
 import time
+import os
+print(os.environ['PYTHONPATH'])
 from options.train_options import TrainOptions
 from data import create_dataset, create_dataloader
 from models import create_model
@@ -8,14 +10,8 @@ from utils.visualizer import Visualizer
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()
-    if opt.deployment:
-        deployer = create_deployer(opt)  # deploying to a database
-        deployer.setup()
-        train_dataset = deployer.create_dataset(0)
-        val_dataset = deployer.create_dataset(1, validation_phase=True)
-    else:
-        train_dataset = create_dataset(opt)
-        val_dataset = create_dataset(opt, validation_phase=True)
+    train_dataset = create_dataset(opt)
+    val_dataset = create_dataset(opt, validation_phase=True)
 
     train_dataloader = create_dataloader(train_dataset)
     val_dataloader = create_dataloader(val_dataset)

@@ -27,9 +27,9 @@ if on_cluster():
 else:
     sys.path.append(os.path.expanduser('~') + '/Documents/Repositories/cancer_phenotype')
 
-from pix2pix_cyclegan.util import util
-from pix2pix_cyclegan import data
-from pix2pix_cyclegan import models
+from generate.util import util
+from generate import data
+from generate import models
 
 
 def save_images(visuals, image_paths, image_dir, aspect_ratio=1.0):

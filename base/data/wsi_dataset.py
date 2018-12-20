@@ -45,9 +45,12 @@ class WSIDataset(BaseDataset):
                 else:
                     good_files.pop()
             self.files.append(file)
-            slide = WSIReader(self.opt, file).find_good_locations()  # FIXME this still doesn't work perfectly
+            slide = WSIReader(self.opt, file)
+            slide.find_good_locations()  #TODO this still doesn't work perfectly
             self.tiles_per_slide.append(len(slide))
             self.slides.append(slide)
+            if self.opt.verbose:
+                print("Quality control on {}".format(name))
         self.tile_idx_per_slide = list(accumulate(self.tiles_per_slide))  # to index tiles quickly
 
     def __len__(self):
@@ -60,7 +63,8 @@ class WSIDataset(BaseDataset):
         slide = self.slides[slide_idx]
         tile_idx = item - self.tile_idx_per_slide[slide_idx - 1] if item > 0 else item  # index of tile in slide
         tile = slide[tile_idx]
-        output = dict(tile=tile, location=slide.high_res_locations[item], file_name=slide.file_name)  # return image and relative location in slide
+        tile_loc = slide.good_locations[tile_idx]
+        output = dict(tile=tile, location=tile_loc, file_name=slide.file_name)  # return image and relative location in slide
         return output
 
 

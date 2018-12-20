@@ -1,16 +1,16 @@
 import torch
 from base.models.base_model import BaseModel
-from .networks import ResNet
+from .networks import Inception
 from sklearn.metrics import confusion_matrix
 import numpy as np
 
 
-class ResNetModel(BaseModel):
+class InceptionModel(BaseModel):
 
     def __init__(self, opt):
-        super(ResNetModel, self).__init__(opt)
+        super().__init__(opt)
         self.opt = opt
-        self.net = ResNet(opt.num_class)
+        self.net = Inception(opt.num_class, pretrained=True)
         self.loss_names = ['bce']
         self.bce = torch.nn.BCELoss(opt.loss_weight, reduction='elementwise_mean')
         self.metric_names = ['acc', 'dice'] #+ \
@@ -30,6 +30,9 @@ class ResNetModel(BaseModel):
         self.input = None
         self.target = None
         self.output = None
+        self.loss_bce = None
+        self.metric_acc = None
+        self.metric_dice = None
 
     # modify parser to add command line options,
     # and also change the default values if needed
