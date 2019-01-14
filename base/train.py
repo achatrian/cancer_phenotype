@@ -1,6 +1,5 @@
 import time
 import os
-print(os.environ['PYTHONPATH'])
 from options.train_options import TrainOptions
 from data import create_dataset, create_dataloader
 from models import create_model

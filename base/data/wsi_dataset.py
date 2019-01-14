@@ -1,4 +1,5 @@
 import os
+from multiprocessing import Pool
 from pathlib import Path
 from itertools import accumulate
 from .base_dataset import BaseDataset
@@ -46,11 +47,9 @@ class WSIDataset(BaseDataset):
                     good_files.pop()
             self.files.append(file)
             slide = WSIReader(self.opt, file)
-            slide.find_good_locations()  #TODO this still doesn't work perfectly
+            slide.find_good_locations()  # TODO this still doesn't work perfectly
             self.tiles_per_slide.append(len(slide))
             self.slides.append(slide)
-            if self.opt.verbose:
-                print("Quality control on {}".format(name))
         self.tile_idx_per_slide = list(accumulate(self.tiles_per_slide))  # to index tiles quickly
 
     def __len__(self):

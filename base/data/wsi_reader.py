@@ -24,7 +24,7 @@ class WSIReader(OpenSlide):
         self.qc = None
 
     def save_locations(self):
-        name_ext = re.sub('\.(ndpi|svs)', '', os.path.basename(self.file_name)) + '.tsv'  # strip extension and add .txt
+        name_ext = re.sub('\.(ndpi|svs)', '', os.path.basename(self.file_name)) + '.tsv'  # strip extension and add .tsv
         slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'tile_locations', name_ext)
         utils.mkdirs(os.path.join(self.opt.data_dir, 'data', 'tile_locations'))
         with open(slide_loc_path, 'w') as slide_loc_file:
@@ -34,10 +34,10 @@ class WSIReader(OpenSlide):
                 writer.writerow((loc, self.tile_info[loc]))
 
     def read_locations(self):
-        name_ext = re.sub('\.(ndpi|svs)', '', os.path.basename(self.file_name)) + '.tsv'  # strip extension and add .txt
+        name_ext = re.sub('\.(ndpi|svs)', '', os.path.basename(self.file_name)) + '.tsv'  # strip extension and add .tsv
         slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'tile_locations', name_ext)
         with open(slide_loc_path, 'w') as slide_loc_file:
-            if os.stat('file').st_size == 0:
+            if os.stat(slide_loc_path).st_size == 0:  # rewrite if file is empty
                 raise FileNotFoundError(f"Empty file: {slide_loc_file}")
             reader = csv.reader(slide_loc_file, delimiter='\t')
             for loc, info in reader:
@@ -54,6 +54,8 @@ class WSIReader(OpenSlide):
         """
         try:
             self.read_locations()
+            if self.opt.verbose:
+                print("Read qc info for {}".format(os.path.basename(self.file_name)))
         except FileNotFoundError:
             good_locations = []
             # scan image with 1/16 the resolution of slide (alternative is to use get_thumbnail method for retrieving the whole slide)
@@ -76,6 +78,8 @@ class WSIReader(OpenSlide):
                         good_locations.append((x, y))
             self.good_locations = good_locations
             self.save_locations()  # overwrite if existing
+            if self.opt.verbose:
+                print("Perform quality control on {}".format(os.path.basename(self.file_name)))
 
     def __len__(self):
         return len(self.good_locations)

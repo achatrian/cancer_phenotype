@@ -237,7 +237,7 @@ class Discriminator(nn.Module):
         if output_layer:
             return features0, features1  #return layer activation
         output = self.end(features1)
-        output = output.view(output.size(0), -1) #reshape tensor
+        output = output.view(output.size(0), -1)  #reshape tensor
         y = self.classifier(output)  #return class probability
         c = self.aux_classifier(output)
         return y, c

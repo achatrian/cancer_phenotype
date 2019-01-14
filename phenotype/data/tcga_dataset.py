@@ -54,6 +54,9 @@ class TCGADataset(BaseDataset):
         parser.set_defaults(data_dir='/well/rittscher/projects/TCGA_prostate/TCGA')
         return parser
 
+    def name(self):
+        return "TCGADataset"
+
     def __getitem__(self, item):
         image_data = self.wsi_dataset[item]
         tile = image_data['tile']
