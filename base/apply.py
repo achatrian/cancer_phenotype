@@ -14,19 +14,22 @@ if __name__ == '__main__':
     dataloader = create_dataloader(dataset)
     deployer = create_deployer(opt)
 
-    with deployer.start_data_loading() as queue:
-        workers = deployer.get_workers(model, queue)
-        for i, worker in enumerate(workers):
-            worker.start()
-            print("Worker {} is running ...".format(i))
+    with deployer.queue_env() as output_queue:
+        with deployer.queue_env() as input_queue:
+            workers = deployer.get_workers(model, input_queue)
+            for i, worker in enumerate(workers):
+                worker.start()
+                print("Worker {} is running ...".format(i))
 
-        nimages = 0
-        for j, data in enumerate(dataloader):
-            nimages += data['input'].shape[0]
-            data['idx'] = j
-            queue.put(data)
-            if j % opt.print_freq == 0:
-                print("Loaded: {} images".format(nimages))
+            nimages = 0
+            for j, data in enumerate(dataloader):
+                nimages += data['input'].shape[0]
+                data['idx'] = j
+                input_queue.put(data)
+                if j % opt.print_freq == 0:
+                    print("Loaded: {} images".format(nimages))
+
+            dataloader.gather(output_queue)
 
 
 

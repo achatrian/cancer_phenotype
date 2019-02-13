@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import torch.multiprocessing as mp
 
 
-class BaseDeployer:
+class BaseDeployer(mp.Process):
 
     def __init__(self, opt):
         super(BaseDeployer, self).__init__()
@@ -27,7 +27,7 @@ class BaseDeployer:
         return "BaseDeployer"
 
     @contextmanager
-    def start_data_loading(self):
+    def queue_env(self):
         # __enter__
         queue = mp.JoinableQueue(2 * min(self.opt.ndeploy_workers, 1))
         yield queue
@@ -61,11 +61,18 @@ class BaseDeployer:
         return workers
 
     @staticmethod
-    def run_worker(process_id, opt, model, queue):
+    def run_worker(process_id, opt, model, input_queue, output_queue=None):
         """
         ABSTRACT METHOD: implemented in subclasses to run multiprocessing on workers that use/update the model
         Rules:
         workers must terminate if they get a None from the queue
+        """
+        pass
+
+    @staticmethod
+    def gather(output_queue):
+        """
+        ABSTRACT METHOD: called on output queue once data has been pushed to input queue
         """
         pass
 
