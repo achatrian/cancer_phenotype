@@ -9,6 +9,7 @@ class BaseDeployer:
     def __init__(self, opt):
         super(BaseDeployer, self).__init__()
         self.opt = opt
+        self.worker_gpu_ids = None
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -28,10 +29,10 @@ class BaseDeployer:
     @contextmanager
     def start_data_loading(self):
         # __enter__
-        queue = mp.JoinableQueue(2 * self.opt.ndeploy_workers)
+        queue = mp.JoinableQueue(2 * min(self.opt.ndeploy_workers, 1))
         yield queue
         # __exit__
-        for i in range(len(self.opt.ndeploy_workers)):
+        for i in range(min(self.opt.ndeploy_workers, 1)):
             queue.put(None)  # workers terminate as they read the None
         queue.join()
 
@@ -41,10 +42,13 @@ class BaseDeployer:
         :return:
         """
         # set GPU allocation
-        self.worker_gpu_ids = []
-        for gpu_id, worker_id in zip(cycle(self.opt.gpu_ids), range(self.opt.ndeploy_workers)):
-            # cycle over gpu assignment - each worker has 1 gpu only
-            self.worker_gpu_ids.append([gpu_id])
+        if self.opt.gpu_ids:
+            self.worker_gpu_ids = []
+            for gpu_id, worker_id in zip(cycle(self.opt.gpu_ids), range(self.opt.ndeploy_workers)):
+                # cycle over gpu assignment - each worker has 1 gpu only
+                self.worker_gpu_ids.append([gpu_id])
+        else:
+            self.worker_gpu_ids = ['cpu'] * self.opt.ndeploy_workers
 
         workers = []
         for i in range(self.opt.ndeploy_workers):

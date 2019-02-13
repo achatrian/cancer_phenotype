@@ -32,9 +32,13 @@ def get_option_setter(model_name, task_name):
 
 
 def create_model(opt):
-    model = find_model_using_name(opt.model, opt.task)
-    instance = model(opt)
-    print("model [%s] was created" % (instance.name()))
+    if opt.model and opt.model.lower() != 'none':
+        model = find_model_using_name(opt.model, opt.task)
+        instance = model(opt)
+        print("model [%s] was created" % (instance.name()))
+    else:
+        instance = None
+        print("no model was created")
     return instance
 
 

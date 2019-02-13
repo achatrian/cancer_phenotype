@@ -47,7 +47,7 @@ else:
     sys.path.append("/Users/andreachatrian/Documents/Repositories/cancer_phenotype")
 from repo_old.clr import CyclicLR
 from repo_old.phenotyping import GlandPatchDataset, AugDataset
-from segment.data.glandseg_dataset import AugDataset as SegAugDataset
+from segment.data.tileseg_dataset import AugDataset as SegAugDataset
 
 
 ckpt_path = ''

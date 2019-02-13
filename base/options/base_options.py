@@ -4,6 +4,7 @@ import multiprocessing as mp
 import torch
 from base import models
 from base import data
+from base import deploy
 from base.utils import utils
 from options.task_options import get_task_options
 
@@ -14,27 +15,28 @@ class BaseOptions:
         parser.add_argument('--task', type=str, default='segment', help="Defines structure of problem - to load config of other files")
         parser.add_argument('-d', '--data_dir', type=str, default="/gpfs0/well/rittscher/users/achatrian/ProstateCancer/Dataset")
         parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
-        parser.add_argument('--dataset_name', type=str, default="glandseg")
-        parser.add_argument('--crop_size', type=int, default=1024, help='crop images to this size')
-        parser.add_argument('--fine_size', type=int, default=512, help='then scale to this size')
+        parser.add_argument('--dataset_name', type=str, default="tileseg")
+        parser.add_argument('--patch_size', type=int, default=1024, help='crop images to this size')
+        parser.add_argument('--fine_size', type=int, default=512, help='then scale to this size --DEPRECATED--')  # FIXME - remove deprecated option
         parser.add_argument('--input_channels', type=int, default=3)
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--batch_size', default=16, type=int)
         parser.add_argument('--augment', type=int, default=0)
         parser.add_argument('--model', type=str, default="UNet", help="The network model that will be used")
         parser.add_argument('--eval', action='store_true', help='use eval mode during validation / test time.')
-        parser.add_argument('--num_class', type=int, default=2)
+        parser.add_argument('--num_class', type=int, default=2, help='Number of classes to classify the data into')
         parser.add_argument('-nf', '--num_filters', type=int, default=15, help='mcd number of filters for unet conv layers')
         parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
         parser.add_argument('--learning_rate_patience', default=50, type=int)
         parser.add_argument('--weight_decay', default=5e-4, type=float)
+        parser.add_argument('--reg_weight', default=5e-4, type=float, help="weight given to regularization loss")
         parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
         parser.add_argument('--loss_weight', default=None)
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization [normal|xavier|kaiming|orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--gpu_ids', default='0', type=str, help='gpu ids (comma separated numbers - e.g. 1,2,3')
         parser.add_argument('--set_visible_devices', type=utils.str2bool, default='y', help="whether to choose visible devices inside script")
-        parser.add_argument('--workers', default=4, type=int, help='the number of workers to load the data')
+        parser.add_argument('--workers', default=4, type=int, help='the number of workers used to load the data')
         parser.add_argument('--experiment_name', default="experiment_name", type=str)
         parser.add_argument('--checkpoints_dir', default='', type=str, help='checkpoint folder')
         parser.add_argument('--load_epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
@@ -47,6 +49,7 @@ class BaseOptions:
 
         self.parser = parser
         self.is_train = None
+        self.is_apply = None
         self.opt = None
 
     def gather_options(self):
@@ -61,14 +64,22 @@ class BaseOptions:
 
         # modify model-related parser options
         model_name = opt.model
-        model_option_setter = models.get_option_setter(model_name, task_name)
-        parser = model_option_setter(parser, self.is_train)
-        opt, _ = parser.parse_known_args()  # parse again with the new defaults
+        if model_name and model_name != 'none':
+            model_option_setter = models.get_option_setter(model_name, task_name)
+            parser = model_option_setter(parser, self.is_train)
+            opt, _ = parser.parse_known_args()  # parse again with the new defaults
 
         # modify dataset-related parser options
         dataset_name = opt.dataset_name
-        dataset_option_setter = data.get_option_setter(dataset_name, task_name)
-        parser = dataset_option_setter(parser, self.is_train)
+        if dataset_name and dataset_name != 'none':
+            dataset_option_setter = data.get_option_setter(dataset_name, task_name)
+            parser = dataset_option_setter(parser, self.is_train)
+
+        if self.is_apply:
+            # modify deployer-related parser options
+            deployer_name = opt.deployer_name
+            deployer_option_setter = deploy.get_option_setter(deployer_name, task_name)
+            parser = deployer_option_setter(parser, self.is_train)
 
         self.parser = parser
 

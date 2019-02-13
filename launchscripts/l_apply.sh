@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Script takes --option=value strings separated by comma (,):
-# E.g. --task=segmemt,--model=unet
+# E.g. --task=segment,--model=unet
 
 echo "************************************************************************************"
 echo "SGE job ID: "$JOB_ID
@@ -18,4 +18,4 @@ source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$(tr ',' ' ' <<< $1)  # substitute commas with spaces
 echo -e "Train commands:\n ${COMMANDS}"
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/generate:${PYTHONPATH}"
-python  /well/rittscher/users/achatrian/cancer_phenotype/base/train.py ${COMMANDS}
+python  /well/rittscher/users/achatrian/cancer_phenotype/base/apply.py ${COMMANDS}

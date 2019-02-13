@@ -1,7 +1,0 @@
-{
-  "data_test.py": true,
-  "data_test.py::test_is_HnE": true,
-  "data_test.py::test_table_reader": true,
-  "data_test.py::test_wsi_reader": true,
-  "deploy_test.py::test_segment_deploy": true
-}

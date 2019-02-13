@@ -8,7 +8,8 @@ if __name__ == '__main__':
     opt = ApplyOptions().parse()
     model = create_model(opt)
     # model.setup()  # done in predictor process, as it fails when net is push to cuda otherwise
-    model.share_memory()
+    if model:
+        model.share_memory()
     dataset = create_dataset(opt)
     dataloader = create_dataloader(dataset)
     deployer = create_deployer(opt)

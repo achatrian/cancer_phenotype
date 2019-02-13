@@ -86,7 +86,7 @@ class Visualizer:
                 images = []
                 idx = 0
                 for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image, label.endswith("_map"))
+                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
                     label_html_row += '<td>%s</td>' % label
                     images.append(image_numpy.transpose([2, 0, 1]))
                     idx += 1
@@ -122,7 +122,7 @@ class Visualizer:
         if self.use_html and (save_result or not self.saved):  # save images to a html file
             self.saved = True
             for label, image in visuals.items():
-                image_numpy = utils.tensor2im(image, label.endswith("_map"))
+                image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
                 img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
                 utils.save_image(image_numpy, img_path)
             # update website
@@ -132,7 +132,7 @@ class Visualizer:
                 ims, txts, links = [], [], []
 
                 for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image, label.endswith("_map"))
+                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
                     img_path = 'epoch%.3d_%s.png' % (n, label)
                     ims.append(img_path)
                     txts.append(label)

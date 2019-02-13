@@ -14,26 +14,6 @@ class TCGADataset(BaseDataset):
         wsi_dataset = find_dataset_using_name('wsi', 'base')
         self.wsi_dataset = wsi_dataset(opt)
 
-        # read metadata
-        field_names = self.opt.data_fields.split(',')
-        datatypes = self.opt.field_datatypes.split(',')
-        self.sample = TableReader(field_names, datatypes)
-        self.cna = TableReader(field_names, datatypes)
-        self.data = None
-        wsi_replacements = {
-            'FALSE': False,
-            'TRUE': True,
-            'released': True
-        }
-        self.sample.read_singleentry_data(self.opt.wsi_tablefile, replace_dict=wsi_replacements)
-        self.sample.index_data(index=self.opt.sample_index)
-        self.cna.read_matrix_data(self.opt.cna_tablefile, yfield='Hugo_Symbol', xfield=(0, 2))
-        self.cna.index_data(index='y')
-        self.sample.data.query("is_ffpe == True", inplace=True)  # remove all slides that are not FFPE
-
-        # discard files with no ffpe and do quality control
-        self.wsi_dataset.setup(good_files=self.sample.data.index.values)
-
     @staticmethod
     def modify_commandline_options(parser, is_train):
         # whole slide images
@@ -56,6 +36,27 @@ class TCGADataset(BaseDataset):
 
     def name(self):
         return "TCGADataset"
+
+    def setup(self):
+        # read metadata
+        field_names = self.opt.data_fields.split(',')
+        datatypes = self.opt.field_datatypes.split(',')
+        self.sample = TableReader(field_names, datatypes)
+        self.cna = TableReader(field_names, datatypes)
+        self.data = None
+        wsi_replacements = {
+            'FALSE': False,
+            'TRUE': True,
+            'released': True
+        }
+        self.sample.read_singleentry_data(self.opt.wsi_tablefile, replace_dict=wsi_replacements)
+        self.sample.index_data(index=self.opt.sample_index)
+        self.cna.read_matrix_data(self.opt.cna_tablefile, yfield='Hugo_Symbol', xfield=(0, 2))
+        self.cna.index_data(index='y')
+        self.sample.data.query("is_ffpe == True", inplace=True)  # remove all slides that are not FFPE
+
+        # discard files with no ffpe and do quality control
+        self.wsi_dataset.setup(good_files=self.sample.data.index.values)
 
     def __getitem__(self, item):
         image_data = self.wsi_dataset[item]

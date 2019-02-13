@@ -24,6 +24,9 @@ class BaseDataset(data.Dataset):
     def make_subset(self, indices):
         return data.Subset(self, indices)
 
+    def setup(self):
+        pass
+
 
 # Transforms
 

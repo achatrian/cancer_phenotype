@@ -30,5 +30,11 @@ def find_deployer_using_name(deployer_name, task_name):
 def create_deployer(opt):
     deployer = find_deployer_using_name(opt.deployer_name, opt.task)
     instance = deployer(opt)
-    print('dataset [{}] was created'.format(instance.name()))
+    print('deployer [{}] was created'.format(instance.name()))
     return instance
+
+
+def get_option_setter(dataset_name, task_name):
+    dataset_class = find_deployer_using_name(dataset_name, task_name)
+    return dataset_class.modify_commandline_options
+

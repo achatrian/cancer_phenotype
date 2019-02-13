@@ -125,6 +125,11 @@ def get_time_stamp():
     return date_string
 
 
+def split_options_string(opt_string, splitter=','):
+    opts = opt_string.split(f'{splitter}')
+    return [int(opt) if str_is_int(opt) else opt for opt in opts]
+
+
 def on_cluster():
     hostname = socket.gethostname()
     match1 = re.search("jalapeno(\w\w)?.fmrib.ox.ac.uk", hostname)
@@ -288,11 +293,12 @@ def colorize(gt):
 #### pix2pix/cyclegan utils ####
 # Converts a Tensor into an image array (numpy)
 # |imtype|: the desired type of the converted numpy array
-def tensor2im(input_image, segmap=False, imtype=np.uint8):
+def tensor2im(input_image, segmap=False, num_classes=3, imtype=np.uint8):
     """
-    Takes first image in batch and converts it to tensor for visualisation purposes
+    Converts image to tensor for visualisation purposes
     :param input_image:
     :param segmap:
+    :param num_classes
     :param imtype:
     :return: image
     """
@@ -300,23 +306,24 @@ def tensor2im(input_image, segmap=False, imtype=np.uint8):
         image_tensor = input_image.data
     else:
         return input_image
-    image_numpy = image_tensor[0].cpu().float().numpy()  # taking the first image only
+    image_numpy = image_tensor.cpu().float().numpy()  # taking the first image only
     if image_numpy.shape[0] == 1:
         image_numpy = np.tile(image_numpy, (3, 1, 1))
 
     if segmap:
-        image_numpy = segmap2img(image_numpy)
+        image_numpy = segmap2img(image_numpy, num_classes=num_classes)
     else:
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
         # for segmentation maps with four classes
     return image_numpy.astype(imtype)
 
 
-def segmap2img(segmap):
+def segmap2img(segmap, num_classes=None):
     """
     color coding segmap into an image
     """
     if len(segmap.shape) > 2:
+        # multichannel segmap, one channel per class
         segmap = segmap.transpose(1, 2, 0)
         image = np.argmax(segmap, axis=2)
         if segmap.shape[2] == 4:
@@ -330,10 +337,85 @@ def segmap2img(segmap):
             image[image == 1] = 250
         else:
             raise ValueError("Conversion of map to image not supported for shape {}".format(segmap.shape))
+    elif num_classes:
+        num_labels = len(np.unique(segmap))
+        if num_labels > num_classes:
+            raise ValueError(f"More labels than classes in segmap ({num_labels} > {num_classes}")
+        if num_classes == 2:
+            segmap *= 2
+        elif num_classes == 3:
+            segmap[segmap == 1] = 200
+            segmap[segmap == 2] = 250
+        elif num_classes == 4:
+            segmap[segmap == 1] = 160
+            segmap[segmap == 2] = 200
+            segmap[segmap == 3] = 250
+        else:
+            raise NotImplementedError(f"Can't handle {num_classes} classes")
+        image = segmap
     else:
-        image = segmap * 250
+        raise ValueError('For single channel segmap, num_classes must be > 0')
     image = image[:, :, np.newaxis].repeat(3, axis=2)
     return image
+
+
+def img2segmap(gts, return_tensors=False, size=128):
+    """
+    !!! Currently only works for pix2pix version !!!
+    :param gts:
+    :param return_tensors:
+    :param size:
+    :return:
+    """
+
+    def denormalize(value):
+        # undoes normalization that is applied in pix2pix aligned dataset
+        return value * 0.5 + 0.5
+
+    gts = denormalize(gts)
+
+    if isinstance(gts, torch.Tensor):
+        gts = gts.cpu().numpy()
+    if gts.ndim == 3:
+        gts = gts.transpose(1, 2, 0)
+        gts = [gts]  # to make function work for single image too
+    else:
+        gts = gts.transpose(0, 2, 3, 1)
+
+    gt_store, label_store = [], []
+    for gt in gts:
+        if gt.shape[0:2] != (size,)*2:
+            gt = cv2.resize(gt, dsize=(size,)*2)
+        label = stats.mode(gt[np.logical_and(gt > 0, gt != 250)], axis=None)[
+            0]  # take most common class over gland excluding lumen
+        if label.size > 0:
+            label = int(label)
+            if np.isclose(label*255, 160):
+                label = 0
+            elif np.isclose(label*255, 200):
+                label = 1
+        else:
+            label = 0.5
+
+        gt[np.isclose(gt*255, 160, atol=45)] = 40/255  # to help get better map with irregularities introduced by augmentation
+
+        # Normalize as wh en training network:
+
+        gt = gt[:, :, 0]
+        gt = np.stack((np.uint8(np.logical_and(gt >= 0, gt < 35/255)),
+                       np.uint8(np.logical_and(gt >= 35/255, gt < 45/255)),
+                       np.uint8(np.logical_and(gt >= 194/255, gt < 210/255)),
+                       np.uint8(np.logical_and(gt >= 210/255, gt <= 255/255))), axis=2)
+
+        if return_tensors:
+            gt = torch.from_numpy(gt.transpose(2, 0, 1)).float()
+            label = torch.tensor(label).long()
+        gt_store.append(gt)
+        label_store.append(label)
+
+    gts = torch.stack(gt_store, dim=0) if return_tensors else np.stack(gt_store, axis=0)
+    labels = torch.stack(label_store, dim=0) if return_tensors else np.stack(label_store, axis=0)
+    return gts, labels
 
 
 def diagnose_network(net, name='network'):
@@ -391,6 +473,7 @@ def get_upsampling_weight(in_channels, out_channels, kernel_size):
     weight = np.zeros((in_channels, out_channels, kernel_size, kernel_size), dtype=np.float64)
     weight[list(range(in_channels)), list(range(out_channels)), :, :] = filt
     return torch.from_numpy(weight).float()
+
 
 class CrossEntropyLoss2d(nn.Module):
     def __init__(self, weight=None, size_average=True, ignore_index=-1):

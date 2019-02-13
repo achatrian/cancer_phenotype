@@ -33,7 +33,7 @@ class NuclearDataset(BaseDataset):
         assert self.label_files
         assert len(self.image_files) == len(self.label_files)
 
-        self.randomcrop = RandomCrop(self.opt.crop_size)
+        self.randomcrop = RandomCrop(self.opt.patch_size)
 
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
@@ -65,24 +65,24 @@ class NuclearDataset(BaseDataset):
             gt = gt[..., 0]
         gt[gt > 0] = 255
 
-        if image.shape[0:2] != (self.opt.crop_size,)*2:
-            too_narrow = image.shape[1] < self.opt.crop_size
-            too_short = image.shape[0] < self.opt.crop_size
+        if image.shape[0:2] != (self.opt.patch_size,)*2:
+            too_narrow = image.shape[1] < self.opt.patch_size
+            too_short = image.shape[0] < self.opt.patch_size
             if too_narrow or too_short:
-                delta_w = self.opt.crop_size - image.shape[1] if too_narrow else 0
-                delta_h = self.opt.crop_size - image.shape[0] if too_short else 0
+                delta_w = self.opt.patch_size - image.shape[1] if too_narrow else 0
+                delta_h = self.opt.patch_size - image.shape[0] if too_short else 0
                 top, bottom = delta_h // 2, delta_h - (delta_h // 2)
                 left, right = delta_w // 2, delta_w - (delta_w // 2)
                 image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_REFLECT)
                 gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_REFLECT)
 
-            if image.shape[0] > self.opt.crop_size or image.shape[1] > self.opt.crop_size:
+            if image.shape[0] > self.opt.patch_size or image.shape[1] > self.opt.patch_size:
                 cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
                 cat = self.randomcrop(cat)
                 image = cat[:, :, 0:3]
                 gt = cat[:, :, 3]
 
-        if self.opt.crop_size > self.opt.fine_size:
+        if self.opt.patch_size > self.opt.fine_size:
             # scale image
             sizes = (self.opt.fine_size, ) * 2
             image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)

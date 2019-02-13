@@ -26,7 +26,7 @@ def server = imageData.getServer()
 def annotations = hierarchy.getFlattenedObjectList(null).findAll {it.isAnnotation()}
 
 // Define downsample value for export resolution & output directory, creating directory if necessary
-def downsample = 1.0 // !!!! halving resolution
+def downsample = 1.0
 def pathOutput = QPEx.buildFilePath('/Volumes/A-CH-EXDISK/Projects/Project_annotate', 'masks')
 //def pathOutput = QPEx.buildFilePath(QPEx.PROJECT_BASE_DIR, 'masks')
 QPEx.mkdirs(pathOutput)

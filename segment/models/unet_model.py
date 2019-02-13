@@ -2,7 +2,7 @@ import warnings
 import numpy as np
 import torch
 from base.models.base_model import BaseModel
-import base.models.networks as base_networks
+import base.models.networks as network_utils
 from .networks import UNet
 
 
@@ -14,8 +14,10 @@ class UNetModel(BaseModel):
         self.module_names = ['']
         self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.fine_size, opt.max_multiple,
                         multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
-        self.loss_names = ['ce']
+        self.loss_names = ['ce', 'reg']
         self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='elementwise_mean')
+
+        self.reg = network_utils.RegularizationLoss()
         self.metric_names = ['acc', 'dice'] + \
                             ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             ['dice{}'.format(c) for c in range(self.opt.num_class)]
@@ -42,6 +44,7 @@ class UNetModel(BaseModel):
         parser.add_argument("--depth", type=int, default=6, help="number of down-samplings in encoder network")
         parser.add_argument("--max_multiple", type=int, default=32, help="max multiple of the given base number of filter in networks")
         parser.add_argument("--filter_multiples", type=str, default='', help="OR give multiples yourself as comma separated numbers e.g. '1,2,4' (need depth + 1 numbers)")
+        parser.add_argument("--regularizer_coeff", type=float, default=0.001)
         return parser
 
     def name(self):
@@ -54,12 +57,13 @@ class UNetModel(BaseModel):
         self.output = self.net(self.input)
         if self.target is not None:
             self.loss_ce = self.ce(self.output, self.target)
-            if self.opt.is_train:
-                warnings.warn("Empty target assigned to model", UserWarning)
+            self.loss_reg = self.reg(self.net)
+        elif self.opt.is_train:
+            warnings.warn("Empty target assigned to model", UserWarning)
 
     def backward(self):
         self.optimizers[0].zero_grad()
-        self.loss_ce.backward()
+        (self.loss_ce + self.opt.regularizer_coeff * self.loss_reg).backward()
         self.optimizers[0].step()
 
     def optimize_parameters(self):
@@ -92,7 +96,7 @@ class UNetModel(BaseModel):
             pred = output[:, c, ...].flatten()
             gt = target[:, c, ...].flatten() if target.shape[1] == output.shape[1] else (target == c).astype(np.float).flatten()
             class_acc.append(round(float(np.mean(np.array(pred.round() == gt))), 2))
-            class_dice.append(round(float(base_networks.dice_coeff(pred, gt)), 2))
+            class_dice.append(round(float(network_utils.dice_coeff(pred, gt)), 2))
         acc = float(np.mean(class_acc))
         dice = float(np.mean(class_dice))
         self.metric_acc = acc

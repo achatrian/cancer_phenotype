@@ -10,7 +10,7 @@ class InceptionModel(BaseModel):
     def __init__(self, opt):
         super().__init__(opt)
         self.opt = opt
-        self.net = Inception(opt.num_class, pretrained=True)
+        self.net = Inception(opt.num_class)
         self.loss_names = ['bce']
         self.bce = torch.nn.BCELoss(opt.loss_weight, reduction='elementwise_mean')
         self.metric_names = ['acc', 'dice'] #+ \
@@ -41,7 +41,7 @@ class InceptionModel(BaseModel):
         return parser
 
     def name(self):
-        return "ResNetModel"
+        return "InceptionModel"
 
     def forward(self):
         if self.input is None:

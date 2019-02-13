@@ -10,10 +10,12 @@ from utils.visualizer import Visualizer
 if __name__ == '__main__':
     opt = TrainOptions().parse()
     train_dataset = create_dataset(opt)
-    val_dataset = create_dataset(opt, validation_phase=True)
-
+    train_dataset.setup()  # TEMP: for datasets that require a longer set-up time, this step is not done when making options
     train_dataloader = create_dataloader(train_dataset)
-    val_dataloader = create_dataloader(val_dataset)
+    if opt.val_epoch_freq:
+        val_dataset = create_dataset(opt, validation_phase=True)
+        val_dataset.setup()
+        val_dataloader = create_dataloader(val_dataset)
     print('#training images = {:d}'.format(len(train_dataset)))
 
     model = create_model(opt)
