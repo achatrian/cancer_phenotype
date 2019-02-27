@@ -8,27 +8,31 @@ import numpy as np
 import imgaug as ia
 import warnings
 from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
-from base.utils.utils import is_pathname_valid
-
 ia.seed(1)
 
 
-class GlandSegDataset(BaseDataset):
+class AreaTilesDataset(BaseDataset):
 
     def __init__(self, opt):
         """
         Old dataset for loading gland images
         :param opt:
         """
-        super(GlandSegDataset, self).__init__()
+        super(AreaTilesDataset, self).__init__()
         self.opt = opt
         self.file_list = []
         self.label = []
         phase_dir = os.path.join(self.opt.data_dir, self.opt.phase)
         folders = [name for name in os.listdir(phase_dir) if os.path.isdir(os.path.join(phase_dir, name))]
         file_list = []
-        for file in folders:
-            file_list += glob.glob(os.path.join(phase_dir, file, 'tiles', '*_img_*.png'))
+        for folder in folders:
+            file_list += glob.glob(os.path.join(phase_dir, folder, 'tiles', '*_img_*.png'))
+        if hasattr(self.opt, 'slide_id'):
+            # If slide_id is given, remove
+            for i, file_name in reversed(list(enumerate(file_list))):
+                slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(file_name)).group()  # tested on regex101.com
+                if slide_id != self.opt.slide_id:
+                    del file_list[i]
         self.file_list = file_list
         self.label = [x.replace('_img_', '_mask_') for x in file_list]
         self.randomcrop = RandomCrop(self.opt.patch_size)
@@ -39,7 +43,7 @@ class GlandSegDataset(BaseDataset):
         return len(self.file_list)
 
     def name(self):
-        return "GlandSegDataset"
+        return "AreaTiles"
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
@@ -128,7 +132,7 @@ class GlandSegDataset(BaseDataset):
                 }
 
 
-class AugDataset(GlandSegDataset):
+class AugDataset(AreaTilesDataset):
 
     def __init__(self, dir_, aug_dir, mode, tile_size, augment=0, generated_only=False):
         super(AugDataset, self).__init__()
@@ -148,7 +152,7 @@ class AugDataset(GlandSegDataset):
         assert (len(self.file_list) > no_aug_len)
 
 
-class TestDataset(GlandSegDataset):
+class TestDataset(AreaTilesDataset):
     def __init__(self, dir_, tile_size=256, bad_folds=[]):
         super(TestDataset, self).__init__()
         if bad_folds:
