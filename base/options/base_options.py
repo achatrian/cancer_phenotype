@@ -24,7 +24,7 @@ class BaseOptions:
         parser.add_argument('--augment', type=int, default=0)
         parser.add_argument('--model', type=str, default="UNet", help="The network model that will be used")
         parser.add_argument('--eval', action='store_true', help='use eval mode during validation / test time.')
-        parser.add_argument('--num_class', type=int, default=2, help='Number of classes to classify the data into')
+        parser.add_argument('--num_class', type=int, default=3, help='Number of classes to classify the data into')
         parser.add_argument('-nf', '--num_filters', type=int, default=15, help='mcd number of filters for unet conv layers')
         parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
         parser.add_argument('--learning_rate_patience', default=50, type=int)
@@ -106,10 +106,9 @@ class BaseOptions:
             opt_file.write('\n')
 
     def parse(self):
-
         opt = self.gather_options()
         opt.is_train = self.is_train   # train or test
-
+        opt.is_apply = self.is_apply
         # check options:
         if opt.loss_weight:
             opt.loss_weight = [float(w) for w in opt.loss_weight.split(',')]
@@ -118,7 +117,6 @@ class BaseOptions:
                     len(opt.loss_weight), opt.num_class))
             else:
                 opt.loss_weight = torch.tensor(opt.loss_weight)
-
         self.print_options(opt)
         # set gpu ids
         str_ids = opt.gpu_ids.split(',')

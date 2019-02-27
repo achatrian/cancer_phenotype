@@ -1,6 +1,6 @@
 {
   "annotation_converter_test.py": true,
-  "annotation_converter_test.py::test_aida_annotation": true,
+  "annotation_converter_test.py::test_annotation_saver": true,
   "annotation_converter_test.py::test_tile_merging": true,
   "data_test.py::test_table_dataset": true
 }

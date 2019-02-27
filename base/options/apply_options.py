@@ -5,7 +5,7 @@ class ApplyOptions(BaseOptions):
     def __init__(self):
         super().__init__()
         parser = self.parser
-        parser.add_argument('--deployer_name', type=str, default='tileseg', help="Format of images onto which model is applied")
+        parser.add_argument('--deployer_name', type=str, default='annconvert', help="Deployer used to parrallise network application onto dataset")
         parser.add_argument('--aspect_ratio', type=float, default=1.0, help='aspect ratio of result images')
         parser.add_argument('--ndeploy_workers', type=int, default=1, help='num of processes used in deployment')
         parser.add_argument('--metadata_dir', type=str, default="/well/rittscher/projects/TCGA_prostate/TCGA/data/datacopy", help='Folder where spreadsheets containing metadata are')

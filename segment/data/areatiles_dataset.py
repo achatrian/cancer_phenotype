@@ -28,7 +28,7 @@ class AreaTilesDataset(BaseDataset):
         for folder in folders:
             file_list += glob.glob(os.path.join(phase_dir, folder, 'tiles', '*_img_*.png'))
         if hasattr(self.opt, 'slide_id'):
-            # If slide_id is given, remove
+            # If slide_id is given, retain only tiles for that slide
             for i, file_name in reversed(list(enumerate(file_list))):
                 slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(file_name)).group()  # tested on regex101.com
                 if slide_id != self.opt.slide_id:

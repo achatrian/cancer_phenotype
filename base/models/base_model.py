@@ -35,6 +35,9 @@ class BaseModel:
         self.optimizers = []
         self.schedulers = []
         self.nets = None
+        self.input = None
+        self.target = None
+        self.output = None
 
     def name(self):
         return 'BaseModel'
@@ -53,16 +56,15 @@ class BaseModel:
 
     def set_input(self, data):
         self.input = data['input']  # 1
-        self.target = data['target']  # 2
         self.image_paths = []
         self.image_paths.append(data['input_path'])  # and 3 must be returned by dataset
-        try:
+        if not self.opt.is_apply:
+            self.target = data['target']  # 2
             self.image_paths.append(data['target_path'])  # 4 is optional, only for when available
-        except KeyError:
-            pass  # when applying network, there is no target
         if self.opt.gpu_ids and (self.input.device.type == 'cpu' or self.target.device.type == 'cpu'):
             self.input = self.input.cuda(device=self.device)
-            self.target = self.target.cuda(device=self.device)
+            if not self.opt.is_apply:
+                self.target = self.target.cuda(device=self.device)
 
     def forward(self):
         pass
@@ -235,10 +237,9 @@ class BaseModel:
                 #state_dict = OrderedDict((key, value.cuda(device=self.device)) for key,value in state_dict.items())
                 if hasattr(state_dict, '_metadata'):
                     del state_dict._metadata
-
-                # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
-                    self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
+                # # patch InstanceNorm checkpoints prior to 0.4
+                # for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
+                #     self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
                 # if not self.opt.gpu_ids:
                 #    state_dict = {key[6:]: value for key, value in
                 #                    state_dict.items()}  # remove data_parallel's "module."

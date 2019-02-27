@@ -8,17 +8,26 @@ from datetime import datetime
 import time
 from pathlib import Path
 import multiprocessing as mp
+import queue
 import tqdm
 import numpy as np
 from scipy.misc import comb
 import cv2
 
 
-class AIDAnnotation:
+class AnnotationSaver:
     """
-    Use to create AIDA_annotation.json file for a single image/WSI that can be read by AIDA
+    Use to create AIDA annotation .json files for a single image/WSI that can be read by AIDA
     """
-    def __init__(self, slide_id, project_name, layers=(), keep_original=False):
+    @classmethod
+    def from_object(cls, obj, metadata=None):
+        instance = cls(obj['slide_id'], obj['project_name'], obj['layers'])
+        instance._obj = obj
+        if metadata:
+            instance.metadata = metadata
+        return instance
+    
+    def __init__(self, slide_id, project_name, layers=(), keep_original_paths=False):
         self.slide_id = slide_id  # AIDA uses filename before extension to determine which annotation to load
         self.project_name = project_name
         self._obj = {
@@ -30,7 +39,8 @@ class AIDAnnotation:
         self.metadata = defaultdict(lambda: {'tile_dict': [], 'dist': []})  # layer_idx -> (metadata_name -> (item_idx -> value)))
         self.last_added_item = None
         # point comparison
-        self.keep_original = keep_original
+        self.keep_original_paths = keep_original_paths
+        self.merged = False
         for layer_name in layers:
             self.add_layer(layer_name)  # this also updates self.layers with references to layers names
 
@@ -131,17 +141,17 @@ class AIDAnnotation:
         return self
 
     def merge_overlapping_segments(self, closeness_thresh=5.0, dissimilarity_thresh=4.0, max_iter=1,
-                                   parallel=True, num_workers=4):
+                                   parallel=True, num_workers=4, log_dir=''):
         """
         Compares all segments and merges overlapping ones
         """
         if parallel:
-            self.parallel_merge_overlapping_segments(closeness_thresh, dissimilarity_thresh, max_iter, num_workers)
+            self.parallel_merge_overlapping_segments(closeness_thresh, dissimilarity_thresh, max_iter, num_workers, log_dir=log_dir)
         else:
             # Set up logging
             logger = logging.getLogger(__name__)
             logger.setLevel(logging.DEBUG)
-            fh = logging.FileHandler(f'merge_segments_{datetime.now()}.log')  # logging to file for debugging
+            fh = logging.FileHandler(Path(log_dir if log_dir else '.')/f'merge_segments_{datetime.now()}.log')  # logging to file for debugging
             fh.setLevel(logging.DEBUG)
             ch = logging.StreamHandler()  # logging to console for general runtime info
             ch.setLevel(logging.DEBUG)  # if this is set to ERROR, then errors are not printed to log, and vice versa
@@ -229,10 +239,12 @@ class AIDAnnotation:
                     merged_num += len(store_items) - len(items)
                     num_iters += 1
                 if changed:
-                    logging.info(f"[Layer '{layer['name']}'] Max number of iterations reached ({num_iters})")
+                    logger.info(f"[Layer '{layer['name']}'] Max number of iterations reached ({num_iters})")
                 else:
-                    logging.info(f"[Layer '{layer['name']}'] No changes after {num_iters} iterations.")
-                logging.info(f"[Layer '{layer['name']}'] {merged_num} total merged items.")
+                    logger.info(f"[Layer '{layer['name']}'] No changes after {num_iters} iterations.")
+                logger.info(f"[Layer '{layer['name']}'] {merged_num} total merged items.")
+            self.merged = True
+            logger.info('Done!')
 
     @staticmethod
     def find_closest_points(distance, points_near, points_far, closeness_thresh=3.0):
@@ -391,11 +403,23 @@ class AIDAnnotation:
     def print(self, indent=4):
         print(json.dumps(self._obj, sort_keys=False, indent=indent))
 
-    def dump_to_json(self, save_dir, suffix_to_remove=('.ndpi', '.svs')):
-        save_path = Path(save_dir)/self.slide_id
+    def export(self):
+        """
+        Add attributes so that obj can be used to create new data annotation
+        :return:
+        """
+        obj = copy.deepcopy(self._obj)
+        obj['project_name'] = self.project_name
+        obj['slide_id'] = self.slide_id
+        obj['layer_names'] = self.layers
+        return obj, dict(self.metadata)  # defaultdict with lambda cannot be pickled
+
+    def dump_to_json(self, save_dir, suffix='', suffix_to_remove=('.ndpi', '.svs')):
+        save_path = Path(save_dir)/self.slide_id + suffix
         save_path = save_path.with_suffix('.json') if save_path.suffix in suffix_to_remove else \
             save_path.parent/(save_path.name+'.json')  # add json taking care of file ending in .some_text.[ext,no_ext]
-        json.dump(self._obj, open(save_path, 'w'))
+        obj, _ = self.export()
+        json.dump(obj, open(save_path, 'w'))
 
     def get_layer_points(self, layer_idx, contour_format=False):
         if isinstance(layer_idx, str):
@@ -408,14 +432,14 @@ class AIDAnnotation:
         return layer_points, layer['name']
 
     def parallel_merge_overlapping_segments(self, closeness_thresh=5.0, dissimilarity_thresh=4.0, max_iter=1,
-                                            num_workers=4):
+                                            num_workers=4, log_dir=''):
         """
         Compares all segments and merges overlapping ones
         """
         # Set up logging
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.DEBUG)
-        fh = logging.FileHandler(f'logs/merge_items_{datetime.now()}.log')  # logging to file for debugging
+        fh = logging.FileHandler(Path(log_dir if log_dir else '.')/f'merge_segments_{datetime.now()}.log')  # logging to file for debugging
         fh.setLevel(logging.DEBUG)
         ch = logging.StreamHandler()  # logging to console for general runtime info
         ch.setLevel(logging.DEBUG)  # if this is set to ERROR, then errors are not printed to log, and vice versa
@@ -424,18 +448,13 @@ class AIDAnnotation:
         ch.setFormatter(formatter)
         logger.addHandler(fh)
         logger.addHandler(ch)
-        Funcs = namedtuple('Funcs', ('euclidean_dist',
-                                     'check_relative_rect_positions',
-                                     'item_points',
-                                     'remove_overlapping_points',
-                                     'get_merged',
-                                     'find_closest_points'))
         funcs = Funcs(euclidean_dist=self.euclidean_dist,
                       check_relative_rect_positions=self.check_relative_rect_positions,
                       item_points=self.item_points,
                       remove_overlapping_points=self.remove_overlapping_points,
                       get_merged=self.get_merged,
                       find_closest_points=self.find_closest_points)  # to use functions in subprocess
+        timeout = 10
         logger.info("Begin segment merging ...")
         layer_time = 0.0
         for r, layer in enumerate(self._obj['layers']):
@@ -443,7 +462,7 @@ class AIDAnnotation:
             num_iters = 0
             items = layer['items']
             logger.info(f"[Layer '{layer['name']}'] Initial number of items is {len(items)}.")
-            merged_num = 0  # keep count of change in elements number
+            merged_num, num_put_to_process = 0, 0  # keep count of change in elements number
             layer_start_time = time.time()
             iter_time = 0.0
             while changed and num_iters < max_iter:
@@ -458,9 +477,9 @@ class AIDAnnotation:
                 to_remove, remove_head = mp.Array('i', len(store_items)), mp.Value('i')  # store indices so that cycle is not repeated if either item has already been removed / discarded
                 for i in range(len(store_items)):
                     to_remove[i] = -1
-                combinations_num = comb(N=len(store_items), k=2)
-                input_queue = mp.JoinableQueue(num_workers)
-                output_queue = mp.Queue(num_workers)  # no need to join
+                combinations_num = int(comb(N=len(store_items), k=2))
+                input_queue = mp.JoinableQueue(num_workers * 2)
+                output_queue = mp.Queue(500)  # no need to join
                 # start processes
                 processes = tuple(ItemMerger(i, closeness_thresh, dissimilarity_thresh, input_queue, output_queue,
                                         to_remove, remove_head, funcs).start() for i in range(num_workers))
@@ -474,34 +493,54 @@ class AIDAnnotation:
                         raise KeyError(f"{keyerr.args[0]} - Unspecified metadata for layer {layer['name']}")
                     except IndexError:
                         raise IndexError(f"Item {i if i > j else j} is missing from layer {layer['name']} metadata")
-                    input_queue.put(((i, item0), (j, item1), (tile_rect0, tile_rect1)))
+                    input_queue.put(((i, item0), (j, item1), (tile_rect0, tile_rect1)), timeout=timeout)
+                    if num_put_to_process % 500 == 0:
+                        logger.info(f"Items pairs: {num_put_to_process}/{combinations_num} queued - {sum(rm > -1 for rm in to_remove)} to merge")
+                    num_put_to_process += 1
                 for i in range(num_workers):
                     input_queue.put(None)  # put sentinel for processes to know when to stop
 
                 input_queue.join()
 
+                sentinel_count = 0
                 while not output_queue.empty():  # will probably be empty when this point is reached !
-                    data = output_queue.get()
+                    data = output_queue.get(timeout=timeout)
+                    if data is None:
+                        sentinel_count += 1
+                        if sentinel_count == num_workers:
+                            break
+                        else:
+                            continue
                     (i, j), outer_points, (x_out, y_out, w_out, h_out) = data
                     self.add_item(layer['name'], items[i]['type'], class_=items[i]['class'], points=outer_points,
                                   tile_rect=(x_out, y_out, w_out, h_out))
-
                 for item_idx in sorted(to_remove, reverse=True):  # remove items that were merged - must start from last index or will return error
                     # noinspection PyBroadException
                     try:
                         self.remove_item(layer['name'], item_idx)
                     except Exception:
-                        logging.error(f"Failed to remove item {item_idx} in layer {layer['name']}", exc_info=True)
+                        logger.error(f"Failed to remove item {item_idx} in layer {layer['name']}", exc_info=True)
                 changed = items != store_items
                 merged_num += len(store_items) - len(items)
                 num_iters += 1
                 iter_time = iter_time + (time.time() - iter_start_time - iter_time) / num_iters
             if changed:
-                logging.info(f"[Layer '{layer['name']}'] Max number of iterations reached ({num_iters})")
+                logger.info(f"[Layer '{layer['name']}'] Max number of iterations reached ({num_iters})")
             else:
-                logging.info(f"[Layer '{layer['name']}'] No changes after {num_iters} iterations.")
+                logger.info(f"[Layer '{layer['name']}'] No changes after {num_iters} iterations.")
             layer_time = iter_time + (time.time() - layer_start_time - layer_time) / (r + 1)
-            logging.info(f"[Layer '{layer['name']}'] {merged_num} total merged items in {layer_time:.2f}s.")
+            logger.info(f"[Layer '{layer['name']}'] {merged_num} total merged items in {layer_time:.2f}s.")
+        self.merged = True
+        logger.info("Done!")
+
+
+# to be pickled, classes must be top level objects
+Funcs = namedtuple('Funcs', ('euclidean_dist',
+                             'check_relative_rect_positions',
+                             'item_points',
+                             'remove_overlapping_points',
+                             'get_merged',
+                             'find_closest_points'))
 
 
 class ItemMerger(mp.Process):
@@ -528,6 +567,7 @@ class ItemMerger(mp.Process):
         self.to_remove = to_remove
         self.remove_head = remove_head
         self.f = funcs  # namedtuple with all the required functions. Functions can be called with . operator.
+        self.timeout = 10
 
     def run(self):
         logger = logging.getLogger(__name__)
@@ -535,7 +575,11 @@ class ItemMerger(mp.Process):
         merged_items = 0
         mean_merge_time = 0
         while True:
-            data = self.input_queue.get()
+            try:
+                data = self.input_queue.get(timeout=self.timeout)
+            except queue.Empty:
+                logger.error(f"{self.timeout} exceeded when waiting to get item from queue.")
+                raise
             if data is None:
                 self.input_queue.task_done()
                 break
@@ -601,6 +645,8 @@ class ItemMerger(mp.Process):
                 """)
                 logger.error('Failed.', exc_info=True)
             self.input_queue.task_done()  # signal to queue that items have been processed
+        self.output_queue.put(None)  # sentinel for breaking out of queue-get loop
+        self.output_queue.close()
         logger.info(f"Terminating process {self.id_} | mean merge time: {mean_merge_time:.2f}s total #merged: {merged_items}")
 
 # @staticmethod

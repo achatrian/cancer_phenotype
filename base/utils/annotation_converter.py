@@ -8,6 +8,8 @@ from itertools import cycle
 import copy
 import numpy as np
 from scipy.stats import mode
+from scipy.ndimage import morphology
+import skimage.morphology
 import cv2
 from base.utils import utils  # TODO move tensor2img to object in order to remove this dependency
 
@@ -18,7 +20,7 @@ class AnnotationConverter:
     """
 
     def __init__(self, dist_threshold=0.1, value_hier=(0, (160, 200), 250), min_contour_area=3000,
-                 label_value_map=None, label_interval_map=None):
+                 label_value_map=None, label_interval_map=None, fix_ambiguity=True):
         """
         :param dist_threshold:
         :param value_hier:
@@ -26,8 +28,8 @@ class AnnotationConverter:
         self.dist_threshold = dist_threshold
         self.value_hier = value_hier
         self.min_contour_area = min_contour_area  # use to determine whether to use child contour and to keep contour in the end
-        self.remove_ambiguous = False
-        self.by_overlap = False
+        self.fix_ambiguity = fix_ambiguity
+        self.by_overlap = False  # option to use bounding boxes to deal with overlapping contours - for deprecated mask_to_contours_all_classes
         self.label_value_map = label_value_map or {
                 'epithelium': 200,
                 'lumen': 250,
@@ -59,8 +61,8 @@ class AnnotationConverter:
             if value == self.label_value_map['background']:
                 continue  # don't extract contours for background
             value_binary_mask = self.threshold_by_value(value, mask)
-            if self.remove_ambiguous:
-                value_binary_mask = self.remove_ambiguity(value_binary_mask)  # makes small glands very small
+            if self.fix_ambiguity:
+                value_binary_mask = self.remove_ambiguity(value_binary_mask, self.dist_threshold)  # makes small glands very small
             _, value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
             value_labels = [value] * len(value_contours)
             contours.extend(value_contours)
@@ -94,8 +96,8 @@ class AnnotationConverter:
         mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes)  # transforms tensors into mask label image
         if mask.ndim == 3:
             mask = mask[..., 0]
-        if self.remove_ambiguous:
-            mask = self.remove_ambiguity(mask)  # makes small glands very small
+        if self.fix_ambiguity:
+            mask = self.remove_ambiguity(mask, self.dist_threshold)  # makes small glands very small
         binary_mask = self.binarize(mask)
         # find contours
         _, contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE, contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
@@ -326,16 +328,18 @@ class AnnotationConverter:
                 y0 <= y1 <= y_h0 and
                 y0 <= y_h1 <= y_h0)
 
-    def remove_ambiguity(self, mask):
+    @staticmethod
+    def remove_ambiguity(mask, dist_threshold=2.0, small_area_factor=0.4):
         """
         Takes HxWx3 image with identical channels, or HxW image
         :param mask:
+        :param dist_threshold: multiplied by mode of peaks in distance transform -- e,g, 2.0 is twofold the average peak
+        :param small_area_factor:
         :return:
         """
-        # TODO - test me - currently not used
         mask = copy.deepcopy(mask)
         if mask.ndim == 3:
-            mask_1c = mask[..., 0]
+            mask_1c = mask[..., 0]  # need to keep original mask as watershed wants 3 channels image
         else:
             mask_1c = mask
             mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
@@ -346,7 +350,15 @@ class AnnotationConverter:
         refined_bg = cv2.dilate(opening, kernel, iterations=3)
         # refine foreground area
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        ret, refined_fg = cv2.threshold(dist_transform, self.dist_threshold * dist_transform.max(), 255, 0)
+        # get mode of maxima in image, to use as reference for threshold (more invariant than absolute max in tile)
+        maxima = skimage.morphology.local_maxima(dist_transform, indices=True)
+        maxima = np.stack(maxima, axis=0).T
+        values_at_maxima = np.array(list(dist_transform[y, x] for y, x in maxima))
+        mode_of_maxima = mode(values_at_maxima)[0]
+        mode_of_maxima = mode_of_maxima.item(0) if mode_of_maxima.size > 0 else 255
+        # threshold using distance transform
+        ret, refined_fg = cv2.threshold(dist_transform,
+                                        min(dist_threshold * mode_of_maxima, 0.1 * dist_transform.max()), 255, 0)
         refined_fg = np.uint8(refined_fg)
         # finding unknown region
         unknown = cv2.subtract(refined_bg, refined_fg)
@@ -360,7 +372,11 @@ class AnnotationConverter:
         # threshold out boundaries and background (-1 and 0 respectively)
         markers = cv2.morphologyEx(cv2.medianBlur(markers.astype(np.uint8), 3), cv2.MORPH_OPEN, kernel, iterations=2)
         unambiguous = np.uint8(cv2.medianBlur(markers.astype(np.uint8), 3) > 1) * 255
-        return unambiguous
+        # filled holes if any in larger objects
+        unambiguous = morphology.binary_fill_holes(unambiguous)
+        # remove small objects
+        unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=mask.shape[0] * small_area_factor)
+        return unambiguous.astype(np.uint8)
 
     def value2label(self, value):
         label = None

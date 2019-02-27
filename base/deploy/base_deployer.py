@@ -10,6 +10,8 @@ class BaseDeployer(mp.Process):
         super(BaseDeployer, self).__init__()
         self.opt = opt
         self.worker_gpu_ids = None
+        mp.set_sharing_strategy('file_system')  # https://github.com/pytorch/pytorch/issues/973#issuecomment-426559250
+        self.worker_name = ''  # name given to workers
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -27,16 +29,17 @@ class BaseDeployer(mp.Process):
         return "BaseDeployer"
 
     @contextmanager
-    def queue_env(self):
+    def queue_env(self, sentinel=True):
         # __enter__
         queue = mp.JoinableQueue(2 * min(self.opt.ndeploy_workers, 1))
         yield queue
         # __exit__
-        for i in range(min(self.opt.ndeploy_workers, 1)):
-            queue.put(None)  # workers terminate as they read the None
+        if sentinel:
+            for i in range(self.opt.ndeploy_workers):
+                queue.put(None)  # sentinel for workers to terminate
         queue.join()
 
-    def get_workers(self, model, queue):
+    def get_workers(self, model, input_queue, output_queue=None, sync=()):
         """
         Give different splits of the data to different workers
         :return:
@@ -54,10 +57,13 @@ class BaseDeployer(mp.Process):
         for i in range(self.opt.ndeploy_workers):
             opt = copy.copy(self.opt)
             opt.gpu_ids = self.worker_gpu_ids[i]
-            args = (i, opt, model, queue)
-            worker = mp.Process(target=self.run_worker,
-                                args=args)
+            args = (i, opt, model, input_queue, output_queue)
+            worker = mp.Process(target=self.run_worker, args=args, name=self.worker_name + 'Worker', daemon=True)
             workers.append(worker)
+
+        # optional gather-worker to process outputs of workers
+        gatherer = mp.Process(target=self.gather, args=(self, output_queue, sync), name=self.worker_name + 'Gatherer', daemon=False)
+        workers.append(gatherer)
         return workers
 
     @staticmethod
@@ -70,11 +76,20 @@ class BaseDeployer(mp.Process):
         pass
 
     @staticmethod
-    def gather(output_queue):
+    def gather(deployer, output_queue, sync=()):
         """
-        ABSTRACT METHOD: called on output queue once data has been pushed to input queue
+        Abstract method to gather and process outputs of workers (separate process that runs with workers)
+        :param sync
+        :param deployer
+        :param output_queue:
         """
         pass
+
+    def cleanup(self, output):
+        """
+        Abstract method, called to process all data at end (main process)
+        :return:
+        """
 
 
 
