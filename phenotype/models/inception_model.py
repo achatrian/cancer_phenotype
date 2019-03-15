@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import torch
 from base.models.base_model import BaseModel
 from .networks import Inception
@@ -12,7 +13,7 @@ class InceptionModel(BaseModel):
         self.opt = opt
         self.net = Inception(opt.num_class)
         self.loss_names = ['bce']
-        self.bce = torch.nn.BCELoss(opt.loss_weight, reduction='elementwise_mean')
+        self.bce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.metric_names = ['acc', 'dice'] #+ \
                             # ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             # ['dice{}'.format(c) for c in range(self.opt.num_class)]
@@ -69,7 +70,7 @@ class InceptionModel(BaseModel):
     def evaluate_parameters(self):
         EPS = 0.01
         target = self.target.detach().cpu().numpy()
-        output = self.output.detach().cpu().numpy()
+        output = torch.nn.functional.softmax(self.output, dim=1).max(1)[1].detach().cpu().numpy().astype(target.dtype)
         cm = confusion_matrix(target, output)
         # C0 = C.copy().fill_diagonal(np.zeros(C.shape[0]))
         d = cm.diagonal()

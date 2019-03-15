@@ -1,12 +1,12 @@
 import re
 from pathlib import Path
 import imageio
-from base.utils.annotation_converter import AnnotationConverter
-from base.utils.annotation_saver import AnnotationSaver
+from base.utils.mask_converter import MaskConverter
+from base.utils.annotation_builder import AnnotationBuilder
 
-converter = AnnotationConverter(min_contour_area=50000)
-aida_ann = AnnotationSaver('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
-                           ['epithelium', 'lumen', 'background'])
+converter = MaskConverter(min_contour_area=50000)
+aida_ann = AnnotationBuilder('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
+                             ['epithelium', 'lumen', 'background'])
 # extract offset coords from tile name
 coords_pattern = '\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_mask_(\w{1,6}),(\w{1,6})'
 tile_path0 = '/Users/andreachatrian/Documents/Temp/Data/cancer_phenotype/Dataset/train/17_A047-4463_153D+-+2017-05-11+09.40.22_TissueTrain_(1.00,30774,15012,3897,4556)/tiles/17_A047-4463_153D+-+2017-05-11+09.40.22_TissueTrain_(1.00,30774,15012,3897,4556)_mask_1,2049.png'

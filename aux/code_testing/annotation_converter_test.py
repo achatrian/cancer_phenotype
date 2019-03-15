@@ -2,8 +2,8 @@ import re
 from pathlib import Path
 import pytest
 import imageio
-from base.utils.annotation_converter import AnnotationConverter
-from base.utils.annotation_saver import AnnotationSaver
+from base.utils.mask_converter import MaskConverter
+from base.utils.annotation_builder import AnnotationBuilder
 
 
 @pytest.fixture
@@ -19,19 +19,19 @@ def tile_paths():
     return list(str(path) for path in Path(tile_dir_path).iterdir() if '_mask_' in str(path))
 
 
-def test_annotation_converter(mask):
-    converter = AnnotationConverter()
+def test_mask_converter(mask):
+    converter = MaskConverter()
     converter.by_overlap = False
     contours, labels, boxes = converter.mask_to_contour(mask)
     assert contours
 
 
-def test_annotation_saver(mask):
-    converter = AnnotationConverter()
+def test_annotation_builder(mask):
+    converter = MaskConverter()
     converter.by_overlap = False
     contours, labels, boxes = converter.mask_to_contour(mask)
-    aida_ann = AnnotationSaver('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
-                               ['epithelium', 'lumen', 'background'])
+    aida_ann = AnnotationBuilder('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
+                                 ['epithelium', 'lumen', 'background'])
     aida_ann_dir = '/Users/andreachatrian/Documents/Repositories/AIDA/dist/data/annotations'
     for contour, label, box in zip(contours, labels, boxes):
         aida_ann.add_item(label, 'path', tile_rect=box)
@@ -42,9 +42,9 @@ def test_annotation_saver(mask):
 
 
 def test_tile_merging(tile_paths):
-    converter = AnnotationConverter()
-    aida_ann = AnnotationSaver('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
-                               ['epithelium', 'lumen', 'background'])
+    converter = MaskConverter()
+    aida_ann = AnnotationBuilder('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',
+                                 ['epithelium', 'lumen', 'background'])
     # extract offset coords from tile name
     coords_pattern = '\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_mask_(\w{1,6}),(\w{1,6})'
     for tile_path in tile_paths[0:1]:

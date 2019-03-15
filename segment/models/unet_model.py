@@ -14,10 +14,10 @@ class UNetModel(BaseModel):
         self.module_names = ['']
         self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.fine_size, opt.max_multiple,
                         multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
-        self.loss_names = ['ce', 'reg']
-        self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='elementwise_mean')
-
+        self.loss_names = ['ce', 'reg'] if self.opt.regularizer_coeff else ['ce']
+        self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.reg = network_utils.RegularizationLoss()
+        self.loss_reg, self.loss_ce = None, None
         self.metric_names = ['acc', 'dice'] + \
                             ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             ['dice{}'.format(c) for c in range(self.opt.num_class)]
@@ -44,11 +44,18 @@ class UNetModel(BaseModel):
         parser.add_argument("--depth", type=int, default=6, help="number of down-samplings in encoder network")
         parser.add_argument("--max_multiple", type=int, default=32, help="max multiple of the given base number of filter in networks")
         parser.add_argument("--filter_multiples", type=str, default='', help="OR give multiples yourself as comma separated numbers e.g. '1,2,4' (need depth + 1 numbers)")
-        parser.add_argument("--regularizer_coeff", type=float, default=0.001)
+        parser.add_argument("--regularizer_coeff", type=float, default=0)
         return parser
 
     def name(self):
         return "UNetModel"
+
+    def set_input(self, data):
+        super().set_input(data)
+        self.visual_paths = {'input': data['input_path'],
+                             'output': [''] * len(data['input_path'])}  # and 3 must be returned by dataset
+        if not self.opt.is_apply:
+            self.visual_paths['target'] = data['target_path']  # 4 is optional, only for when available
 
     def forward(self):
         # use set_input() to assign input to model
@@ -57,13 +64,17 @@ class UNetModel(BaseModel):
         self.output = self.net(self.input)
         if self.target is not None:
             self.loss_ce = self.ce(self.output, self.target)
-            self.loss_reg = self.reg(self.net)
+            if self.opt.regularizer_coeff:
+                self.loss_reg = self.reg(self.net) * self.opt.regularizer_coeff
         elif self.opt.is_train:
             warnings.warn("Empty target assigned to model", UserWarning)
 
     def backward(self):
         self.optimizers[0].zero_grad()
-        (self.loss_ce + self.opt.regularizer_coeff * self.loss_reg).backward()
+        if self.opt.regularizer_coeff:
+            (self.loss_ce + self.loss_reg).backward()
+        else:
+            self.loss_ce.backward()
         self.optimizers[0].step()
 
     def optimize_parameters(self):

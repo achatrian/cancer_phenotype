@@ -1,4 +1,6 @@
 import os
+import argparse
+import sys
 from pathlib import Path
 import re
 import warnings
@@ -10,29 +12,10 @@ import numpy as np
 import cv2
 from skimage.morphology import remove_small_objects
 import imageio
-from base.utils import utils
+import utils
 
 
 class WSIReader(OpenSlide):
-
-    @staticmethod
-    def save_quality_control_to_json(opt, files):
-        to_json = {}
-        for file in files:
-            name_ext = re.sub('\.(ndpi|svs)', '.tsv', os.path.basename(file))  # change extension
-            slide_loc_path = (Path(opt.data_dir) / 'data' / 'quality_control' / name_ext).__str__()
-            with open(slide_loc_path, 'r') as slide_loc_file:
-                reader = csv.reader(slide_loc_file, delimiter='\t')
-                slide_qc = {loc: info for loc, info in reader}
-            to_json[name_ext.split('.')[0]] = slide_qc  # can't have periods in JSON keys
-        to_json = [{'wsi_read_level': opt.wsi_read_level,
-                    'check_tile_blur': opt.check_tile_blur,
-                    'check_tile_fold': opt.check_tile_fold,
-                    'patch_size': opt.patch_size},
-                   to_json]
-        json.dump(to_json, open(Path(opt.data_dir) / 'data' / 'quality_control' / 'qc_{}.json'.format(
-            datetime.datetime.now().__str__().split(' ')[0]
-        ), 'w'))
 
     def __init__(self, opt, file_name):
         super(WSIReader, self).__init__(file_name)
@@ -62,6 +45,25 @@ class WSIReader(OpenSlide):
             np.absolute(np.array(self.level_downsamples) * mpp_y - self.opt.qc_mpp))
         assert best_level_qc_x == best_level_qc_y; "This should be the same, unless pixel has different side lengths"
         self.qc_read_level = int(best_level_qc_x)
+
+    @staticmethod
+    def save_quality_control_to_json(opt, files):
+        to_json = {}
+        for file in files:
+            name_ext = re.sub('\.(ndpi|svs)', '.tsv', os.path.basename(file))  # change extension
+            slide_loc_path = (Path(opt.data_dir) / 'data' / 'quality_control' / name_ext).__str__()
+            with open(slide_loc_path, 'r') as slide_loc_file:
+                reader = csv.reader(slide_loc_file, delimiter='\t')
+                slide_qc = {loc: info for loc, info in reader}
+            to_json[name_ext.split('.')[0]] = slide_qc  # can't have periods in JSON keys
+        to_json = [{'qc_mpp': opt.qc_mpp,
+                    'check_tile_blur': opt.check_tile_blur,
+                    'check_tile_fold': opt.check_tile_fold,
+                    'patch_size': opt.patch_size},
+                   to_json]
+        json.dump(to_json, open(Path(opt.data_dir) / 'data' / 'quality_control' / 'qc_{}.json'.format(
+            datetime.datetime.now().__str__().split(' ')[0]
+        ), 'w'))
 
     def save_locations(self):
         """
@@ -202,6 +204,22 @@ def is_blurred(image):
 
 def is_folded(image):
     return False
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
+    parser.add_argument('--qc_mpp', default=1.0, type=float, help="MPP value to perform quality control on slide")
+    parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
+    parser.add_argument('--data_dir', default=str, help="Dir where to save qc result")
+    parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
+    parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
+
+    slide_path = Path(sys.argv[1])
+    if not slide_path.is_file():
+        raise ValueError(f"Invalid file input {str(slide_path)}")
+
+
+
 
 
 

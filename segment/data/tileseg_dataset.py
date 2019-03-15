@@ -51,6 +51,16 @@ class TileSegDataset(BaseDataset):
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
         self.read_resolution_data = True  # used to skip looking for resolution file
+        self.label_interval_map = {
+            'epithelium': (31, 225),
+            'lumen': (225, 250),
+            'background': (0, 30)
+        }
+        self.label_value_map = {
+            'epithelium': 200,
+            'lumen': 250,
+            'background': 0
+        }
 
     def __len__(self):
         return len(self.paths)
@@ -63,11 +73,11 @@ class TileSegDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
+        parser.add_argument('--slide_id', type=str, default='', help="If a slide id is specified, only tiles from that slide are read by the dataset")
         parser.add_argument('--load_ground_truth', action='store_true', help="Whether to attemp to load ground truth masks for the tiles")
         parser.add_argument('--one_class', action='store_true', help="Whether the dataset should merge all the labels into a background vs objects problem")
         parser.add_argument('--split_file', type=str, default='', help="File containing data division in train - test split")
         parser.add_argument('--image_glob_pattern', type=str, default='*_*.png', help='Pattern used to find images in each WSI / region folder')
-        parser.add_argument('--coords_pattern', type=str, default='\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})')
         parser.add_argument('--area_based_input', action='store_true', help="For compatibility with first experiment, if true coords of tiles are relative to area they were extracted from")
         return parser
 
@@ -131,7 +141,9 @@ class TileSegDataset(BaseDataset):
         :param image_path:
         :return:
         """
-        coords_info = re.search(self.opt.coords_pattern, image_path.name).groups()  # tuple with all matched groups
+        coords_info = re.search(
+            '\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})',
+            image_path.name).groups()  # tuple with all matched groups
         downsample = float(coords_info[0])  # downsample is a float
         area_x, area_y, area_w, area_h, tile_x, tile_y = tuple(int(num) for num in coords_info[1:])
         coords_info = {'downsample': downsample,
@@ -182,7 +194,7 @@ class TileSegDataset(BaseDataset):
                 gt[gt < 255] = 0
                 gt[gt != 0] = 1
             else:
-                bg_thresh, lumen_thresh = 30, 225
+                bg_thresh, lumen_thresh = self.label_interval_map['background'][1], self.label_interval_map['lumen'][1]
                 gt[np.logical_and(gt < lumen_thresh, gt > bg_thresh)] = 1
                 gt[gt >= bg_thresh] = 2
                 gt[np.logical_and(gt != 1, gt != 2)] = 0

@@ -14,7 +14,7 @@ import cv2
 from base.utils import utils  # TODO move tensor2img to object in order to remove this dependency
 
 
-class AnnotationConverter:
+class MaskConverter:
     """
     Class used to convert ground truth annotation to paths / contours in different
     """
@@ -36,24 +36,26 @@ class AnnotationConverter:
                 'background': 0
             }
         self.label_interval_map = label_interval_map or {
-            'epithelium': (1, 225),
+            'epithelium': (31, 225),
             'lumen': (225, 250),
-            'background': (0, 0)
+            'background': (0, 30)
         }
         assert set(self.label_value_map.keys()) == set(self.label_interval_map.keys()), 'inconsistent annotation classes'
         assert all(isinstance(t, tuple) and len(t) == 2 and t[0] <= t[1] for t in self.label_interval_map.values())
         self.num_classes = len(self.label_value_map)
 
-    def mask_to_contour(self, mask, x_offset=0, y_offset=0):
+    def mask_to_contour(self, mask, x_offset=0, y_offset=0, rescale_factor=2.0):
         """
         Extracts the contours one class at a time
         :param mask:
         :param x_offset:
         :param y_offset:
+        :param rescale_factor: rescale image before extracting contours - in case image was shrunk before being fed to segmenation network
         :return:
         """
-        mask = utils.tensor2im(mask, segmap=True,
-                               num_classes=self.num_classes)  # transforms tensors into mask label image
+        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label image
+        if rescale_factor:
+            mask = cv2.resize(mask.astype(np.uint8), dsize=None, fx=rescale_factor, fy=rescale_factor, interpolation=cv2.INTER_NEAREST)
         if mask.ndim == 3:
             mask = mask[..., 0]
         contours, labels = [], []
@@ -63,7 +65,10 @@ class AnnotationConverter:
             value_binary_mask = self.threshold_by_value(value, mask)
             if self.fix_ambiguity:
                 value_binary_mask = self.remove_ambiguity(value_binary_mask, self.dist_threshold)  # makes small glands very small
-            _, value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            if int(cv2.__version__.split('.')[0]) == 3:
+                _, value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+            else:
+                value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
             value_labels = [value] * len(value_contours)
             contours.extend(value_contours)
             labels.extend(value_labels)
@@ -75,6 +80,7 @@ class AnnotationConverter:
             is_good = labels[i] is not None and contour.shape[0] > 2 and \
                       cv2.contourArea(contour) > self.min_contour_area
             if is_good:
+                x_offset, y_offset = int(x_offset), int(y_offset)
                 bounding_box = list(cv2.boundingRect(contour))
                 bounding_box[0] += x_offset
                 bounding_box[1] += y_offset
@@ -93,14 +99,18 @@ class AnnotationConverter:
         :param contour_approx_method: standard is method that yields the lowest number of points
         :return: contours of objects in image
         """
-        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes)  # transforms tensors into mask label image
+        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label image
         if mask.ndim == 3:
             mask = mask[..., 0]
         if self.fix_ambiguity:
             mask = self.remove_ambiguity(mask, self.dist_threshold)  # makes small glands very small
         binary_mask = self.binarize(mask)
         # find contours
-        _, contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE, contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
+        if int(cv2.__version__.split('.')[0]) == 3:
+            _, contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE, contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
+        else:
+            contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE,
+                                                   contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
         labels = self.get_contour_labels_by_overlap(mask, contours) if self.by_overlap \
             else self.get_contours_labels(mask, contours, hierarchy)
         assert len(contours) == len(labels)
@@ -393,6 +403,21 @@ class AnnotationConverter:
 
     def label2value(self, label):
         return self.label_value_map[label]
+
+    @staticmethod
+    def contour_to_mask(contour, value=255, shape=()):
+        """
+        Convert a contour to the corresponding max - mask is
+        :param contour:
+        :param value:
+        :param shape:
+        :return:
+        """
+        if not shape:
+            shape = (contour.max(0) - contour.min(0), contour.max(1) - contour.min(1))  # dimension of contour
+        mask = np.ones(shape)
+        cv2.drawContours(mask, [contour], -1, value, thickness=-1)  # thickness=-1 fills the entire area inside
+        return mask
 
 
 # class PaperJSPathEmulator:

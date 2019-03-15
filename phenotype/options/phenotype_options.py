@@ -10,3 +10,4 @@ class PhenotypeOptions(TaskOptions):
         self.parser.add_argument('--model', type=str, default="Inception", help="The network model that will be used")
         self.parser.add_argument('--dataset_name', type=str, default="tilepheno")
         self.parser.add_argument('--data_dir', type=str, default='')
+        self.parser.add_argument('--num_class', type=int, default=2)  # addition / deletion of gene

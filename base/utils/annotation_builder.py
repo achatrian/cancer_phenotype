@@ -1,6 +1,7 @@
 import json
 import math
 import copy
+import warnings
 from collections import defaultdict, OrderedDict, namedtuple
 from itertools import combinations, product, chain
 import logging
@@ -15,16 +16,18 @@ from scipy.misc import comb
 import cv2
 
 
-class AnnotationSaver:
+class AnnotationBuilder:
     """
     Use to create AIDA annotation .json files for a single image/WSI that can be read by AIDA
     """
     @classmethod
-    def from_object(cls, obj, metadata=None):
-        instance = cls(obj['slide_id'], obj['project_name'], obj['layers'])
+    def from_object(cls, obj):
+        instance = cls(obj['slide_id'], obj['project_name'], obj['layer_names'])
         instance._obj = obj
-        if metadata:
-            instance.metadata = metadata
+        try:
+            instance.metadata = obj['metadata']
+        except KeyError:
+            warnings.warn(f"No available metadata for {obj['slide_id']}")
         return instance
     
     def __init__(self, slide_id, project_name, layers=(), keep_original_paths=False):
@@ -40,7 +43,7 @@ class AnnotationSaver:
         self.last_added_item = None
         # point comparison
         self.keep_original_paths = keep_original_paths
-        self.merged = False
+        self.merged = False  # if merge_overlapping_segments() is called and successfully completed, merged is turned to true
         for layer_name in layers:
             self.add_layer(layer_name)  # this also updates self.layers with references to layers names
 
@@ -56,8 +59,8 @@ class AnnotationSaver:
     def __setitem__(self, idx, value):
         self._obj['layers'][idx] = value
 
-    def has_layers(self):
-        return bool(self._obj['layers'])
+    def num_layers(self):
+        return len(self._obj['layers'])
 
     def layer_has_items(self, layer_idx):
         if type(layer_idx) is str:
@@ -354,7 +357,7 @@ class AnnotationSaver:
                             * vertical: topmost box
                             * overlap: topmost box
                             * '': None
-                 rect_areas: are of the bounding boxes
+                 rect_areas: areas of the bounding boxes
         """
         x0, y0, w0, h0 = tile_rect0
         x1, y1, w1, h1 = tile_rect1
@@ -414,25 +417,33 @@ class AnnotationSaver:
         obj['layer_names'] = self.layers
         return obj, dict(self.metadata)  # defaultdict with lambda cannot be pickled
 
-    def dump_to_json(self, save_dir, suffix='', suffix_to_remove=('.ndpi', '.svs')):
-        save_path = Path(save_dir)/self.slide_id + suffix
+    def dump_to_json(self, save_dir, name='', suffix_to_remove=('.ndpi', '.svs')):
+        save_path = Path(save_dir)/self.slide_id
         save_path = save_path.with_suffix('.json') if save_path.suffix in suffix_to_remove else \
-            save_path.parent/(save_path.name+'.json')  # add json taking care of file ending in .some_text.[ext,no_ext]
-        obj, _ = self.export()
+            save_path.parent/(save_path.name +'.json')  # add json taking care of file ending in .some_text.[ext,no_ext]
+        if name:
+            save_path = str(save_path)[:-5] + '_' + name + '.json'
+        obj, metadata = self.export()
+        obj['metadata'] = metadata
+        obj['merged'] = self.merged
         json.dump(obj, open(save_path, 'w'))
 
     def get_layer_points(self, layer_idx, contour_format=False):
+        """Get all paths in a given layer, function used to extract layer from annotation object"""
         if isinstance(layer_idx, str):
             layer_idx = self.get_layer_idx(layer_idx)
         layer = self._obj['layers'][layer_idx]
         if contour_format:
-            layer_points = list(np.array(list(self.item_points(item)))[:, np.newaxis, :] for item in layer['items'])
+            layer_points = list(
+                np.array(list(self.item_points(item))).astype(np.int32)[:, np.newaxis, :]  # contour functions only work on int32
+                if item['segments'] else np.array([]) for item in layer['items']
+            )
         else:
             layer_points = list(list(self.item_points(item)) for item in layer['items'])
         return layer_points, layer['name']
 
     def parallel_merge_overlapping_segments(self, closeness_thresh=5.0, dissimilarity_thresh=4.0, max_iter=1,
-                                            num_workers=4, log_dir=''):
+                                            num_workers=4, log_dir='', timeout=60):
         """
         Compares all segments and merges overlapping ones
         """
@@ -454,7 +465,6 @@ class AnnotationSaver:
                       remove_overlapping_points=self.remove_overlapping_points,
                       get_merged=self.get_merged,
                       find_closest_points=self.find_closest_points)  # to use functions in subprocess
-        timeout = 10
         logger.info("Begin segment merging ...")
         layer_time = 0.0
         for r, layer in enumerate(self._obj['layers']):
@@ -648,6 +658,7 @@ class ItemMerger(mp.Process):
         self.output_queue.put(None)  # sentinel for breaking out of queue-get loop
         self.output_queue.close()
         logger.info(f"Terminating process {self.id_} | mean merge time: {mean_merge_time:.2f}s total #merged: {merged_items}")
+
 
 # @staticmethod
 # def find_extremes(close_point_pairs, distance):

@@ -31,7 +31,7 @@ class BaseModel:
         self.module_names = []  # changed from 'model_names'
         self.visual_names = []
         self.visual_types = []  # added to specify how to plot (e.g. in case output is a segmentation map)
-        self.image_paths = []
+        self.visual_paths = []
         self.optimizers = []
         self.schedulers = []
         self.nets = None
@@ -56,11 +56,12 @@ class BaseModel:
 
     def set_input(self, data):
         self.input = data['input']  # 1
-        self.image_paths = []
-        self.image_paths.append(data['input_path'])  # and 3 must be returned by dataset
+        self.visual_paths = {'input': data['input_path'],
+                             'output': [''] * len(data['input_path'])}  # and 3 must be returned by dataset
         if not self.opt.is_apply:
             self.target = data['target']  # 2
-            self.image_paths.append(data['target_path'])  # 4 is optional, only for when available
+            if 'target_path' in data:
+                self.visual_paths['target'] = data['target_path']  # 4 is optional, only for when available
         if self.opt.gpu_ids and (self.input.device.type == 'cpu' or self.target.device.type == 'cpu'):
             self.input = self.input.cuda(device=self.device)
             if not self.opt.is_apply:
@@ -191,8 +192,8 @@ class BaseModel:
         return visual_ret
 
     # get image paths
-    def get_image_paths(self):
-        return self.image_paths
+    def get_visual_paths(self):
+        return self.visual_paths
 
     # save models to the disk
     def save_networks(self, epoch):

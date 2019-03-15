@@ -5,8 +5,8 @@ from queue import Empty
 from datetime import datetime
 import imageio
 from base.deploy.base_deployer import BaseDeployer
-from base.utils.annotation_converter import AnnotationConverter
-from base.utils.annotation_saver import AnnotationSaver
+from base.utils.mask_converter import MaskConverter
+from base.utils.annotation_builder import AnnotationBuilder
 from base.utils import utils
 
 
@@ -19,14 +19,14 @@ class TileSegDeployer(BaseDeployer):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--slide_id', type=str, required=True)
         parser.add_argument('--aida_project_name', default='')
+        parser.add_argument('--merge_segments', action='store_true', help="Whether to perform segment merge in gatherer process")
         parser.add_argument('--min_contour_area', default=10000, help="Minimum area of mask objects for them to be converted")
         parser.add_argument('--closeness_threshold', default=5.0, help="Max distance for two points to be considered on boudnary betweem two contours")
         parser.add_argument('--dissimilarity_threshold', default=4.0, help="Max average distance of close points for bounds to be merged")
         parser.add_argument('--max_iter', default=3, help="Max number of iterations in annotation merger")
         parser.add_argument('--save_masks', action='store_true', help="Whether to save the masks as well as the contours")
-        parser.add_argument('--merge_contours', action='store_true', help="Whether to use contour merging for contours from adjacent tiles")
+        parser.add_argument('--sync_timeout', default=60, type=int, help="Queue time out when putting and getting before error is thrown")
         return parser
 
     def name(self):
@@ -50,14 +50,14 @@ class TileSegDeployer(BaseDeployer):
             model.setup()  # hence must do setuphere
             model.is_setup = True
             logger.info("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
-        converter = AnnotationConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
+        converter = MaskConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
         # end patch
         i, num_images = 0, 0
         if opt.save_masks:
             save_path = Path(opt.data_dir) / 'data' / 'network_outputs' / opt.slide_id
             utils.mkdir(str(save_path))
         while True:
-            data = input_queue.get()
+            data = input_queue.get(timeout=opt.sync_timeout)
             if data is None:
                 input_queue.task_done()
                 break
@@ -67,7 +67,7 @@ class TileSegDeployer(BaseDeployer):
             for map_, offset_x, offset_y in zip(
                     visuals['output_map'], data['x_offset'], data['y_offset']):
                 contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y)
-                output_queue.put((contours, labels, boxes))
+                output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
                 if opt.save_masks:
                     mask = utils.tensor2im(map_, segmap=True,
                                            num_classes=converter.num_classes)  # transforms tensors into mask label image
@@ -92,18 +92,18 @@ class TileSegDeployer(BaseDeployer):
         logger.addHandler(fh)
         logger.addHandler(ch)
         logger.info("Start gathering data")
-        annotation = AnnotationSaver(deployer.opt.slide_id, deployer.opt.aida_project_name, ['epithelium', 'lumen', 'background'])
+        annotation = AnnotationBuilder(deployer.opt.slide_id, deployer.opt.aida_project_name, ['epithelium', 'lumen', 'background'])
         i, n_contours = 0, 0
         while True:
             if i > 0 and isinstance(data, Integral):
                 try:
-                    data = output_queue.get(timeout=5)
+                    data = output_queue.get(timeout=deployer.opt.sync_timeout)
                 except Empty:
                     output_queue.task_done()
                     break
                 output_queue.task_done()
             else:
-                data = output_queue.get(timeout=60 if i == 0 else 20)
+                data = output_queue.get(timeout=deployer.opt.sync_timeout)
             if data == deployer.opt.ndeploy_workers:
                 break
             elif isinstance(data, Integral):
@@ -123,18 +123,17 @@ class TileSegDeployer(BaseDeployer):
 
     def cleanup(self, output):
         annotation = output
-        # FIXME merging works but it still breaks for UNET output masks
-        # merge
-        # annotation.merge_overlapping_segments(closeness_thresh=self.opt.closeness_threshold,
-        #                                       dissimilarity_thresh=self.opt.dissimilarity_threshold,
-        #                                       max_iter=self.opt.max_iter,
-        #                                       parallel=bool(self.opt.workers),
-        #                                       num_workers=self.opt.workers,
-        #                                       log_dir=self.opt.checkpoints_dir)
+        if self.opt.merge_segments:
+            annotation.merge_overlapping_segments(closeness_thresh=self.opt.closeness_threshold,
+                                                  dissimilarity_thresh=self.opt.dissimilarity_threshold,
+                                                  max_iter=self.opt.max_iter,
+                                                  parallel=bool(self.opt.workers),
+                                                  num_workers=self.opt.workers,
+                                                  log_dir=self.opt.checkpoints_dir)
         # dump all the annotation objects to json
         save_path = Path(self.opt.data_dir) / 'data' / 'annotations'
         utils.mkdirs(str(save_path))
         annotation.dump_to_json(save_dir=save_path)
-        logging.info(f"Dumped to {str(save_path)}")
+        print(f"Dumped to {str(save_path)}")
 
 

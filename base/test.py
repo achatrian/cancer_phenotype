@@ -2,7 +2,8 @@ import os
 from options.test_options import TestOptions
 from data import create_dataloader
 from models import create_model
-from utils.visualizer import save_images
+from utils.base_visualizer import save_images
+from utils.base_visualizer import Visualizer
 from utils import html
 
 
@@ -14,27 +15,23 @@ if __name__ == '__main__':
     opt.serial_batches = True  # no shuffle
     opt.no_flip = True    # no flip
     opt.display_id = -1   # no visdom display
-    data_loader = create_dataloader(opt)
-    dataset = data_loader.load_data()
+    dataloader = create_dataloader(opt)
+    dataset = dataloader.load_data()
     model = create_model(opt)
     model.setup()
     # create a website
     web_dir = os.path.join(opt.results_dir, opt.name, '%s_%s' % (opt.phase, opt.epoch))
     webpage = html.HTML(web_dir, 'Experiment = %s, Phase = %s, Epoch = %s' % (opt.name, opt.phase, opt.epoch))
-    # test with eval mode. This only affects layers like batchnorm and dropout.
-    # pix2pix: we use batchnorm and dropout in the original pix2pix. You can experiment it with and without eval() mode.
-    # CycleGAN: It should not affect CycleGAN as CycleGAN uses instancenorm without dropout.
     if opt.eval:
         model.eval()
-    for i, data in enumerate(dataset):
-        if i >= opt.num_test:
-            break
-        model.set_input(data)
-        model.test()
-        visuals = model.get_current_visuals()
-        img_path = model.get_image_paths()
-        if i % 5 == 0:
-            print('processing (%04d)-th image... %s' % (i, img_path))
-        save_images(webpage, visuals, img_path, aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
+    with model.start_validation() as update_validation_meters:
+        for i, data in enumerate(dataset):
+            for j, data in enumerate(dataloader):
+                model.set_input(data)
+                model.test()
+                model.evaluate_parameters()
+                update_validation_meters()
+                visuals = model.get_current_visuals()
+            save_images(webpage, visuals, img_path, aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
     # save the website
     webpage.save()

@@ -4,8 +4,7 @@ from options.train_options import TrainOptions
 from data import create_dataset, create_dataloader
 from models import create_model
 from deploy import create_deployer
-from utils.visualizer import Visualizer
-
+from utils import create_visualizer
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()
@@ -16,11 +15,11 @@ if __name__ == '__main__':
         val_dataset = create_dataset(opt, validation_phase=True)
         val_dataset.setup()
         val_dataloader = create_dataloader(val_dataset)
-    print('#training images = {:d}'.format(len(train_dataset)))
+    print('task: {}, #training images = {:d}'.format(opt.task, len(train_dataset)))
 
     model = create_model(opt)
     model.setup()
-    visualizer = Visualizer(opt)
+    visualizer = create_visualizer(opt)
     total_steps = 0
 
     for epoch in range(opt.epoch_count, opt.nepoch + opt.nepoch_decay):
@@ -42,7 +41,7 @@ if __name__ == '__main__':
 
             if total_steps % opt.display_freq == 0:
                 save_result = total_steps % opt.update_html_freq == 0
-                visualizer.display_current_results(model.get_current_visuals(), epoch, save_result)
+                visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, save_result)
 
             if total_steps % opt.print_freq == 0:
                 losses = model.get_current_losses()
@@ -81,7 +80,7 @@ if __name__ == '__main__':
                     model.evaluate_parameters()
                     update_validation_meters()
             visualizer.reset()
-            visualizer.display_current_results(model.get_current_visuals(is_val=True), epoch, True)
+            visualizer.display_current_results(model.get_current_visuals(is_val=True), model.get_visual_paths(), epoch, True)
             losses_val = model.get_current_losses(is_val=True)
             metrics_val = model.get_current_metrics(is_val=True)
             visualizer.print_current_losses_metrics(epoch, None, losses_val, metrics_val, None, None)

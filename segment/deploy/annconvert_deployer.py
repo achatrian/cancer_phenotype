@@ -2,8 +2,8 @@ from pathlib import Path
 from numbers import Integral
 from queue import Empty
 from base.deploy.base_deployer import BaseDeployer
-from base.utils.annotation_converter import AnnotationConverter
-from base.utils.annotation_saver import AnnotationSaver
+from base.utils.mask_converter import MaskConverter
+from base.utils.annotation_builder import AnnotationBuilder
 from base.utils import utils
 
 
@@ -15,11 +15,13 @@ class AnnConvertDeployer(BaseDeployer):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--slide_id', type=str, required=True)  # required slide id
+        parser.add_argument('--aida_project_name', default='')
         parser.add_argument('--min_contour_area', default=10000, help="Minimum area for object in mask to be converted into contour")
+        parser.add_argument('--merge_segments', action='store_true', help="Whether to perform segment merge in gatherer process")
         parser.add_argument('--closeness_threshold', default=5.0, help="Max distance for two points to be considered on boudnary betweem two contours")
         parser.add_argument('--dissimilarity_threshold', default=4.0, help="Max average distance of close points for bounds to be merged")
         parser.add_argument('--max_iter', default=3, help="Max number of iterations in annotation merger")
+        parser.add_argument('--sync_timeout', default=60, type=int, help="Queue time out when putting and getting before error is thrown")
         return parser
 
     def name(self):
@@ -29,10 +31,10 @@ class AnnConvertDeployer(BaseDeployer):
     def run_worker(process_id, opt, model, input_queue, output_queue=None):
         # cannot send to cuda outside process in pytorch < 0.4.1 -- patch (torch.multiprocessing issue)
         print("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
-        converter = AnnotationConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
+        converter = MaskConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
         # end patch
         i, num_images = 0, 0
-        while not input_queue.empty():
+        while True:
             data = input_queue.get()
             if data is None:
                 input_queue.task_done()
@@ -40,27 +42,27 @@ class AnnConvertDeployer(BaseDeployer):
             for map_, slide_id, offset_x, offset_y in zip(
                     data['target'], data['slide_id'], data['x_offset'], data['y_offset']):
                 contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y)
-                output_queue.put((contours, labels, boxes))
+                output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
             num_images += data['input'].shape[0]
             if i % opt.print_freq == 0:
                 print("[{}] has converted {} tiles".format(process_id, num_images))
             input_queue.task_done()
+        output_queue.put(process_id)
 
     @staticmethod
     def gather(deployer, output_queue, sync=()):
-        annotation = AnnotationSaver(deployer.opt.slide_id, deployer.opt.aida_project_name,
-                                     ['epithelium', 'lumen', 'background'])
+        annotation = AnnotationBuilder(deployer.opt.slide_id, deployer.opt.aida_project_name, ['epithelium', 'lumen', 'background'])
         i, n_contours = 0, 0
         while True:
             if i > 0 and isinstance(data, Integral):
                 try:
-                    data = output_queue.get(timeout=5)
+                    data = output_queue.get(timeout=deployer.opt.sync_timeout)
                 except Empty:
                     output_queue.task_done()
                     break
                 output_queue.task_done()
             else:
-                data = output_queue.get(timeout=60 if i == 0 else 20)
+                data = output_queue.get(timeout=deployer.opt.sync_timeout)
             if data == deployer.opt.ndeploy_workers:
                 break
             elif isinstance(data, Integral):
@@ -71,10 +73,27 @@ class AnnConvertDeployer(BaseDeployer):
                 contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
                 annotation.add_segments_to_last_item(contour)
             n_contours += len(contours)
+            if n_contours % 50 == 0:
+                print("Gatherer stored {} contours".format(n_contours))
             i += 1
             output_queue.task_done()
         output_queue.join()
         deployer.cleanup(annotation)
+
+    def cleanup(self, output):
+        annotation = output
+        if self.opt.merge_segments:
+            annotation.merge_overlapping_segments(closeness_thresh=self.opt.closeness_threshold,
+                                                  dissimilarity_thresh=self.opt.dissimilarity_threshold,
+                                                  max_iter=self.opt.max_iter,
+                                                  parallel=bool(self.opt.workers),
+                                                  num_workers=self.opt.workers,
+                                                  log_dir=self.opt.checkpoints_dir)
+        # dump all the annotation objects to json
+        save_path = Path(self.opt.data_dir) / 'data' / 'annotations'
+        utils.mkdirs(str(save_path))
+        annotation.dump_to_json(save_dir=save_path)
+        print(f"Saved to {str(save_path)}")
 
 
 

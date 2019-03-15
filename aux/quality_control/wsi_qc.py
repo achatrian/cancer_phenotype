@@ -4,10 +4,6 @@ sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
                  '/well/rittscher/users/achatrian/cancer_phenotype'])
 import multiprocessing as mp
 from pathlib import Path
-import re
-import csv
-import json
-import datetime
 from base.options.train_options import TrainOptions
 from base.data.wsi_reader import WSIReader
 

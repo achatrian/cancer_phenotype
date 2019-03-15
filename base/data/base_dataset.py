@@ -276,6 +276,7 @@ class RandomCrop(object):
             self.size = (int(size), int(size))
         else:
             self.size = size
+        self.last_crop = (0, 0)  # keep track of cropping, accessible from crop object
 
     def __call__(self, img):
         w, h = img.shape[1], img.shape[0]
@@ -289,6 +290,7 @@ class RandomCrop(object):
             img = img[y1:y1+th, x1:x1+tw, :]
         else:
             img = img[y1:y1 + th, x1:x1 + tw]
+        self.last_crop = (x1, y1)
         return img
 
 #####

@@ -27,7 +27,7 @@ class AreaTilesDataset(BaseDataset):
         file_list = []
         for folder in folders:
             file_list += glob.glob(os.path.join(phase_dir, folder, 'tiles', '*_img_*.png'))
-        if hasattr(self.opt, 'slide_id'):
+        if self.opt.slide_id:
             # If slide_id is given, retain only tiles for that slide
             for i, file_name in reversed(list(enumerate(file_list))):
                 slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(file_name)).group()  # tested on regex101.com
@@ -47,7 +47,8 @@ class AreaTilesDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--segment_lumen', action='store_true')
+        parser.add_argument('--slide_id', type=str, default='', help="If a slide id is specified, only tiles from that slide are read by the dataset")
+        parser.add_argument('--one_class', action='store_false', help="Merge labels of target into a binary mask")
         parser.add_argument('--coords_pattern', type=str, default='\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})')
         return parser
 
@@ -65,7 +66,7 @@ class AreaTilesDataset(BaseDataset):
 
         if gt.ndim == 3 and gt.shape[2] == 3:
             gt = gt[..., 0]
-        if not self.opt.segment_lumen:
+        if self.opt.one_class:
             gt[gt > 0] = 255
 
         if image.shape[0:2] != (self.opt.patch_size,)*2:
@@ -86,9 +87,10 @@ class AreaTilesDataset(BaseDataset):
                 gt = cat[:, :, 3]
 
             # scale image
-            sizes = (self.opt.fine_size, ) * 2
-            image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
-            gt = cv2.resize(gt, sizes, interpolation=cv2.INTER_AREA)
+            if self.opt.fine_size != self.opt.patch_size:
+                sizes = (self.opt.fine_size, ) * 2
+                image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
+                gt = cv2.resize(gt, sizes, interpolation=cv2.INTER_AREA)
 
         # im aug
         cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
@@ -98,12 +100,12 @@ class AreaTilesDataset(BaseDataset):
                 cat = self.aug_seq.augment_image(cat)
         image = cat[:, :, 0:3]
         gt = cat[:, :, 3]
-        if not self.opt.segment_lumen:
+        if self.opt.one_class:
             gt[gt < 255] = 0
             gt[gt != 0] = 1
         else:
-            gt[np.logical_and(gt < 180, gt > 30)] = 1
-            gt[gt >= 180] = 2
+            gt[np.logical_and(gt < 210, gt > 40)] = 1
+            gt[gt >= 210] = 2
             gt[np.logical_and(gt != 1, gt != 2)] = 0
 
         # scale between 0 and 1
@@ -121,15 +123,14 @@ class AreaTilesDataset(BaseDataset):
         coords_info = re.search(self.opt.coords_pattern, os.path.basename(img_name)).groups()  # tuple with all matched groups
         downsample = float(coords_info[0])  # downsample is a float
         area_x, area_y, area_w, area_h, tile_x, tile_y = tuple(int(num) for num in coords_info[1:])
-        x_offset = area_x + tile_x
-        y_offset = area_y + tile_y
+        x_offset = area_x + tile_x + self.randomcrop.last_crop[0]
+        y_offset = area_y + tile_y + self.randomcrop.last_crop[1]
         slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(img_name)).group()  # tested on regex101.com
 
         return {'input': image, 'target': gt, 'input_path': img_name, 'target_path': gt_name,
                 'slide_id': slide_id,
                 'downsample': downsample,
-                'x_offset': x_offset, 'y_offset': y_offset
-                }
+                'x_offset': x_offset, 'y_offset': y_offset}
 
 
 class AugDataset(AreaTilesDataset):

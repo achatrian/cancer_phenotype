@@ -37,7 +37,7 @@ class BaseDeployer(mp.Process):
         if sentinel:
             for i in range(self.opt.ndeploy_workers):
                 queue.put(None)  # sentinel for workers to terminate
-        queue.join()
+            queue.join()
 
     def get_workers(self, model, input_queue, output_queue=None, sync=()):
         """

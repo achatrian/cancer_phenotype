@@ -21,7 +21,6 @@ class BaseOptions:
         parser.add_argument('--input_channels', type=int, default=3)
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
         parser.add_argument('--batch_size', default=16, type=int)
-        parser.add_argument('--augment', type=int, default=0)
         parser.add_argument('--model', type=str, default="UNet", help="The network model that will be used")
         parser.add_argument('--eval', action='store_true', help='use eval mode during validation / test time.')
         parser.add_argument('--num_class', type=int, default=3, help='Number of classes to classify the data into')
@@ -97,13 +96,14 @@ class BaseOptions:
         message += '----------------- End -------------------'
         print(message)
 
-        # save to the disk
-        expr_dir = os.path.join(opt.checkpoints_dir, opt.experiment_name)
-        utils.mkdirs(expr_dir)
-        file_name = os.path.join(expr_dir, 'opt.txt')
-        with open(file_name, 'wt') as opt_file:
-            opt_file.write(message)
-            opt_file.write('\n')
+        # save to the disk - only when training or will overwrite training information
+        if self.is_train:
+            expr_dir = os.path.join(opt.checkpoints_dir, opt.experiment_name)
+            utils.mkdirs(expr_dir)
+            file_name = os.path.join(expr_dir, 'opt.txt')
+            with open(file_name, 'wt') as opt_file:
+                opt_file.write(message)
+                opt_file.write('\n')
 
     def parse(self):
         opt = self.gather_options()
