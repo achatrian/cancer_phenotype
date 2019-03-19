@@ -11,3 +11,7 @@ class PhenotypeOptions(TaskOptions):
         self.parser.add_argument('--dataset_name', type=str, default="tilepheno")
         self.parser.add_argument('--data_dir', type=str, default='')
         self.parser.add_argument('--num_class', type=int, default=2)  # addition / deletion of gene
+        self.parser.add_argument('--display_ncols', type=int, default=3)
+
+        # New arguments
+        self.parser.add_argument('--num_display_images', type=int, default=3, help="Number of input images to be shown with labels in visualizer")

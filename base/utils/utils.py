@@ -264,19 +264,19 @@ class AverageMeter(object):
 
 def colorize(gt):
     if gt.shape[0] > 1:
-        if gt.min() < 0 or gt.max() > 1: #if logit
+        if gt.min() < 0 or gt.max() > 1:  #if logit
             if np.any(gt > 500): gt /= gt.max()
             gt = np.exp(gt) / np.repeat(np.exp(gt).sum(axis=0)[np.newaxis,...], gt.shape[0], axis=0)
         gt = np.round(gt)
 
         if gt.shape[0] == 3:
-            r = np.floor((gt[0,...] == 1) * 255)
-            g = np.floor((gt[1,...] == 1) * 255)
-            b = np.floor((gt[2,...] == 1) * 255)
+            r = np.floor((gt[0, ...] == 1) * 255)
+            g = np.floor((gt[1, ...] == 1) * 255)
+            b = np.floor((gt[2, ...] == 1) * 255)
         elif gt.shape[0] == 2:
-            r = np.floor((gt[1,...] == 1) * 255)
-            g = np.floor((gt[0,...] == 1) * 255)
-            b = np.zeros(gt[0,...].shape)
+            r = np.floor((gt[1, ...] == 1) * 255)
+            g = np.floor((gt[0, ...] == 1) * 255)
+            b = np.zeros(gt[0, ...].shape)
         elif gt.shape[0] == 1:
             r,g,b = gt*255, gt*255, gt*255
         else:
@@ -293,7 +293,7 @@ def colorize(gt):
 # Converts a Tensor into an image array (numpy)
 # |imtype|: the desired type of the converted numpy array
 def tensor2im(input_image, segmap=False, num_classes=3, imtype=np.uint8, visual=True):
-    """
+    r"""
     Converts image to tensor for visualisation purposes
     :param input_image:
     :param segmap:

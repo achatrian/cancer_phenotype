@@ -14,9 +14,13 @@ class TaskOptions:
     def add_actions(self, parser):
         self.actions = self.parser._actions
         for action in self.actions:
+            replacement = False
             for i, ex_action in enumerate(parser._actions):
                 if action.option_strings == ex_action.option_strings:
                     parser._actions[i] = action
+                    replacement = True
+            if not replacement:
+                parser._actions.append(action)  # add extra actions
         return parser
 
 

@@ -8,6 +8,7 @@ class PhenotypeVisualizer(BaseVisualizer):
 
     def __init__(self, opt):
         super().__init__(opt)
+        self.num_display_images = min(self.opt.num_display_images, self.opt.batch_size)
 
     def display_current_results(self, visuals, visuals_paths, epoch, save_result):
         if self.display_id > 0:  # show images in the browser
@@ -20,68 +21,65 @@ class PhenotypeVisualizer(BaseVisualizer):
                          table td {width: %dpx; height: %dpx; padding: 4px; outline: 4px solid black}
                          </style>""" % (w, h)
                 title = self.name
-                label_html, label_html_row, path_html, path_html_row = '', '', '', ''
-                images = []
+                prediction_html, prediction_html_row, target_html, target_html_row, path_html, path_html_row = '', '', '', '', '', ''
                 idx = 0
-                for label, image in visuals.items():
-                    path = os.path.basename(visuals_paths[label.split('_')[0]][0])
-                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
-                    label_html_row += f'<td>{label}</td>'
-                    path_html_row += f'<td>{path}</td>'
-                    images.append(image_numpy.transpose([2, 0, 1]))
-                    idx += 1
-                    if idx % ncols == 0:
-                        label_html += f'<tr>{label_html_row}</tr>'
-                        label_html_row = ''
+                images_tensor = visuals['input_image']
+                images = []
+                for idx in range(self.num_display_images):
+                    images.append(utils.tensor2im(images_tensor[idx, ...]).transpose([2, 0, 1]))
+                    prediction_html_row += f"<td>Out: {visuals['prediction_label'][idx]}</td>"
+                    target_html_row += f"<td>Target: {visuals['target_label'][idx]}</td>"
+                    path_html_row += f"<td>Name: {os.path.basename(visuals_paths['input'][idx])}</td>"
+                    if (idx + 1) % ncols == 0:
+                        prediction_html += f'<tr>{prediction_html_row}</tr>'
+                        prediction_html_row = ''
+                        target_html += f'<tr>{target_html_row}</tr>'
+                        target_html_row = ''
                         path_html += f'<tr>{path_html_row}</tr>'
                         path_html_row = ''
-                white_image = np.ones_like(image_numpy.transpose([2, 0, 1])) * 255
-                while idx % ncols != 0:
+                white_image = np.ones_like(images[0]) * 255
+                while (idx + 1) % ncols != 0:
                     images.append(white_image)
-                    label_html_row += '<td></td>'
+                    prediction_html_row += '<td></td>'
+                    target_html_row += '<td></td>'
+                    path_html_row += '<td></td>'
                     idx += 1
-                if label_html_row != '':
-                    label_html += f'<tr>{label_html_row}</tr>'
+                if prediction_html_row != '':
+                    prediction_html += f'<tr>{prediction_html_row}</tr>'
+                    target_html += f'<tr>{target_html_row}</tr>'
+                    path_html_row += f'<tr>{path_html_row}</tr>'
                 # pane col = image row
-                assert all([images[0].shape == image.shape for image in images]);
-                "Ensure all images have same shape"
+                assert all([images[0].shape == image.shape for image in images]), "Ensure all images have same shape"
                 try:
                     self.vis.images(images, nrow=ncols, win=self.display_id + 2,
                                     padding=2, opts=dict(title=title + ' images'))
-                    label_html = f'<table>{label_html}{path_html}</table>'
+                    label_html = f'<table>{prediction_html}{target_html}{path_html}</table>'
                     self.vis.text(table_css + label_html, win=self.display_id + 3,
                                   opts=dict(title=title + ' labels'))  # uses text to input table html
                 except VisdomExceptionBase:
                     self.throw_visdom_connection_error()
 
-            else:
-                idx = 1
-                for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image, label.endswith("_map"))
-                    self.vis.image(image_numpy.transpose([2, 0, 1]), opts=dict(title=label),
-                                   win=self.display_id + idx + 1)
-                    idx += 1
-
-        if self.use_html and (save_result or not self.saved):  # save images to a html file
-            self.saved = True
-            for label, image in visuals.items():
-                image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
-                img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
-                utils.save_image(image_numpy, img_path)
-            # update website
-            webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, reflesh=1)
-            for n in range(epoch, 0, -1):
-                webpage.add_header('epoch [%d]' % n)
-                ims, txts, links = [], [], []
-
-                for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
-                    img_path = 'epoch%.3d_%s.png' % (n, label)
-                    ims.append(img_path)
-                    txts.append(label)
-                    links.append(img_path)
-                webpage.add_images(ims, txts, links, width=self.win_size)
-            webpage.save()
+        # if self.use_html and (save_result or not self.saved):  # save images to a html file
+        #     self.saved = True
+        #     for label, images_tensor in visuals.items():
+        #         if not label.endswith('label'):
+        #             image_numpy = utils.tensor2im(images_tensor[0, ...], label.endswith("_map"))
+        #             img_path = os.path.join(self.img_dir, 'epoch{:.3f}_{}.png'.format(epoch, label))
+        #             utils.save_image(image_numpy, img_path)
+        #     # update website
+        #     webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, reflesh=1)
+        #     for n in range(epoch, 0, -1):
+        #         webpage.add_header('epoch [%d]' % n)
+        #         ims, txts, links = [], [], []
+        #
+        #         for label, image in visuals.items():
+        #             # image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
+        #             img_path =  'epoch{:.3f}_{}.png'.format(n, label)
+        #             ims.append(img_path)
+        #             txts.append(label)
+        #             links.append(img_path)
+        #         webpage.add_images(ims, txts, links, width=self.win_size)
+        #     webpage.save()
 
     # losses: dictionary of error labels and values
     def plot_current_losses_metrics(self, epoch, epoch_progress, losses, metrics):

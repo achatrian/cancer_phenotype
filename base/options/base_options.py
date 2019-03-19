@@ -30,7 +30,7 @@ class BaseOptions:
         parser.add_argument('--weight_decay', default=5e-4, type=float)
         parser.add_argument('--reg_weight', default=5e-4, type=float, help="weight given to regularization loss")
         parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
-        parser.add_argument('--loss_weight', default=None)
+        parser.add_argument('--loss_weight', type=str, default=None)
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization [normal|xavier|kaiming|orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--gpu_ids', default='0', type=str, help='gpu ids (comma separated numbers - e.g. 1,2,3')
@@ -110,13 +110,6 @@ class BaseOptions:
         opt.is_train = self.is_train   # train or test
         opt.is_apply = self.is_apply
         # check options:
-        if opt.loss_weight:
-            opt.loss_weight = [float(w) for w in opt.loss_weight.split(',')]
-            if len(opt.loss_weight) != opt.num_class:
-                raise ValueError("Given {} weights, when {} classes are expected".format(
-                    len(opt.loss_weight), opt.num_class))
-            else:
-                opt.loss_weight = torch.tensor(opt.loss_weight)
         self.print_options(opt)
         # set gpu ids
         str_ids = opt.gpu_ids.split(',')
@@ -127,7 +120,13 @@ class BaseOptions:
                 opt.gpu_ids.append(id)
         if len(opt.gpu_ids) > 0 and opt.set_visible_devices:
             torch.cuda.set_device(opt.gpu_ids[0])
-
+        if opt.loss_weight:
+            opt.loss_weight = [float(w) for w in opt.loss_weight.split(',')]
+            if len(opt.loss_weight) != opt.num_class:
+                raise ValueError("Given {} weights, when {} classes are expected".format(
+                    len(opt.loss_weight), opt.num_class))
+            else:
+                opt.loss_weight = torch.Tensor(opt.loss_weight)
         # set multiprocessing
         if opt.workers > 0 and not opt.fork_processes:
             mp.set_start_method('spawn', force=True)

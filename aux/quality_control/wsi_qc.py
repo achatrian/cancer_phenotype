@@ -21,7 +21,7 @@ class SlidePreprocessor(mp.Process):
         while True:
             file = self.queue.get()
             if file is None:
-                self.queue.task_done()
+                self.queue.task_done()/mnt/rescomp/projects/TCGA_prostate/TCGA
                 break
             slide = WSIReader(self.opt, file)
             print(f"[{self.process_id}] processing {os.path.basename(file)}")

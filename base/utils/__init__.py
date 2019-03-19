@@ -39,13 +39,13 @@ def find_visualizer_using_name(task_name):
                 visualizer = cls
 
     if visualizer is None:
-        raise NotImplementedError("In {}.py, there should be a subclass of Basevisualizer with class name that matches {} in lowercase.".format(
-              visualizer_filename, target_visualizer_name))
+        raise NotImplementedError("In visualizer.py, there should be a subclass of BaseVisualizer with class name that matches {} in lowercase.".format(
+            target_visualizer_name))
 
     return visualizer
 
 
 def create_visualizer(opt):
-    dataset = find_visualizer_using_name(opt.dataset_name, opt.task)
+    dataset = find_visualizer_using_name(opt.task)
     instance = dataset(opt)
     return instance

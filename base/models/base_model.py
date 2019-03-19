@@ -1,6 +1,7 @@
 import os
 import torch
 from contextlib import contextmanager
+from itertools import chain
 from utils import utils
 from collections import OrderedDict
 from . import networks
@@ -34,10 +35,12 @@ class BaseModel:
         self.visual_paths = []
         self.optimizers = []
         self.schedulers = []
+        self.meters = dict()
         self.nets = None
         self.input = None
         self.target = None
         self.output = None
+        self.is_val = False  # switches behaviour of getters and updates between validation and training
 
     def name(self):
         return 'BaseModel'
@@ -81,22 +84,24 @@ class BaseModel:
         :param parser:
         :return:
         """
-        if self.gpu_ids:
-            self.net = networks.init_net(self.net, self.opt.init_type, self.opt.init_gain,
-                                         self.opt.gpu_ids)  # takes care of pushing net to cuda
+        if self.gpu_ids:  # push networks and losses modules to gpus if needed
+            for module_name in self.module_names:
+                net = getattr(self, "net" + module_name)
+                net.train()
+                setattr(self, "net" + module_name, networks.init_net(net, self.opt.init_type, self.opt.init_gain,
+                                         self.opt.gpu_ids))  # takes care of pushing net to cuda
             assert torch.cuda.is_available()
             for loss_name in self.loss_names:
                 loss = getattr(self, loss_name).cuda(device=self.device)
                 setattr(self, loss_name, loss)
-        if self.is_train:
+        if self.is_train:  # make schedulers
             self.schedulers = [networks.get_scheduler(optimizer, self.opt) for optimizer in self.optimizers]
         if not self.is_train or self.opt.continue_train:
             load_suffix = 'iter_%d' % self.opt.load_iter if self.opt.load_iter > 0 else self.opt.load_epoch
             self.load_networks(load_suffix)
-        for module_name in self.module_names:
-            net = getattr(self, "net" + module_name)
-            net.train()
         self.print_networks(self.opt.verbose)
+        for name in chain(self.loss_names, self.metric_names):  # add meters to compute average of statistics
+            self.meters[name] = utils.AverageMeter()
 
     # make models eval mode during test time
     def eval(self):
@@ -109,6 +114,34 @@ class BaseModel:
         with torch.no_grad():
             self.forward()
 
+    def optimize_parameters(self):
+        """Abstract method: call forward and backward + other optimization steps
+            Use self.update_measure_values to store losses"""
+        pass
+
+    def evaluate_parameters(self):
+        """
+        Abstract method that I added -- pix2pix code did not compute evaluation metrics,
+        but for many tasks they can be quite useful
+        Updates metrics values (metric must start with 'metric_')
+        Must use self.update_measure_values
+        """
+        pass
+
+    # update loss or metric, taking the average for training measures
+    def update_measure_value(self, name, value):
+        if name in self.loss_names:
+            prefix = 'loss_'
+        elif name in self.metric_names:
+            prefix = 'metric_'
+        else:
+            raise ValueError(f"Attempted update of unknown measure {name} - add to loss_names or metric_names")
+        if self.is_val:
+            setattr(self, prefix + name + '_val', value)
+        else:
+            self.meters[name].update(value, self.output.shape[0])
+            setattr(self, prefix + name, self.meters[name].val)
+
     @contextmanager
     def start_validation(self):
         """
@@ -117,6 +150,7 @@ class BaseModel:
         Use the yielded function 'update_validation_meters' to compute running average of validation metrics
         """
         # __enter__ #
+        self.is_val = True  # get functions now get validation measures and batch average is not taken
         loss_meters = {loss_name: utils.AverageMeter() for loss_name in self.loss_names}
         metric_meters = {metric_name: utils.AverageMeter() for metric_name in self.metric_names}
         model = self
@@ -124,10 +158,10 @@ class BaseModel:
         def update_validation_meters():
             # update meters (which remain hidden from main)
             for loss_name in model.loss_names:
-                loss = getattr(model, 'loss_' + loss_name)
+                loss = getattr(model, 'loss_' + loss_name + '_val')
                 loss_meters[loss_name].update(loss, model.opt.batch_size)
             for metric_name in model.metric_names:
-                metric = getattr(model, 'metric_' + metric_name)
+                metric = getattr(model, 'metric_' + metric_name + '_val')
                 metric_meters[metric_name].update(metric, self.opt.batch_size)
 
         # as #
@@ -145,17 +179,7 @@ class BaseModel:
         for visual_name in self.visual_names:
             visual_val = getattr(self, visual_name)
             setattr(self, visual_name + "_val", visual_val)
-
-    def optimize_parameters(self):
-        pass
-
-    def evaluate_parameters(self):
-        """
-        Abstract method that I added -- pix2pix code did not compute evaluation metrics,
-        but for many tasks they can be quite useful
-        Updates metrics values (metric must start with 'metric_')
-        """
-        pass
+        self.is_val = False  # begin working with training measures again
 
     # update learning rate (called once every epoch)
     def update_learning_rate(self):
@@ -164,30 +188,30 @@ class BaseModel:
         lr = self.optimizers[0].param_groups[0]['lr']
         print('learning rate = %.7f' % lr)
 
-    def get_current_losses(self, is_val=False):
+    def get_current_losses(self):
         errors_ret = OrderedDict()
         for name in self.loss_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
-                name = name if not is_val else name + "_val"
+                name = name if not self.is_val else name + "_val"
                 errors_ret[name] = float(getattr(self, 'loss_' + name))
         return errors_ret
 
-    def get_current_metrics(self, is_val=False):
+    def get_current_metrics(self):
         metric_ret = OrderedDict()
         for name in self.metric_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
-                name = name if not is_val else name + "_val"
+                name = name if not self.is_val else name + "_val"
                 metric_ret[name] = float(getattr(self, 'metric_' + name))
         return metric_ret
 
     # return visualization images. train.py will display these images, and save the images to a html
-    def get_current_visuals(self, is_val=False):
+    def get_current_visuals(self):
         visual_ret = OrderedDict()
         for name, kind in zip(self.visual_names, self.visual_types):
             if isinstance(name, str):
-                name = name if not is_val else name + "_val"
+                name = name if not self.is_val else name + "_val"
                 visual_ret[name + "_" + kind] = getattr(self, name)
         return visual_ret
 

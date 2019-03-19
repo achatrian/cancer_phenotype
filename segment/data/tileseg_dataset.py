@@ -24,26 +24,21 @@ class TileSegDataset(BaseDataset):
         super(TileSegDataset, self).__init__()
         self.opt = opt
         self.paths = []
+        split_tiles_path = Path(self.opt.data_dir) / 'CVsplits' / (
+                    re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
+        split_tiles_path = str(split_tiles_path)
+        # read resolution data - requires global tcga_resolution.json file
+        with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / 'tcga_resolution.json', 'r') as resolution_file:
+            self.resolutions = json.load(resolution_file)
         try:
-            tiles_path = Path(self.opt.data_dir)/'data'/'tiles'
-            wsi_paths = [path for path in tiles_path.iterdir() if path.is_dir()]  # one per wsi image the tiles were derived from
-        except FileNotFoundError:
-            tiles_path = Path(self.opt.data_dir)
-            wsi_paths = [path for path in chain((tiles_path/'train').iterdir(), (tiles_path/'val').iterdir(), (tiles_path/'test').iterdir()) if path.is_dir()]
-        paths = [path for path in chain(*(wsi_path.glob(self.opt.image_glob_pattern) for wsi_path in wsi_paths))]
-        assert paths, "Cannot be empty"
-        # dataset works either with a split.json kind of file or with a slide id to process
-        if self.opt.split_file:
-            with open(self.opt.split_file, 'r') as split_json:
-                self.split = json.load(split_json)
-            self.opt.phase = self.opt.phase if self.opt.phase != 'val' else 'test'  # check on test set during training (TEMP)
-            phase_split = set(self.split[self.opt.phase])  # ~O(1) __contains__ check through hash table
-            id_len = len(phase_split.pop())  # checks length of id
-            self.paths = sorted(path for path in paths if path.parent.name[:id_len] in phase_split)
-        elif self.opt.slide_id:
+            with open(split_tiles_path, 'r') as split_tiles_file:
+                self.paths = json.load(split_tiles_file)
+            print(f"Loaded {len(self.paths)} tile paths for split {Path(self.opt.split_file).name}")
+        except FileNotFoundError as err:
+            raise ValueError("Given path does not correspond to any split file") from err
+        assert self.paths, "Cannot be empty"
+        if self.opt.slide_id:
             self.paths = sorted(path for path in paths if self.opt.slide_id in str(path.parents[1].name))  # first parent should 'tiles' folder
-        else:
-            raise ValueError("Must provide either split.json file or WSI id to load tiles from.")
         assert self.paths, "Filtered paths list cannot be empty"
         if self.opt.load_ground_truth:
             self.gt_paths = [Path(str(path).replace('_img_', '_mask_')) for path in self.paths]  # FIXME adapt to annotations

@@ -1,9 +1,10 @@
 from contextlib import contextmanager
 import torch
-from base.models.base_model import BaseModel
 from .networks import Inception
 from sklearn.metrics import confusion_matrix
 import numpy as np
+from base.models.base_model import BaseModel
+from base.utils import utils
 
 
 class InceptionModel(BaseModel):
@@ -11,14 +12,13 @@ class InceptionModel(BaseModel):
     def __init__(self, opt):
         super().__init__(opt)
         self.opt = opt
+        self.module_names = ['']  # Must remember this !!!
         self.net = Inception(opt.num_class)
         self.loss_names = ['bce']
         self.bce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
-        self.metric_names = ['acc', 'dice'] #+ \
-                            # ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
-                            # ['dice{}'.format(c) for c in range(self.opt.num_class)]
-        self.visual_names = ["input"]
-        self.visual_types = ["image"]
+        self.metric_names = ['acc', 'dice']
+        self.visual_names = ["input", 'prediction', 'target']
+        self.visual_types = ["image", 'label', 'label']
 
         if self.is_train:
             self.optimizers = [torch.optim.Adam([
@@ -31,9 +31,11 @@ class InceptionModel(BaseModel):
         self.input = None
         self.target = None
         self.output = None
+        self.prediction = None
         self.loss_bce = None
         self.metric_acc = None
         self.metric_dice = None
+        self.meters = dict(acc=utils.AverageMeter(), dice=utils.AverageMeter())
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -48,7 +50,7 @@ class InceptionModel(BaseModel):
         if self.input is None:
             raise ValueError("Input not set for {}".format(self.name()))
         self.output = self.net(self.input)
-        self.loss_bce = self.bce(self.output, self.target)
+        self.update_measure_value('bce', self.bce(self.output, self.target))
 
     def backward(self):
         self.optimizers[0].zero_grad()
@@ -71,17 +73,11 @@ class InceptionModel(BaseModel):
         EPS = 0.01
         target = self.target.detach().cpu().numpy()
         output = torch.nn.functional.softmax(self.output, dim=1).max(1)[1].detach().cpu().numpy().astype(target.dtype)
+        self.prediction = output  # for visualizer
         cm = confusion_matrix(target, output)
-        # C0 = C.copy().fill_diagonal(np.zeros(C.shape[0]))
         d = cm.diagonal()
-
         acc = (d.sum() + EPS) / (cm.sum() + EPS)
         tp = d.sum()
         dice = (2 * tp + EPS) / (2 * tp + (cm - np.diag(d)).sum() + EPS)
-        self.metric_acc = acc
-        self.metric_dice = dice
-        # class_acc = (d + EPS) / (cm.sum(axis=1) + EPS)
-        # class_dice = (2 * d + EPS) / (2 * d + (cm - np.diag(d)).sum(axis=0) + (cm - np.diag(d)).sum(axis=0) + EPS)
-        # for c in range(self.opt.num_class):
-        #     setattr(self, 'metric_acc{}'.format(c), class_acc[c])
-        #     setattr(self, 'metric_dice{}'.format(c), class_dice[c])
+        self.update_measure_value('acc', acc)
+        self.update_measure_value('dice', dice)

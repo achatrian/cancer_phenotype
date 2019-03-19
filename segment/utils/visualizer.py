@@ -39,9 +39,11 @@ class SegmentVisualizer(BaseVisualizer):
                 while idx % ncols != 0:
                     images.append(white_image)
                     label_html_row += '<td></td>'
+                    path_html_row += '<td></td>'
                     idx += 1
                 if label_html_row != '':
                     label_html += f'<tr>{label_html_row}</tr>'
+                    path_html += f'<tr>{path_html_row}</tr>'
                 # pane col = image row
                 assert all([images[0].shape == image.shape for image in images]);
                 "Ensure all images have same shape"

@@ -11,6 +11,10 @@ from .wsi_reader import WSIReader
 class WSIDataset(BaseDataset):
 
     def __init__(self, opt):
+        r"""
+        Simple dataset to read tiles from WSIs using WSIReader
+        :param opt:
+        """
         super(WSIDataset, self).__init__()
         self.opt = opt
         self.files = []
@@ -22,7 +26,8 @@ class WSIDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--mpp', type=float, default=2.0, help="Target millimeter per pixel resolution to read slide")
+        parser.add_argument('--slide_id', type=str, default='', help="Whether to load a single slide")
+        parser.add_argument('--mpp', type=float, default=0.5, help="Target millimeter per pixel resolution to read slide")
         parser.add_argument('--qc_mpp', type=float, default=4.0, help="Target millimeter per pixel resolution for quality control on slide")
         parser.add_argument('--check_tile_blur', action='store_true', help="Reject tiles that result blurred according to my criterion")
         parser.add_argument('--check_tile_fold', action='store_true', help="Reject tiles that contain a fold according to my criterion")
@@ -36,7 +41,9 @@ class WSIDataset(BaseDataset):
         # Lazy set up as it can be slow
         # Determine tile locations in all the images
         root_path = Path(self.opt.data_dir)
-        paths = root_path.glob('**/*.svs')
+        paths = list(root_path.glob('./*.svs')) + list(root_path.glob('./*/*.svs'))  # avoid expensive recursive search
+        if self.opt.slide_id:
+            paths = [str(path) for path in paths if self.opt.slide_id in str(path)]
         files = sorted((str(path) for path in paths), key=lambda file: os.path.basename(file))  # sorted by basename
         good_files = sorted(good_files, reverse=True)  # reversed, as last element is checked and then popped from the list
         # read quality_control results if available (last produced by date):

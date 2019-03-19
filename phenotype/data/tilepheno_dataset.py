@@ -22,6 +22,7 @@ class TilePhenoDataset(BaseDataset):
     """
 
     def __init__(self, opt):
+        # TODO add torch.utils.data.WeightedRandomSampler(weights, num_samples, replacement=True)
         super(TilePhenoDataset, self).__init__()
         self.opt = opt
         self.paths = []
@@ -63,7 +64,7 @@ class TilePhenoDataset(BaseDataset):
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore")
                             contours, labels = AnnotationBuilder.from_object(annotation).get_layer_points(0, contour_format=True)
-                        tumour_areas = [(contour * self.ANNOTATION_SCALING_FACTOR).astype(np.int32) for contour in contours if contour.size]
+                        tumour_areas = [(contour / self.ANNOTATION_SCALING_FACTOR).astype(np.int32) for contour in contours if contour.size]
                         if all(tumour_area.size == 0 for tumour_area in tumour_areas):  # in case all contours are empty
                             continue
                         for i, path in enumerate(paths):
@@ -73,8 +74,8 @@ class TilePhenoDataset(BaseDataset):
                             origin_corner = tuple(int(s.replace('.png', '')) for s in str(path.name).split('_'))
                             opposite_corner = (int(origin_corner[0] + self.opt.patch_size * rescale_factor),
                                                int(origin_corner[1] + self.opt.patch_size * rescale_factor))  # actual tiles are resized as well - using patch size simply is incorrect
-                            if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False)
-                                   and cv2.pointPolygonTest(tumour_area, opposite_corner, measureDist=False)
+                            if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0
+                                   and cv2.pointPolygonTest(tumour_area, opposite_corner, measureDist=False >= 0)
                                    for tumour_area in tumour_areas):
                                 paths_in_annotation.append(path)
                 self.paths = paths_in_annotation
@@ -87,11 +88,10 @@ class TilePhenoDataset(BaseDataset):
         self.randomcrop = RandomCrop(self.opt.patch_size)
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
-        self.resolutions = None
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--mpp', type=float, default=0.5, help="Target millimeter per pixel resolution to read slide")
+        parser.add_argument('--mpp', type=float, default=1.0, help="Target millimeter per pixel resolution to read slide")
         parser.add_argument('--split_file', type=str, default='split0.json', help="File containing data division in train - test split")
         parser.add_argument('--image_glob_pattern', type=str, default='*_*.png', help='Pattern used to find images in each WSI / region folder')
         parser.add_argument('--coords_pattern', type=str, default='(\w{1,6})_(\w{1,6}).png')
@@ -140,6 +140,7 @@ class TilePhenoDataset(BaseDataset):
         self.cna.read_matrix_data(cna_tablefile, yfield='Hugo_Symbol', xfield=(0, 2))
         self.cna.index_data(index='y')
         self.sample.data.query("is_ffpe == True", inplace=True)  # remove all slides that are not FFPE
+        # TODO this does not seem to cause errors, even though the paths are not checked for their frozen vs FFPE state
 
     def rescale(self, image, resolution_data, gt=None):
         """

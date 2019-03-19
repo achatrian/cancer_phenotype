@@ -63,9 +63,9 @@ class UNetModel(BaseModel):
             raise ValueError("Input not set for {}".format(self.name()))
         self.output = self.net(self.input)
         if self.target is not None:
-            self.loss_ce = self.ce(self.output, self.target)
+            self.update_measure_value('ce', self.ce(self.output, self.target))
             if self.opt.regularizer_coeff:
-                self.loss_reg = self.reg(self.net) * self.opt.regularizer_coeff
+                self.update_measure_value('reg', self.reg(self.net) * self.opt.regularizer_coeff)
         elif self.opt.is_train:
             warnings.warn("Empty target assigned to model", UserWarning)
 
@@ -101,7 +101,6 @@ class UNetModel(BaseModel):
             output = torch.nn.functional.sigmoid(output, dim=1)
         output = output.cpu().numpy()
         target = self.target.detach().cpu().numpy()
-
         class_acc, class_dice = [], []
         for c in range(output.shape[1]):
             pred = output[:, c, ...].flatten()
@@ -110,8 +109,8 @@ class UNetModel(BaseModel):
             class_dice.append(round(float(network_utils.dice_coeff(pred, gt)), 2))
         acc = float(np.mean(class_acc))
         dice = float(np.mean(class_dice))
-        self.metric_acc = acc
-        self.metric_dice = dice
+        self.update_measure_value('acc', acc)
+        self.update_measure_value('dice', dice)
         for c in range(len(class_acc)):
-            setattr(self, 'metric_acc{}'.format(c), class_acc[c])
-            setattr(self, 'metric_dice{}'.format(c), class_dice[c])
+            self.update_measure_value('metric_acc{}'.format(c), class_acc[c])
+            self.update_measure_value('metric_dice{}'.format(c), class_dice[c])
