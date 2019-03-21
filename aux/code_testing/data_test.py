@@ -35,7 +35,7 @@ def test_wsi_reader(apply_options, wsi_file):
     sys.argv.extend(['--dataset_name=wsi'])
     opt = apply_options.parse()
     slide = data.wsi_reader.WSIReader(opt, wsi_file)
-    slide.find_good_locations()
+    slide.find_tissue_locations()
     assert len(slide) > 0
     print("{} tiles of shape {} passed quality control".format(len(slide), opt.patch_size))
     fig, axes = plt.subplots(3, 3)

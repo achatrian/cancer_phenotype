@@ -125,7 +125,6 @@ def get_augment_seq(augment_level):
         )
 
     elif augment_level == 3:
-        alpha = 0.5
         aug_seq = iaa.Sequential(
             [
                 # apply the following augmenters to most images
@@ -150,9 +149,9 @@ def get_augment_seq(augment_level):
                 # execute 0 to 5 of the following (less important) augmenters per image
                 # don't execute all of them, as that would often be way too strong
                 iaa.WithChannels([0, 1, 2],
-                                 iaa.SomeOf((0, 4),
+                                 iaa.SomeOf((0, 5),
                                             [
-                                                sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
+                                                sometimes(iaa.Superpixels(p_replace=(0, 0.2), n_segments=(5, 50))),
                                                 # convert images into their superpixel representation
                                                 iaa.OneOf([
                                                     iaa.GaussianBlur((0, 3.0)),
@@ -180,8 +179,8 @@ def get_augment_seq(augment_level):
                                                     iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
                                                                       per_channel=0.2),
                                                 ]),
-                                                iaa.Invert(0.05, per_channel=True),  # invert color channels
-                                                iaa.Add((-10, 10), per_channel=0.5),
+                                                iaa.Invert(0.1, per_channel=True),  # invert color channels
+                                                iaa.Add((-30, 30), per_channel=0.5),
                                                 # change brightness of images (by -10 to 10 of original value)
                                                 iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
                                                 # either change the brightness of the whole image (sometimes

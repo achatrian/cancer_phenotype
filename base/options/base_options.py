@@ -104,6 +104,7 @@ class BaseOptions:
             with open(file_name, 'wt') as opt_file:
                 opt_file.write(message)
                 opt_file.write('\n')
+        return message
 
     def parse(self):
         opt = self.gather_options()

@@ -5,6 +5,7 @@ import json
 from itertools import chain
 import warnings
 from PIL import Image
+from random import sample
 import imageio
 import torch
 import numpy as np
@@ -26,7 +27,7 @@ class TilePhenoDataset(BaseDataset):
         super(TilePhenoDataset, self).__init__()
         self.opt = opt
         self.paths = []
-        split_tiles_path = Path(self.opt.data_dir) / 'CVsplits' / (re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
+        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'CVsplits' / (re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
         split_tiles_path = str(split_tiles_path)
         # read resolution data - requires global tcga_resolution.json file
         with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / 'tcga_resolution.json', 'r') as resolution_file:
@@ -34,6 +35,10 @@ class TilePhenoDataset(BaseDataset):
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
                 self.paths = json.load(split_tiles_file)
+            num_path_tests = 20  # tests whether tiles exist, if not build index again
+            if not all(Path(path).is_file() for path in sample(self.paths, num_path_tests)):
+                print("Outdated tile list - rewriting ...")
+                raise FileNotFoundError
             print(f"Loaded {len(self.paths)} tile paths for split {Path(self.opt.split_file).name}")
         except FileNotFoundError:
             self.ANNOTATION_SCALING_FACTOR = 0.1  # in case images were shrank before being annotated (for TCGA) TODO rescale annotation instead
@@ -43,13 +48,13 @@ class TilePhenoDataset(BaseDataset):
                          path.is_dir()]  # one per wsi image the tiles were derived from
             paths = [path for path in chain(*(wsi_path.glob(self.opt.image_glob_pattern) for wsi_path in wsi_paths))]
             assert paths, "Cannot be empty"
-            with open(self.opt.split_file, 'r') as split_json:
+            with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / opt.split_file) as split_json:
                 self.split = json.load(split_json)
             tqdm.write("Selecting split tiles within annotation area (might take a while) ...")
             self.opt.phase = self.opt.phase if self.opt.phase != 'val' else 'test'  # check on test set during training (TEMP)
             phase_split = set(self.split[self.opt.phase])  # ~O(1) __contains__ check through hash table
             id_len = len(phase_split.pop())  # checks length of id
-            tqdm.write("Filtering by training split ...")
+            tqdm.write(f"Filtering by training split ({self.opt.phase} phase) ...")
             paths = sorted(path for path in paths if path.parent.name[:id_len] in phase_split)
             assert paths, "Cannot be empty"
             tumour_annotations_dir = Path(self.opt.data_dir) / 'data' / 'tumour_area_annotations'
@@ -113,7 +118,7 @@ class TilePhenoDataset(BaseDataset):
         return len(self.paths)
 
     def name(self):
-        return "TileSegDataset"
+        return "TilePhenoDataset"
 
     def setup(self):
         # read metadata

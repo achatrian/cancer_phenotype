@@ -26,10 +26,11 @@ if __name__ == '__main__':
             resolution_data = json.load(resolution_file)
         resolutions[resolution_path.parent.name] = resolution_data
         for key, value in resolution_data.items():
-            statistics[key].append(value)
-    with open(root_path/'data'/'quality_control'/'tcga_resolution.json', 'w') as resolution_file:
+            if key not in ('tissue_locations',):
+                statistics[key].append(value)
+    with open(root_path/'data'/'CVsplits'/'tcga_resolution.json', 'w') as resolution_file:
         json.dump(resolutions, resolution_file)
-    with open(root_path/'data'/'quality_control'/'tcga_resolution_stats.csv', 'w') as resolution_stats_file:
+    with open(root_path/'data'/'CVsplits'/'tcga_resolution_stats.csv', 'w') as resolution_stats_file:
         df = DataFrame.from_dict(statistics)
         concat((
             df.aggregate(['mean', 'std']),

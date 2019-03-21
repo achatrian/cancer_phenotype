@@ -2,6 +2,7 @@ import os
 import glob
 from optparse import OptionParser
 from deepzoom_tile import DeepZoomStaticTiler
+import signal
 
 r"Creates deepzoom images for all the WSIs in a folder"
 
@@ -39,9 +40,28 @@ if __name__ == '__main__':
     slide_paths = list(glob.glob(os.path.join(slide_dir_path, '**/*.svs'), recursive=True))
     slide_paths += list(glob.glob(os.path.join(slide_dir_path, '**/*.ndpi'), recursive=True))
 
+    class TimeoutException(Exception):  # Custom exception class
+        pass
+
+    def timeout_handler(signum, frame):  # Custom signal handler
+        raise TimeoutException
+
+    # Change the behavior of SIGALRM
+    signal.signal(signal.SIGALRM, timeout_handler)
+    timeout = 15*60
     for slide_path in slide_paths:
-        print("Making deepzoom for " + os.path.basename(slide_path))
-        opts.basename = os.path.splitext(os.path.basename(slide_path))[0]
-        DeepZoomStaticTiler(slide_path, opts.basename, opts.format,
-                    opts.tile_size, opts.overlap, opts.limit_bounds, opts.quality,
-                    opts.workers, opts.with_viewer).run()
+        signal.alarm(timeout)
+        # This try/except loop ensures that
+        #   you'll catch TimeoutException when it's sent.
+        try:
+            print("Making deepzoom for " + os.path.basename(slide_path))
+            opts.basename = os.path.splitext(os.path.basename(slide_path))[0]
+            DeepZoomStaticTiler(slide_path, opts.basename, opts.format,
+                                opts.tile_size, opts.overlap, opts.limit_bounds, opts.quality,
+                                opts.workers, opts.with_viewer).run()
+            # Whatever your function that might hang
+        except TimeoutException:
+            continue  # continue the for loop if function A takes more than 5 second
+        else:
+            # Reset the alarm
+            signal.alarm(0)

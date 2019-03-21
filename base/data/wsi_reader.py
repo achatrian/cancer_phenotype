@@ -4,7 +4,9 @@ import re
 import warnings
 import csv
 import json
+import tqdm
 import datetime
+import time
 from openslide import OpenSlide, PROPERTY_NAME_MPP_X, PROPERTY_NAME_MPP_Y, PROPERTY_NAME_BACKGROUND_COLOR
 import numpy as np
 import cv2
@@ -16,13 +18,14 @@ from base.utils import utils
 class WSIReader(OpenSlide):
 
     def __init__(self, opt, file_name):
+        file_name = str(file_name)
         super(WSIReader, self).__init__(file_name)
         slide_format = WSIReader.detect_format(file_name)
         if not slide_format:
             warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
         self.opt = opt
         self.file_name = file_name
-        self.good_locations = []
+        self.tissue_locations = []
         self.locations = []
         self.tile_info = dict()
         self.qc = None
@@ -44,7 +47,7 @@ class WSIReader(OpenSlide):
         assert best_level_qc_x == best_level_qc_y; "This should be the same, unless pixel has different side lengths"
         self.qc_read_level = int(best_level_qc_x)
 
-    def find_good_locations(self, qc_store=None):
+    def find_tissue_locations(self, qc_store=None):
         """
         Perform quality control on regions of slide by examining each tile
         :return:
@@ -56,30 +59,34 @@ class WSIReader(OpenSlide):
             if self.opt.verbose:
                 print("Read quality_control info for {}".format(os.path.basename(self.file_name)))
         except FileNotFoundError as err:
-            print(err)
-            good_locations = []
+            print("Finding tissue tiles ...")
+            tissue_locations = []
             qc_downsample = int(self.level_downsamples[self.qc_read_level])
             read_downsample = int(self.level_downsamples[self.read_level])
             qc_stride = self.opt.patch_size * read_downsample  # size of read tiles at level 0
             qc_sizes = (qc_stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
-            for x in range(0, self.level_dimensions[0][0], qc_stride):  # dimensions = (width, height)
-                for y in range(0, self.level_dimensions[0][1], qc_stride):
-                    tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
-                    tile = np.array(tile)  # convert from PIL.Image
-                    self.locations.append((x, y))
-                    if not is_HnE(tile):
-                        self.tile_info[f'{x},{y}'] = 'empty'
-                    elif self.opt.check_tile_blur and is_blurred(tile):
-                        self.tile_info[f'{x},{y}'] = 'blur'
-                    elif self.opt.check_tile_fold and is_folded(tile):
-                        self.tile_info[f'{x},{y}'] = 'folded'
-                    else:
-                        self.tile_info[f'{x},{y}'] = 'good'
-                        good_locations.append((x, y))
-            self.good_locations = good_locations
-            self.save_locations()  # overwrite if existing
-            if self.opt.verbose:
-                print("Perform quality control on {}".format(os.path.basename(self.file_name)))
+            xs = list(range(0, self.level_dimensions[0][0], qc_stride))  # dimensions = (width, height)
+            ys = list(range(0, self.level_dimensions[0][1], qc_stride))
+            with tqdm.tqdm(total=len(xs)*len(ys)) as pbar:
+                for x in xs:
+                    for y in ys:
+                        tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
+                        tile = np.array(tile)  # convert from PIL.Image
+                        self.locations.append((x, y))
+                        if not self.is_HnE(tile):
+                            self.tile_info[f'{x},{y}'] = 'empty'
+                        elif self.opt.check_tile_blur and self.is_blurred(tile):
+                            self.tile_info[f'{x},{y}'] = 'blur'
+                        elif self.opt.check_tile_fold and self.is_folded(tile):
+                            self.tile_info[f'{x},{y}'] = 'folded'
+                        else:
+                            self.tile_info[f'{x},{y}'] = 'tissue'
+                            tissue_locations.append((x, y))
+                        pbar.update()
+                self.tissue_locations = tissue_locations
+                self.save_locations()  # overwrite if existing
+                if self.opt.verbose:
+                    print("Performed quality control on {}".format(os.path.basename(self.file_name)))
 
     def save_locations(self):
         """
@@ -115,11 +122,10 @@ class WSIReader(OpenSlide):
                 self.tile_info[loc] = info
                 loc = tuple(int(d) for d in loc.split(','))
                 self.locations.append(loc)
-                if info == 'good':
-                    self.good_locations.append(loc)
+                if info == 'tissue':
+                    self.tissue_locations.append(loc)
         else:  # create slide file if it doesn't exist
             slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'quality_control', name_ext)
-            utils.mkdirs(os.path.join(*slide_loc_path.split('/')[:-1]))
             with open(slide_loc_path, 'r') as slide_loc_file:
                 if os.stat(slide_loc_path).st_size == 0:  # rewrite if file is empty
                     raise FileNotFoundError(f"Empty file: {slide_loc_path}")
@@ -128,16 +134,23 @@ class WSIReader(OpenSlide):
                     self.tile_info[loc] = info
                     loc = tuple(int(d) for d in loc.split(','))
                     self.locations.append(loc)
-                    if info == 'good':
-                        self.good_locations.append(loc)
+                    if info == 'tissue':
+                        self.tissue_locations.append(loc)
 
     def __len__(self):
-        return len(self.good_locations)
+        return len(self.tissue_locations)
 
     def __getitem__(self, item):
-        return self.read_region(self.good_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
+        return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
 
-    def export_good_tiles(self, tile_dir='tiles', export_contours=(), contour_scaling=None):
+    def export_tissue_tiles(self, tile_dir='tiles', export_contours=(), contour_scaling=None):
+        r"""
+        Save quality-controlled tiles
+        :param tile_dir:
+        :param export_contours:
+        :param contour_scaling:
+        :return:
+        """
         sizes = (self.opt.patch_size, )*2
         save_tiles_dir = Path(self.opt.data_dir)/'data'/tile_dir/Path(self.file_name).name[:-4]  # remove extension
         utils.mkdirs(save_tiles_dir)
@@ -149,32 +162,40 @@ class WSIReader(OpenSlide):
                 'qc_read_level': self.qc_read_level,
                 'read_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level],
                 'qc_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level],
-                'good_locations': self.good_locations
+                'tissue_locations': self.tissue_locations
             },
                       res_file)
-        if self.good_locations:
-            for x, y in self.good_locations:
-                if export_contours:
-                    export_contours = [(contour / contour_scaling).astype(np.int32)
-                                       for contour in export_contours if contour.size]
-                    origin_corner = (int(x), int(y))
-                    opposite_corner = (int(origin_corner[0] + self.opt.patch_size), int(origin_corner[1] + self.opt.patch_size))
-                    if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0
-                           and cv2.pointPolygonTest(tumour_area, opposite_corner, measureDist=False >= 0)
-                           for tumour_area in export_contours):
+        if self.tissue_locations:
+            print("Begin exporting tiles ...")
+            log_freq, start_time = 5, time.time()
+            exported_locations = []
+            if export_contours and contour_scaling:
+                    export_contours = [(contour / contour_scaling).astype(np.int32) for contour in export_contours if contour.size]
+            with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
+                log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
+                for x, y in tqdm.tqdm(self.tissue_locations):
+                    if export_contours:
+                        origin_corner = (int(x), int(y))
+                        #opposite_corner = (int(origin_corner[0] + self.opt.patch_size), int(origin_corner[1] + self.opt.patch_size))
+                        if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0 for tumour_area in export_contours):
+                            tile = self.read_region((x, y), self.read_level, sizes)
+                            tile = np.array(tile)
+                            imageio.imwrite(save_tiles_dir / f'{x}_{y}.png', tile)
+                            exported_locations.append(origin_corner)
+                        if len(exported_locations) % log_freq == 0:
+                            log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}) Exported {len(exported_locations)} tiles ...\n")
+                    else:
                         tile = self.read_region((x, y), self.read_level, sizes)
                         tile = np.array(tile)
-                        imageio.imwrite(save_tiles_dir / f'{x}_{y}.png', tile)
-                else:
-                    tile = self.read_region((x, y), self.read_level, sizes)
-                    tile = np.array(tile)
-                    imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+                        imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+                if not exported_locations:
+                    warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
+            print(f"Exported {len(exported_locations)} tiles.")
         else:
             warnings.warn(f"No locations to export - {Path(self.file_name).name}")
 
     def __repr__(self):
-        # TODO what should this return
-        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.good_locations])
+        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.tissue_locations])
 
     @staticmethod
     def save_quality_control_to_json(opt, files):
@@ -196,30 +217,30 @@ class WSIReader(OpenSlide):
             datetime.datetime.now().__str__().split(' ')[0]
         ), 'w'))
 
+    @staticmethod
+    def is_HnE(image, threshold=0.5, sat_thresh=30, small_obj_size_factor=1/5):
+        """Returns true if slide contains tissue or just background
+        Problem: doesn't work if tile is completely white because of normalization step"""
+        if image.shape[-1] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
+        # saturation check
+        sat_mean = hsv_image[..., 1].mean()
+        empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
+        empirical = empirical/np.max(empirical)*255  # found by Ka Ho to work
+        kernel = np.ones((20, 20), np.uint8)
+        ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
+        return mask.mean() > threshold and not sat_mean < sat_thresh
 
-# functions for quality control on histology tiles
-def is_HnE(image, threshold=0.5, sat_thresh=30, small_obj_size_factor=1/5):
-    """Returns true if slide contains tissue or just background
-    Problem: doesn't work if tile is completely white because of normalization step"""
-    hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
-    # saturation check
-    sat_mean = hsv_image[..., 1].mean()
-    empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
-    empirical = empirical/np.max(empirical)*255  # found by Ka Ho to work
-    kernel = np.ones((20, 20), np.uint8)
-    ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-    mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
-    return mask.mean() > threshold and not sat_mean < sat_thresh
+    @staticmethod
+    def is_blurred(image):
+        return False
 
-
-def is_blurred(image):
-    return False
-
-
-def is_folded(image):
-    return False
-
+    @staticmethod
+    def is_folded(image):
+        return False
 
 
 

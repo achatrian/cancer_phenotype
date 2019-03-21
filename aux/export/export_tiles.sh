@@ -18,7 +18,7 @@ module load Anaconda3/5.1.0
 module load cuda/9.0
 module load cudnn/7.0-9.0
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
-python ${REPO}/aux/export/export_tiles.py ${1}
+python ${REPO}/aux/export/export_tiles.py ${1} --data_dir=/well/rittscher/projects/TCGA_prostate/TCGA
 
 
 

@@ -18,7 +18,7 @@ if __name__ == '__main__':
     print('task: {}, #training images = {:d}'.format(opt.task, len(train_dataset)))
 
     model = create_model(opt)
-    model.setup()
+    model.setup(dataset=train_dataset)  # dataset is used by some models
     visualizer = create_visualizer(opt)
     total_steps = 0
 
@@ -87,7 +87,3 @@ if __name__ == '__main__':
             if opt.display_id > 0:
                 visualizer.plot_current_losses_metrics(epoch, epoch_progress + 0.001, losses_val, metrics_val)
             print("Validated parameters at epoch {:d} \t Time Taken: {:d} sec".format(epoch, int(time.time() - val_start_time)))
-
-
-#TODO implement final learning rate decay to refine output
-#TODO update html / visualizer with validation images

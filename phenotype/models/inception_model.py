@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from pathlib import Path
 import torch
 from .networks import Inception
 from sklearn.metrics import confusion_matrix
@@ -36,6 +36,7 @@ class InceptionModel(BaseModel):
         self.metric_acc = None
         self.metric_dice = None
         self.meters = dict(acc=utils.AverageMeter(), dice=utils.AverageMeter())
+        self.setup_methods.append('add_per_slide_metrics')
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -81,3 +82,19 @@ class InceptionModel(BaseModel):
         dice = (2 * tp + EPS) / (2 * tp + (cm - np.diag(d)).sum() + EPS)
         self.update_measure_value('acc', acc)
         self.update_measure_value('dice', dice)
+        for i, path in enumerate(self.visual_paths['input']):
+            slide_name = Path(path).parent.name
+            if f'acc_{slide_name}' in self.metric_names:  # not tracking all slides
+                # FIXME -- not taking average as meant to. Instead it oscillates between 0 and 1
+                self.update_measure_value(f'acc_{slide_name}', float(target[i] == self.prediction[i]), n_samples=1)
+
+    def add_per_slide_metrics(self, dataset, track_every=5):
+        """Setup method - add per-slide metrics"""
+        slide_names = sorted(set(Path(path).parent.name for path in dataset.paths))
+        slide_names = slide_names[::track_every]
+        for slide_name in slide_names:
+            metric_name = f'acc_{slide_name}'
+            self.metric_names.append(metric_name)
+            setattr(self, 'metric_' + metric_name, 0.0)  # so that all can be gathered for viz
+
+

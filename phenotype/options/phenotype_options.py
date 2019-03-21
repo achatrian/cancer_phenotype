@@ -12,6 +12,7 @@ class PhenotypeOptions(TaskOptions):
         self.parser.add_argument('--data_dir', type=str, default='')
         self.parser.add_argument('--num_class', type=int, default=2)  # addition / deletion of gene
         self.parser.add_argument('--display_ncols', type=int, default=3)
+        self.parser.add_argument('--save_epoch_freq', type=int, default=4)
 
         # New arguments
         self.parser.add_argument('--num_display_images', type=int, default=3, help="Number of input images to be shown with labels in visualizer")

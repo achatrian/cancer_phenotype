@@ -25,19 +25,20 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
     ims, txts, links = [], [], []
 
     for label, im_data in visuals.items():
-        im = utils.tensor2im(im_data, label.endswith("_map"))
-        image_name = '%s_%s.png' % (name, label)
-        save_path = os.path.join(image_dir, image_name)
-        h, w, _ = im.shape
-        if aspect_ratio > 1.0:
-            im = imresize(im, (h, int(w * aspect_ratio)), interp='bicubic')
-        if aspect_ratio < 1.0:
-            im = imresize(im, (int(h / aspect_ratio), w), interp='bicubic')
-        utils.save_image(im, save_path)
+        if not label.endswith('label'):
+            im = utils.tensor2im(im_data, label.endswith("_map"))
+            image_name = '%s_%s.png' % (name, label)
+            save_path = os.path.join(image_dir, image_name)
+            h, w, _ = im.shape
+            if aspect_ratio > 1.0:
+                im = imresize(im, (h, int(w * aspect_ratio)), interp='bicubic')
+            if aspect_ratio < 1.0:
+                im = imresize(im, (int(h / aspect_ratio), w), interp='bicubic')
+            utils.save_image(im, save_path)
 
-        ims.append(image_name)
-        txts.append(label)
-        links.append(image_name)
+            ims.append(image_name)
+            txts.append(label)
+            links.append(image_name)
     webpage.add_images(ims, txts, links, width=width)
 
 
@@ -74,18 +75,21 @@ class BaseVisualizer:
     def throw_visdom_connection_error(self):
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
-    def print_current_losses_metrics(self, epoch, i, losses, metrics, t, t_data):
-        if i:  # iter is not given in validation (confusing?)
-            message = '(epoch: {:d}, iters: {:d}, time: {:.3f}, data: {:.3f}) '.format(epoch, i, t, t_data)
+    def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):
+        if iters:  # iter is not given in validation/testing (confusing?)
+            message = '(epoch: {:d}, iters: {:d}, time: {:.3f}, data: {:.3f}) '.format(epoch, iters, t, t_data)
         else:
             message = '(epoch: {:d}, validation) '.format(epoch)
-        for k, v in (OrderedDict(losses, **metrics)).items():  # not displayed in correct order in python <3.6
-            if not i:
+        for i, (k, v) in enumerate((OrderedDict(losses, **metrics)).items()):  # not displayed in correct order in python <3.6
+            if not iters:
                 k = '_'.join(k.split('_')[0:-1])
+            if len(k) > 10:  # don't print very long strings
+                continue
             message += '{}: {:.3f} '.format(k, v)
         print(message)
         with open(self.log_name, "a") as log_file:
             log_file.write(f'{message}\n')
+        return message
 
     # |visuals|: dictionary of images to display or save
     def display_current_results(self, visuals, visuals_paths, epoch, save_result):

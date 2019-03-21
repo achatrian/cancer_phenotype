@@ -7,24 +7,27 @@ import warnings
 import csv
 import json
 import datetime
+import time
 from openslide import OpenSlide, PROPERTY_NAME_MPP_X, PROPERTY_NAME_MPP_Y, PROPERTY_NAME_BACKGROUND_COLOR
 import numpy as np
 import cv2
 from skimage.morphology import remove_small_objects
 import imageio
+import tqdm
 import utils
 
 
 class WSIReader(OpenSlide):
 
     def __init__(self, opt, file_name):
+        file_name = str(file_name)
         super(WSIReader, self).__init__(file_name)
         slide_format = WSIReader.detect_format(file_name)
         if not slide_format:
             warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
         self.opt = opt
         self.file_name = file_name
-        self.good_locations = []
+        self.tissue_locations = []
         self.locations = []
         self.tile_info = dict()
         self.qc = None
@@ -46,24 +49,46 @@ class WSIReader(OpenSlide):
         assert best_level_qc_x == best_level_qc_y; "This should be the same, unless pixel has different side lengths"
         self.qc_read_level = int(best_level_qc_x)
 
-    @staticmethod
-    def save_quality_control_to_json(opt, files):
-        to_json = {}
-        for file in files:
-            name_ext = re.sub('\.(ndpi|svs)', '.tsv', os.path.basename(file))  # change extension
-            slide_loc_path = (Path(opt.data_dir) / 'data' / 'quality_control' / name_ext).__str__()
-            with open(slide_loc_path, 'r') as slide_loc_file:
-                reader = csv.reader(slide_loc_file, delimiter='\t')
-                slide_qc = {loc: info for loc, info in reader}
-            to_json[name_ext.split('.')[0]] = slide_qc  # can't have periods in JSON keys
-        to_json = [{'qc_mpp': opt.qc_mpp,
-                    'check_tile_blur': opt.check_tile_blur,
-                    'check_tile_fold': opt.check_tile_fold,
-                    'patch_size': opt.patch_size},
-                   to_json]
-        json.dump(to_json, open(Path(opt.data_dir) / 'data' / 'quality_control' / 'qc_{}.json'.format(
-            datetime.datetime.now().__str__().split(' ')[0]
-        ), 'w'))
+    def find_tissue_locations(self, qc_store=None):
+        """
+        Perform quality control on regions of slide by examining each tile
+        :return:
+        """
+        try:
+            if self.opt.overwrite_qc:
+                raise FileNotFoundError('Option: overwrite quality_control')
+            self.read_locations(qc_store)
+            if self.opt.verbose:
+                print("Read quality_control info for {}".format(os.path.basename(self.file_name)))
+        except FileNotFoundError as err:
+            print("Finding tissue tiles ...")
+            tissue_locations = []
+            qc_downsample = int(self.level_downsamples[self.qc_read_level])
+            read_downsample = int(self.level_downsamples[self.read_level])
+            qc_stride = self.opt.patch_size * read_downsample  # size of read tiles at level 0
+            qc_sizes = (qc_stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
+            xs = list(range(0, self.level_dimensions[0][0], qc_stride))  # dimensions = (width, height)
+            ys = list(range(0, self.level_dimensions[0][1], qc_stride))
+            with tqdm.tqdm(total=len(xs)*len(ys)) as pbar:
+                for x in xs:
+                    for y in ys:
+                        tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
+                        tile = np.array(tile)  # convert from PIL.Image
+                        self.locations.append((x, y))
+                        if not self.is_HnE(tile):
+                            self.tile_info[f'{x},{y}'] = 'empty'
+                        elif self.opt.check_tile_blur and self.is_blurred(tile):
+                            self.tile_info[f'{x},{y}'] = 'blur'
+                        elif self.opt.check_tile_fold and self.is_folded(tile):
+                            self.tile_info[f'{x},{y}'] = 'folded'
+                        else:
+                            self.tile_info[f'{x},{y}'] = 'tissue'
+                            tissue_locations.append((x, y))
+                        pbar.update()
+                self.tissue_locations = tissue_locations
+                self.save_locations()  # overwrite if existing
+                if self.opt.verbose:
+                    print("Performed quality control on {}".format(os.path.basename(self.file_name)))
 
     def save_locations(self):
         """
@@ -99,11 +124,10 @@ class WSIReader(OpenSlide):
                 self.tile_info[loc] = info
                 loc = tuple(int(d) for d in loc.split(','))
                 self.locations.append(loc)
-                if info == 'good':
-                    self.good_locations.append(loc)
+                if info == 'tissue':
+                    self.tissue_locations.append(loc)
         else:  # create slide file if it doesn't exist
             slide_loc_path = os.path.join(self.opt.data_dir, 'data', 'quality_control', name_ext)
-            utils.mkdirs(os.path.join(*slide_loc_path.split('/')[:-1]))
             with open(slide_loc_path, 'r') as slide_loc_file:
                 if os.stat(slide_loc_path).st_size == 0:  # rewrite if file is empty
                     raise FileNotFoundError(f"Empty file: {slide_loc_path}")
@@ -112,53 +136,23 @@ class WSIReader(OpenSlide):
                     self.tile_info[loc] = info
                     loc = tuple(int(d) for d in loc.split(','))
                     self.locations.append(loc)
-                    if info == 'good':
-                        self.good_locations.append(loc)
-
-    def find_good_locations(self, qc_store=None):
-        """
-        Perform quality control on regions of slide by examining each tile
-        :return:
-        """
-        try:
-            if self.opt.overwrite_qc:
-                raise FileNotFoundError('Option: overwrite quality_control')
-            self.read_locations(qc_store)
-            if self.opt.verbose:
-                print("Read quality_control info for {}".format(os.path.basename(self.file_name)))
-        except FileNotFoundError as err:
-            print(err)
-            good_locations = []
-            qc_downsample = int(self.level_downsamples[self.qc_read_level])
-            read_downsample = int(self.level_downsamples[self.read_level])
-            qc_stride = self.opt.patch_size * read_downsample  # size of read tiles at level 0
-            qc_sizes = (qc_stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
-            for x in range(0, self.level_dimensions[0][0], qc_stride):  # dimensions = (width, height)
-                for y in range(0, self.level_dimensions[0][1], qc_stride):
-                    tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
-                    tile = np.array(tile)  # convert from PIL.Image
-                    self.locations.append((x, y))
-                    if not is_HnE(tile):
-                        self.tile_info[f'{x},{y}'] = 'empty'
-                    elif self.opt.check_tile_blur and is_blurred(tile):
-                        self.tile_info[f'{x},{y}'] = 'blur'
-                    elif self.opt.check_tile_fold and is_folded(tile):
-                        self.tile_info[f'{x},{y}'] = 'folded'
-                    else:
-                        self.tile_info[f'{x},{y}'] = 'good'
-                        good_locations.append((x, y))
-            self.good_locations = good_locations
-            self.save_locations()  # overwrite if existing
-            if self.opt.verbose:
-                print("Perform quality control on {}".format(os.path.basename(self.file_name)))
+                    if info == 'tissue':
+                        self.tissue_locations.append(loc)
 
     def __len__(self):
-        return len(self.good_locations)
+        return len(self.tissue_locations)
 
     def __getitem__(self, item):
-        return self.read_region(self.good_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
+        return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
 
-    def export_good_tiles(self, tile_dir='tiles'):
+    def export_tissue_tiles(self, tile_dir='tiles', export_contours=(), contour_scaling=None):
+        r"""
+        Save quality-controlled tiles
+        :param tile_dir:
+        :param export_contours:
+        :param contour_scaling:
+        :return:
+        """
         sizes = (self.opt.patch_size, )*2
         save_tiles_dir = Path(self.opt.data_dir)/'data'/tile_dir/Path(self.file_name).name[:-4]  # remove extension
         utils.mkdirs(save_tiles_dir)
@@ -169,54 +163,107 @@ class WSIReader(OpenSlide):
                 'read_level': self.read_level,
                 'qc_read_level': self.qc_read_level,
                 'read_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level],
-                'qc_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
+                'qc_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level],
+                'tissue_locations': self.tissue_locations
             },
                       res_file)
-        for x, y in self.good_locations:
-            tile = self.read_region((x, y), self.read_level, sizes)
-            tile = np.array(tile)
-            imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+        if self.tissue_locations:
+            print("Begin exporting tiles ...")
+            log_freq, start_time = 5, time.time()
+            exported_locations = []
+            if export_contours:
+                export_contours = [(contour / contour_scaling).astype(np.int32) for contour in export_contours if contour.size]
+            with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
+                log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
+                for x, y in tqdm.tqdm(self.tissue_locations):
+                    if export_contours:
+                        origin_corner = (int(x), int(y))
+                        #opposite_corner = (int(origin_corner[0] + self.opt.patch_size), int(origin_corner[1] + self.opt.patch_size))
+                        if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0 for tumour_area in export_contours):
+                            tile = self.read_region((x, y), self.read_level, sizes)
+                            tile = np.array(tile)
+                            imageio.imwrite(save_tiles_dir / f'{x}_{y}.png', tile)
+                            exported_locations.append(origin_corner)
+                        if len(exported_locations) % log_freq == 0:
+                            log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}) Exported {len(exported_locations)} tiles ...\n")
+                    else:
+                        tile = self.read_region((x, y), self.read_level, sizes)
+                        tile = np.array(tile)
+                        imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+                if not exported_locations:
+                    warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
+        else:
+            warnings.warn(f"No locations to export - {Path(self.file_name).name}")
 
     def __repr__(self):
-        # TODO what should this return
-        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.good_locations])
+        return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.tissue_locations])
 
+    @staticmethod
+    def save_quality_control_to_json(opt, files):
+        r"""Translate all quality control results into a single json file and save it with date"""
+        to_json = {}
+        for file in files:
+            name_ext = re.sub('\.(ndpi|svs)', '.tsv', os.path.basename(file))  # change extension
+            slide_loc_path = str(Path(opt.data_dir) / 'data' / 'quality_control' / name_ext)
+            with open(slide_loc_path, 'r') as slide_loc_file:
+                reader = csv.reader(slide_loc_file, delimiter='\t')
+                slide_qc = {loc: info for loc, info in reader}
+            to_json[name_ext.split('.')[0]] = slide_qc  # can't have periods in JSON keys
+        to_json = [{'wsi_read_level': opt.wsi_read_level,
+                    'check_tile_blur': opt.check_tile_blur,
+                    'check_tile_fold': opt.check_tile_fold,
+                    'patch_size': opt.patch_size},
+                   to_json]
+        json.dump(to_json, open(Path(opt.data_dir) / 'data' / 'quality_control' / 'qc_{}.json'.format(
+            datetime.datetime.now().__str__().split(' ')[0]
+        ), 'w'))
 
-# functions for quality control on histology tiles
-def is_HnE(image, threshold=0.5, sat_thresh=30, small_obj_size_factor=1/5):
-    """Returns true if slide contains tissue or just background
-    Problem: doesn't work if tile is completely white because of normalization step"""
-    hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
-    # saturation check
-    sat_mean = hsv_image[..., 1].mean()
-    empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
-    empirical = empirical/np.max(empirical)*255  # found by Ka Ho to work
-    kernel = np.ones((20, 20), np.uint8)
-    ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-    mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
-    return mask.mean() > threshold and not sat_mean < sat_thresh
+    @staticmethod
+    def is_HnE(image, threshold=0.5, sat_thresh=30, small_obj_size_factor=1/5):
+        """Returns true if slide contains tissue or just background
+        Problem: doesn't work if tile is completely white because of normalization step"""
+        if image.shape[-1] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
+        # saturation check
+        sat_mean = hsv_image[..., 1].mean()
+        empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
+        empirical = empirical/np.max(empirical)*255  # found by Ka Ho to work
+        kernel = np.ones((20, 20), np.uint8)
+        ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
+        return mask.mean() > threshold and not sat_mean < sat_thresh
 
+    @staticmethod
+    def is_blurred(image):
+        return False
 
-def is_blurred(image):
-    return False
-
-
-def is_folded(image):
-    return False
+    @staticmethod
+    def is_folded(image):
+        return False
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
     parser.add_argument('--qc_mpp', default=1.0, type=float, help="MPP value to perform quality control on slide")
     parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
-    parser.add_argument('--data_dir', default=str, help="Dir where to save qc result")
+    parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
     parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
     parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
+    parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
+    parser.add_argument('--patch_size', type=int, default=256, help="Pixel size of patches (at desired resolution)")
+    parser.add_argument('--verbose', action='store_true', help="Print more information")
+    opt, unknown = parser.parse_known_args()
 
     slide_path = Path(sys.argv[1])
     if not slide_path.is_file():
         raise ValueError(f"Invalid file input {str(slide_path)}")
+
+    wsi_reader = WSIReader(opt, slide_path)
+    wsi_reader.find_tissue_locations()
+    wsi_reader.export_tissue_tiles('tiles2')
+
 
 
 

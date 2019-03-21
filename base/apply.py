@@ -22,36 +22,17 @@ if __name__ == '__main__':
     parent_conn, child_conn = mp.Pipe()
     with deployer.queue_env(sentinel=False) as output_queue:
         with deployer.queue_env(sentinel=True) as input_queue:
-            if opt.ndeploy_workers:
-                workers = deployer.get_workers(model, input_queue, output_queue, sync=(barrier, child_conn))
-                for i, worker in enumerate(workers):
-                    worker.start()
-                    print(f"Worker {i} - {worker.name} is running ...")
-                nimages = 0
-                for j, data in enumerate(dataloader):
-                    nimages += data['input'].shape[0]
-                    data['idx'] = j
-                    input_queue.put(data)
-                    if j % 10 == 0:
-                        print("Loaded: {} images".format(nimages))
-            else:
-                # run in main process
-                workers = []
-                nimages = 0
-                for j, data in enumerate(dataloader):
-                    nimages += data['input'].shape[0]
-                    data['idx'] = j
-                    input_queue.put(data)
-                    input_queue.put(None)
-                    deployer.run_worker(0, opt, model, input_queue, output_queue)
-                try:
-                    while True:
-                        _ = input_queue.get_nowait()
-                        input_queue.task_done()
-                except Empty:
-                    pass
-                print("Processing terminated")
-                deployer.gather(deployer, output_queue)  # don't wait for input queue to join to do this
+            workers = deployer.get_workers(model, input_queue, output_queue, sync=(barrier, child_conn))
+            for i, worker in enumerate(workers):
+                worker.start()
+                print(f"Worker {i} - {worker.name} is running ...")
+            nimages = 0
+            for j, data in enumerate(dataloader):
+                nimages += data['input'].shape[0]
+                data['idx'] = j
+                input_queue.put(data)
+                if j % 10 == 0:
+                    print("Loaded: {} images".format(nimages))
         if workers:
             for worker in workers:
                 if worker.name.endswith('Worker'):

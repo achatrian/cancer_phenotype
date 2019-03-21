@@ -25,8 +25,8 @@ class SlidePreprocessor(mp.Process):
                 break
             slide = WSIReader(self.opt, file)
             print(f"[{self.process_id}] processing {os.path.basename(file)}")
-            slide.find_good_locations()
-            slide.export_good_tiles()
+            slide.find_tissue_locations()
+            slide.export_tissue_tiles()
             self.queue.task_done()
 
 

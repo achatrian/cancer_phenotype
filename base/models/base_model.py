@@ -1,7 +1,7 @@
 import os
-import torch
 from contextlib import contextmanager
 from itertools import chain
+import torch
 from utils import utils
 from collections import OrderedDict
 from . import networks
@@ -41,6 +41,8 @@ class BaseModel:
         self.target = None
         self.output = None
         self.is_val = False  # switches behaviour of getters and updates between validation and training
+        self.model_tag = 'latest_net'  # keeps track of last saved / loaded model, thus identifying current weights
+        self.setup_methods = []  # contains extra functions to be run at setup
 
     def name(self):
         return 'BaseModel'
@@ -74,14 +76,13 @@ class BaseModel:
         pass
 
     # load and print networks; create schedulers;
-    def setup(self):
+    def setup(self, dataset=None):
         """
         This method shouldn't be overwritten.
         1. Initialises networks and pushes nets and losses to cuda,
         2. Sets up schedulers
         3. Loads and prints networks;
-        :param opt:
-        :param parser:
+        :param dataset: used
         :return:
         """
         if self.gpu_ids:  # push networks and losses modules to gpus if needed
@@ -90,7 +91,7 @@ class BaseModel:
                 net.train()
                 setattr(self, "net" + module_name, networks.init_net(net, self.opt.init_type, self.opt.init_gain,
                                          self.opt.gpu_ids))  # takes care of pushing net to cuda
-            assert torch.cuda.is_available()
+            assert torch.cuda.is_available(), f"Cuda must be available for gpu option: {str(self.gpu_ids)}"
             for loss_name in self.loss_names:
                 loss = getattr(self, loss_name).cuda(device=self.device)
                 setattr(self, loss_name, loss)
@@ -100,8 +101,13 @@ class BaseModel:
             load_suffix = 'iter_%d' % self.opt.load_iter if self.opt.load_iter > 0 else self.opt.load_epoch
             self.load_networks(load_suffix)
         self.print_networks(self.opt.verbose)
-        for name in chain(self.loss_names, self.metric_names):  # add meters to compute average of statistics
+        # run setup functions if any
+        for method_name in self.setup_methods:
+            getattr(self, method_name)(dataset)
+        # add meters to compute average of performance measures
+        for name in chain(self.loss_names, self.metric_names):
             self.meters[name] = utils.AverageMeter()
+        print("network setup complete")
 
     # make models eval mode during test time
     def eval(self):
@@ -129,7 +135,8 @@ class BaseModel:
         pass
 
     # update loss or metric, taking the average for training measures
-    def update_measure_value(self, name, value):
+    def update_measure_value(self, name, value, n_samples=None):
+        n_samples = n_samples or self.output.shape[0]
         if name in self.loss_names:
             prefix = 'loss_'
         elif name in self.metric_names:
@@ -139,7 +146,7 @@ class BaseModel:
         if self.is_val:
             setattr(self, prefix + name + '_val', value)
         else:
-            self.meters[name].update(value, self.output.shape[0])
+            self.meters[name].update(value, n_samples)
             setattr(self, prefix + name, self.meters[name].val)
 
     @contextmanager
@@ -223,7 +230,8 @@ class BaseModel:
     def save_networks(self, epoch):
         for name in self.module_names:
             if isinstance(name, str):
-                save_filename = '%s_net_%s.pth' % (epoch, name)
+                self.model_tag = f'{epoch}_net'
+                save_filename = f'{self.model_tag}_{name}.pth'
                 save_path = os.path.join(self.save_dir, save_filename)
                 net = getattr(self, 'net' + name)
 
@@ -250,12 +258,13 @@ class BaseModel:
     def load_networks(self, epoch):
         for name in self.module_names:
             if isinstance(name, str):
-                load_filename = '%s_net_%s.pth' % (epoch, name)
+                self.model_tag = f'{epoch}_net'
+                load_filename = f'{self.model_tag}_{name}.pth'
                 load_path = os.path.join(self.save_dir, load_filename)
                 net = getattr(self, 'net' + name)
                 if isinstance(net, torch.nn.DataParallel):
                     net = net.module
-                print('loading the model from %s' % load_path)
+                print(f'loading the model from {load_path}')
                 # if you are using PyTorch newer than 0.4 (e.g., built from
                 # GitHub source), you can remove str() on self.device
                 state_dict = torch.load(load_path, map_location=torch.device('cpu'))
@@ -282,7 +291,7 @@ class BaseModel:
                 if verbose:
                     utils.summary(net, (3, self.opt.fine_size, self.opt.fine_size), self.device.type)
                     # print(net)
-                print('[Network %s] Total number of parameters : %.3f M' % (name, num_params / 1e6))
+                print(f'[Network {name}] Total number of parameters : {num_params/1e6:.3f} M')
         print('-----------------------------------------------')
 
     # set requies_grad=False to avoid computation
@@ -300,6 +309,9 @@ class BaseModel:
             net = getattr(self, 'net' + module_name)
             if net is not None:
                 net.share_memory()
+
+
+
 
 
 

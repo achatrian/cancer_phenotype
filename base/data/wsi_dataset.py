@@ -66,7 +66,7 @@ class WSIDataset(BaseDataset):
                 else:
                     good_files.pop()
             slide = WSIReader(self.opt, file)
-            slide.find_good_locations(qc_store)  # TODO this still doesn't work perfectly
+            slide.find_tissue_locations(qc_store)  # TODO this still doesn't work perfectly
             self.tiles_per_slide.append(len(slide))
             self.slides.append(slide)
         self.tile_idx_per_slide = list(accumulate(self.tiles_per_slide))  # to index tiles quickly
@@ -81,7 +81,7 @@ class WSIDataset(BaseDataset):
         slide = self.slides[slide_idx]
         tile_idx = item - self.tile_idx_per_slide[slide_idx - 1] if item > 0 else item  # index of tile in slide
         tile = slide[tile_idx]
-        tile_loc = slide.good_locations[tile_idx]
+        tile_loc = slide.tissue_locations[tile_idx]
         output = dict(tile=tile, location=tile_loc, file_name=slide.file_name)  # return image and relative location in slide
         return output
 

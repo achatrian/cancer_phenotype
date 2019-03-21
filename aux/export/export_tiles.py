@@ -17,9 +17,8 @@ def main(slide_file):
     sys.argv.pop(0)
     sys.argv.append('--dataset_name=wsi')
     sys.argv.append('--gpu_ids=-1')
-    sys.argv.append('--patch_size=3200')
-    sys.argv.append('--mpp=0.5')
-    sys.argv.append('--data_dir=/well/rittscher/projects/TCGA_prostate/TCGA')
+    sys.argv.append('--patch_size=1024')
+    sys.argv.append('--mpp=2.5')
     sys.argv.append('--verbose')
     print(f"Py Processing {os_basename(slide_file)}")
     opt = BaseOptions().parse()
@@ -34,8 +33,14 @@ def main(slide_file):
     setattr(opt, 'overwrite_qc', True)  # force overwriting of all quality_control files
     print(f"Quality control mpp: {opt.qc_mpp}, read_mpp: {opt.mpp}")
     slide = WSIReader(opt, slide_file)
-    slide.find_good_locations()
-    slide.export_good_tiles('tiles2', export_contours=contours, contour_scaling=0.1)
+    slide.find_tissue_locations()
+    print("Exporting data ...")
+    try:
+        slide.export_tissue_tiles('tiles_temp', export_contours=contours, contour_scaling=0.1)
+        print("Done!")
+    except Exception as err:
+        print(err)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

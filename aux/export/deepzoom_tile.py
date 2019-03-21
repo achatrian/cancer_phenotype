@@ -24,6 +24,7 @@ Requires Pillow version <3.0 e.g. 2.1"""
 from __future__ import print_function
 import json
 from multiprocessing import Process, JoinableQueue
+from queue import Empty, Full
 import openslide
 from openslide import open_slide, ImageSlide
 from openslide.deepzoom import DeepZoomGenerator
@@ -32,6 +33,7 @@ import os
 import re
 import shutil
 import sys
+from time import time, sleep
 from unicodedata import normalize
 
 VIEWER_SLIDE_NAME = 'slide'
@@ -57,7 +59,11 @@ class TileWorker(Process):
         last_associated = None
         dz = self._get_dz()
         while True:
-            data = self._queue.get()
+            try:
+                data = self._queue.get(timeout=120)
+            except Empty:
+                self._queue.task_done()
+                break
             if data is None:
                 self._queue.task_done()
                 break
@@ -104,8 +110,12 @@ class DeepZoomImageTiler(object):
                     tilename = os.path.join(tiledir, '%d_%d.%s' % (
                                     col, row, self._format))
                     if not os.path.exists(tilename):
-                        self._queue.put((self._associated, level, (col, row),
-                                    tilename))
+                        try:
+                            self._queue.put((self._associated, level, (col, row),
+                                    tilename), timeout=120)
+                        except Full:
+                            self._queue.task_done()
+                            break
                     self._tile_done()
 
     def _tile_done(self):
@@ -231,6 +241,10 @@ class DeepZoomStaticTiler(object):
         for _i in range(self._workers):
             self._queue.put(None)
         self._queue.join()
+        # timeout = 10
+        # stop = time() + timeout
+        # while self._queue._unfinished_tasks and time() < stop:
+        #     sleep(1)
 
 
 if __name__ == '__main__':
