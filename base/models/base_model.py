@@ -3,7 +3,6 @@ from contextlib import contextmanager
 from itertools import chain
 import torch
 from utils import utils
-from collections import OrderedDict
 from . import networks
 
 # Benefits of having one skeleton, e.g. for train - is that you can keep all the incremental changes in
@@ -121,12 +120,12 @@ class BaseModel:
             self.forward()
 
     def optimize_parameters(self):
-        """Abstract method: call forward and backward + other optimization steps
+        r"""Abstract method: call forward and backward + other optimization steps
             Use self.update_measure_values to store losses"""
         pass
 
     def evaluate_parameters(self):
-        """
+        r"""
         Abstract method that I added -- pix2pix code did not compute evaluation metrics,
         but for many tasks they can be quite useful
         Updates metrics values (metric must start with 'metric_')
@@ -134,8 +133,10 @@ class BaseModel:
         """
         pass
 
-    # update loss or metric, taking the average for training measures
     def update_measure_value(self, name, value, n_samples=None):
+        r"""
+        Updates loss or metric. If model is in validation, validation values are updated
+        """
         n_samples = n_samples or self.output.shape[0]
         if name in self.loss_names:
             prefix = 'loss_'
@@ -196,7 +197,7 @@ class BaseModel:
         print('learning rate = %.7f' % lr)
 
     def get_current_losses(self):
-        errors_ret = OrderedDict()
+        errors_ret = dict()  # before python 3.6, dictionaries are not ordered and this malfunctions (use OrderedDict)
         for name in self.loss_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
@@ -205,7 +206,7 @@ class BaseModel:
         return errors_ret
 
     def get_current_metrics(self):
-        metric_ret = OrderedDict()
+        metric_ret = dict()
         for name in self.metric_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
@@ -215,10 +216,9 @@ class BaseModel:
 
     # return visualization images. train.py will display these images, and save the images to a html
     def get_current_visuals(self):
-        visual_ret = OrderedDict()
+        visual_ret = dict()
         for name, kind in zip(self.visual_names, self.visual_types):
             if isinstance(name, str):
-                name = name if not self.is_val else name + "_val"
                 visual_ret[name + "_" + kind] = getattr(self, name)
         return visual_ret
 
@@ -268,7 +268,7 @@ class BaseModel:
                 # if you are using PyTorch newer than 0.4 (e.g., built from
                 # GitHub source), you can remove str() on self.device
                 state_dict = torch.load(load_path, map_location=torch.device('cpu'))
-                #state_dict = OrderedDict((key, value.cuda(device=self.device)) for key,value in state_dict.items())
+                #state_dict = dict((key, value.cuda(device=self.device)) for key,value in state_dict.items())
                 if hasattr(state_dict, '_metadata'):
                     del state_dict._metadata
                 # # patch InstanceNorm checkpoints prior to 0.4

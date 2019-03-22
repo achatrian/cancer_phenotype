@@ -5,11 +5,13 @@ import numpy as np
 import cv2
 import torch
 from imgaug import augmenters as iaa
+import copy
 
 
 class BaseDataset(data.Dataset):
     def __init__(self):
-        super(BaseDataset, self).__init__()
+        super().__init__()
+        self.paths = []  # store data in paths for make_subset to work, or give different store_name
 
     def name(self):
         return 'BaseDataset'
@@ -21,8 +23,28 @@ class BaseDataset(data.Dataset):
     def __len__(self):
         return 0
 
-    def make_subset(self, indices):
-        return data.Subset(self, indices)
+    def get_sampler(self):
+        r"""Abstract method, returns sampler for dataset, which is used in create_dataloader.
+        If not overwritten it is ignored via the None flag"""
+        return None
+
+    def make_subset(self, indices, store_name='paths'):
+        dataset = copy.deepcopy(self)  # same class as original dataset
+        try:
+            store = getattr(dataset, store_name)
+            if not store and indices:
+                raise ValueError(f"{self.name()}().{store_name} is empty")
+            store = tuple(store[i] for i in indices)
+            setattr(dataset, store_name, store)
+        except AttributeError:
+            print(f"{store_name} not defined in {self.name()}")
+            raise
+        except IndexError:
+            print(f"Max index '{max(indices)}' greater than {store_name} length ({len(store)}))")
+            raise
+        if len(store) == 0:
+            raise ValueError("Subset is empty - could be due to train/test split")
+        return dataset
 
     def setup(self):
         pass

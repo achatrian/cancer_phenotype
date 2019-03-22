@@ -26,7 +26,7 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
 
     for label, im_data in visuals.items():
         if not label.endswith('label'):
-            im = utils.tensor2im(im_data, label.endswith("_map"))
+            im = utils.tensor2im(im_data[0], label.endswith("_map"))  # saving the first image
             image_name = '%s_%s.png' % (name, label)
             save_path = os.path.join(image_dir, image_name)
             h, w, _ = im.shape
@@ -76,6 +76,7 @@ class BaseVisualizer:
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
     def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):
+        epoch = int(epoch)
         if iters:  # iter is not given in validation/testing (confusing?)
             message = '(epoch: {:d}, iters: {:d}, time: {:.3f}, data: {:.3f}) '.format(epoch, iters, t, t_data)
         else:

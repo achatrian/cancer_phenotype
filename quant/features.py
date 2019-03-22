@@ -1,12 +1,12 @@
 import numpy as np
 import cv2
 from skimage import measure
-from . import read_annotation
+from . import read_annotations
 
 
 def get_region_properties(mask, opencv=True, contour=None):
     """Region props, take the ones that are useful"""
-    all_rp = measure.regionprops(mask, coordinates='rc')
+    all_rp = measure.regionprops(mask.astype(np.int32), coordinates='rc')
 
     if opencv and contour:
         area = cv2.contourArea(contour)
@@ -19,7 +19,7 @@ def get_region_properties(mask, opencv=True, contour=None):
             'hu_moments': cv2.HuMoments(cv2.moments(mask)) if opencv else rp.moments_hu,
             'eccentricity': rp.eccentricity,
             'solidity': rp.solidity,
-            'extent': extent if opencv else rp.extent,
+            'extent': extent if opencv and contour else rp.extent,
             'inertia_tensor_eigvals': rp.inertia_tensor_eigvals
         }
 
@@ -41,7 +41,8 @@ def two_layer_region_properties(mask, hier=(200, 250)):
 
 if __name__ == '__main__':
     """Example usage here"""
-    contours = read_annotation()
+    #contours = read_annotations()
+    pass
 
 
 

@@ -67,7 +67,7 @@ class WSIReader(OpenSlide):
             qc_sizes = (qc_stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
             xs = list(range(0, self.level_dimensions[0][0], qc_stride))  # dimensions = (width, height)
             ys = list(range(0, self.level_dimensions[0][1], qc_stride))
-            with tqdm.tqdm(total=len(xs)*len(ys)) as pbar:
+            with tqdm.tqdm(total=len(xs)*len(ys)) as progress_bar:
                 for x in xs:
                     for y in ys:
                         tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
@@ -82,7 +82,7 @@ class WSIReader(OpenSlide):
                         else:
                             self.tile_info[f'{x},{y}'] = 'tissue'
                             tissue_locations.append((x, y))
-                        pbar.update()
+                        progress_bar.update()
                 self.tissue_locations = tissue_locations
                 self.save_locations()  # overwrite if existing
                 if self.opt.verbose:
@@ -167,7 +167,7 @@ class WSIReader(OpenSlide):
                       res_file)
         if self.tissue_locations:
             print("Begin exporting tiles ...")
-            log_freq, start_time = 5, time.time()
+            log_freq, start_time, last_print = 5, time.time(), 0
             exported_locations = []
             if export_contours and contour_scaling:
                     export_contours = [(contour / contour_scaling).astype(np.int32) for contour in export_contours if contour.size]
@@ -182,15 +182,18 @@ class WSIReader(OpenSlide):
                             tile = np.array(tile)
                             imageio.imwrite(save_tiles_dir / f'{x}_{y}.png', tile)
                             exported_locations.append(origin_corner)
-                        if len(exported_locations) % log_freq == 0:
-                            log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}) Exported {len(exported_locations)} tiles ...\n")
                     else:
                         tile = self.read_region((x, y), self.read_level, sizes)
                         tile = np.array(tile)
                         imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+                        exported_locations.append((x, y))
+                    if len(exported_locations) % log_freq == 0 and last_print != len(exported_locations):
+                        log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}s) Exported {len(exported_locations)} tiles ...\n")
+                        last_print = len(exported_locations)
                 if not exported_locations:
                     warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
-            print(f"Exported {len(exported_locations)} tiles.")
+                log_file.write(f"{time.time() - start_time:.3f}s Done !")
+                print(f"Exported {len(exported_locations)} tiles.")
         else:
             warnings.warn(f"No locations to export - {Path(self.file_name).name}")
 
@@ -241,6 +244,33 @@ class WSIReader(OpenSlide):
     @staticmethod
     def is_folded(image):
         return False
+
+
+if __name__ == '__main__':
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
+    parser.add_argument('--qc_mpp', default=1.0, type=float, help="MPP value to perform quality control on slide")
+    parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
+    parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
+    parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
+    parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
+    parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
+    parser.add_argument('--patch_size', type=int, default=256, help="Pixel size of patches (at desired resolution)")
+    parser.add_argument('--verbose', action='store_true', help="Print more information")
+    opt, unknown = parser.parse_known_args()
+
+    slide_path = Path(sys.argv[1])
+    if not slide_path.is_file():
+        raise ValueError(f"Invalid file input {str(slide_path)}")
+
+    wsi_reader = WSIReader(opt, slide_path)
+    wsi_reader.find_tissue_locations()
+    wsi_reader.export_tissue_tiles('tiles_temp')
+
+
+
+
 
 
 

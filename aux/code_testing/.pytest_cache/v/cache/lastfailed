@@ -2,5 +2,6 @@
   "data_test.py::test_table_dataset": true,
   "mask_converter_test.py": true,
   "mask_converter_test.py::test_annotation_builder": true,
-  "mask_converter_test.py::test_tile_merging": true
+  "mask_converter_test.py::test_tile_merging": true,
+  "quant_test.py::test_features": true
 }

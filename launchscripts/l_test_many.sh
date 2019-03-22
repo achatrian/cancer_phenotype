@@ -28,8 +28,11 @@ for SLIDEPATH in /well/rittscher/projects/TCGA_prostate/TCGA/*/*.svs; do
     then
         break
     fi
+    SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
+    SLIDEID="${SLIDENAME%%_TissueTrain_*}"
+    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
     # echo "Applying UNET for ${SLIDEID}"
-    qsub -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${COMMANDS}
+    qsub -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
     COUNTER=$((COUNTER+1))
 done
 echo "Applying network to ${COUNTER} slides ..."

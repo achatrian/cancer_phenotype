@@ -23,7 +23,6 @@ class TilePhenoDataset(BaseDataset):
     """
 
     def __init__(self, opt):
-        # TODO add torch.utils.data.WeightedRandomSampler(weights, num_samples, replacement=True)
         super(TilePhenoDataset, self).__init__()
         self.opt = opt
         self.paths = []
@@ -35,11 +34,14 @@ class TilePhenoDataset(BaseDataset):
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
                 self.paths = json.load(split_tiles_file)
-            num_path_tests = 20  # tests whether tiles exist, if not build index again
+            assert self.paths, "Cannot be empty"
+            num_path_tests = min(20, len(self.paths) - 1)  # tests whether tiles exist, if not build index again
             if not all(Path(path).is_file() for path in sample(self.paths, num_path_tests)):
                 print("Outdated tile list - rewriting ...")
                 raise FileNotFoundError
             print(f"Loaded {len(self.paths)} tile paths for split {Path(self.opt.split_file).name}")
+            with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / opt.split_file) as split_json:
+                self.split = json.load(split_json)
         except FileNotFoundError:
             self.ANNOTATION_SCALING_FACTOR = 0.1  # in case images were shrank before being annotated (for TCGA) TODO rescale annotation instead
             # TODO could use an annotation_mpp to ensure that annotations taken at different magnifications are rescaled
@@ -147,6 +149,21 @@ class TilePhenoDataset(BaseDataset):
         self.sample.data.query("is_ffpe == True", inplace=True)  # remove all slides that are not FFPE
         # TODO this does not seem to cause errors, even though the paths are not checked for their frozen vs FFPE state
 
+    def get_sampler(self):
+        labels = []
+        for path in self.paths:
+            sample_id = str(Path(path).parent.name)  # folder containing tiles is named with required id
+            sample_id = '-'.join(sample_id.split('-')[0:4])[:-1]  # dropping last later as it identifies slide
+            cna_data = self.cna.data.loc[sample_id, :]
+            labels.append(question(cna_data))
+        if len(set(labels)) == 2:
+            weight = sum(labels)/len(labels)
+            weights = [1/weight if label else 1 for label in labels]
+            print(f"using binary weighted sampler with weight = {weight:.2f}")
+            return torch.utils.data.WeightedRandomSampler(weights, len(self))
+        else:
+            return super().get_sampler()
+
     def rescale(self, image, resolution_data, gt=None):
         """
         Rescale to desired resolution, if tiles are at a different millimeter per pixel (mpp) scale
@@ -247,12 +264,22 @@ class TilePhenoDataset(BaseDataset):
             # TODO must select one slide per patient (the one with the highest invasive margin)
             cna_data = self.cna.data.loc[sample_id, :]
             label = question(cna_data)
+        else:
+            label = -1
         return dict(
             input=image,
-            target=label if hasattr(self, 'cna') else None,
+            target=label,
             input_path=str(image_path),
             **coords_info,
         )
+
+    def make_subset(self, indices, store_name='paths'):
+        r"""Wrap original make_subset to ensure slide id is in current split"""
+        if hasattr(self.opt, 'slide_id'):
+            slide_ids = self.split['train'] if self.opt.is_train else self.split['test']
+            if not any(self.opt.slide_id in slide_id for slide_id in slide_ids):
+                raise ValueError(f"Slide not in {'train' if self.opt.is_train else 'test'} split for {self.opt.split_file}")
+        return super().make_subset(indices, store_name)
 
 
 # utils

@@ -71,7 +71,9 @@ def create_dataloader(dataset):
         opt = dataset.opt
     except AttributeError:
         opt = dataset.dataset.opt  # for Subset instances
-    is_val = opt.phase == "val"
+    sampler = dataset.get_sampler()
+    is_val = (opt.phase == "val")
     return DataLoader(dataset,
                       batch_size=opt.batch_size if not is_val else opt.val_batch_size,
-                      shuffle=not is_val, num_workers=opt.workers)
+                      shuffle=not is_val and sampler is None,  # if a sampler is specified, shuffle must be false
+                      num_workers=opt.workers, sampler=sampler)

@@ -84,7 +84,7 @@ class BaseOptions:
 
         return parser.parse_args()
 
-    def print_options(self, opt):
+    def print_options(self, opt, return_only=False):
         message = ''
         message += '----------------- Options ---------------\n'
         for k, v in sorted(vars(opt).items()):
