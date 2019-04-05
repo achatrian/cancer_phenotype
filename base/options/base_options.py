@@ -42,7 +42,7 @@ class BaseOptions:
         parser.add_argument('--load_iter', type=int, default=0, help='which iteration to load? if load_iter > 0, whether load models by iteration')
         parser.add_argument('-ad', '--augment_dir', type=str, default='')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
-        parser.add_argument('--fork_processes', action='store_true', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
+        parser.add_argument('--do_not_spawn', action='store_false', dest='spawn_processes', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
         parser.add_argument('--augment_level', type=int, default=0, help='level of augmentation applied to input when training (my_opt)')
         #parser.add_argument('--generated_only', action="store_true") # replace by making dataset
 
@@ -129,7 +129,7 @@ class BaseOptions:
             else:
                 opt.loss_weight = torch.Tensor(opt.loss_weight)
         # set multiprocessing
-        if opt.workers > 0 and not opt.fork_processes:
+        if opt.spawn_processes:
             mp.set_start_method('spawn', force=True)
 
         self.opt = opt

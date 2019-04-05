@@ -5,7 +5,6 @@ import numpy as np
 import cv2
 import torch
 from imgaug import augmenters as iaa
-import copy
 
 
 class BaseDataset(data.Dataset):
@@ -28,14 +27,22 @@ class BaseDataset(data.Dataset):
         If not overwritten it is ignored via the None flag"""
         return None
 
-    def make_subset(self, indices, store_name='paths'):
-        dataset = copy.deepcopy(self)  # same class as original dataset
+    def make_subset(self, selector='', selector_type='match', store_name='paths'):
+        r"""Method to be partially or completely modified in subclasses"""
+        if selector_type == 'match':
+            indices = [i for i, path in enumerate(getattr(self, store_name)) if selector in str(path)]  # NB only works for datasets that store paths in self.paths
+        elif selector_type == 'indices':
+            indices = selector
+        else:
+            raise NotImplementedError(f"Unknown selector type '{selector_type}'")
         try:
-            store = getattr(dataset, store_name)
-            if not store and indices:
+            store = getattr(self, store_name)
+            if not indices:
+                raise ValueError("Cannot make subset from empty index set")
+            if not store:
                 raise ValueError(f"{self.name()}().{store_name} is empty")
             store = tuple(store[i] for i in indices)
-            setattr(dataset, store_name, store)
+            setattr(self, store_name, store)
         except AttributeError:
             print(f"{store_name} not defined in {self.name()}")
             raise
@@ -44,11 +51,10 @@ class BaseDataset(data.Dataset):
             raise
         if len(store) == 0:
             raise ValueError("Subset is empty - could be due to train/test split")
-        return dataset
+        print(f"subset of len = {len(store)} was created")
 
     def setup(self):
         pass
-
 
 # Transforms
 

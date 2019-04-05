@@ -76,11 +76,12 @@ class BaseVisualizer:
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
     def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):
-        epoch = int(epoch)
+        if type(epoch) is str and epoch.isdigit():
+            epoch = int(epoch)
         if iters:  # iter is not given in validation/testing (confusing?)
             message = '(epoch: {:d}, iters: {:d}, time: {:.3f}, data: {:.3f}) '.format(epoch, iters, t, t_data)
         else:
-            message = '(epoch: {:d}, validation) '.format(epoch)
+            message = '(epoch: {}, validation) '.format(epoch)
         for i, (k, v) in enumerate((OrderedDict(losses, **metrics)).items()):  # not displayed in correct order in python <3.6
             if not iters:
                 k = '_'.join(k.split('_')[0:-1])

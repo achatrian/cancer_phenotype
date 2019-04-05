@@ -64,9 +64,10 @@ class TileSegDeployer(BaseDeployer):
             model.set_input(data)
             model.test()
             visuals = model.get_current_visuals()
-            for map_, offset_x, offset_y in zip(
-                    visuals['output_map'], data['x_offset'], data['y_offset']):
-                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y)
+            for i, map_ in enumerate(visuals['output_map']):
+                offset_x, offset_y = data['x_offset'][i], data['y_offset'][i]
+                rescale_factor = float(data['read_mpp'][i] / data['base_mpp'][i]) if 'read_mpp' in data else 2.0
+                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y, rescale_factor)
                 output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
                 if opt.save_masks:
                     mask = utils.tensor2im(map_, segmap=True,

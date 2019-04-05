@@ -44,7 +44,7 @@ class MaskConverter:
         assert all(isinstance(t, tuple) and len(t) == 2 and t[0] <= t[1] for t in self.label_interval_map.values())
         self.num_classes = len(self.label_value_map)
 
-    def mask_to_contour(self, mask, x_offset=0, y_offset=0, rescale_factor=2.0):
+    def mask_to_contour(self, mask, x_offset=0, y_offset=0, rescale_factor=None):
         """
         Extracts the contours one class at a time
         :param mask:

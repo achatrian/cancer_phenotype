@@ -30,7 +30,7 @@ for SLIDEPATH in /well/rittscher/projects/TCGA_prostate/TCGA/*/*.svs; do
     fi
     SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
     SLIDEID="${SLIDENAME%%_TissueTrain_*}"
-    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
+    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
     # echo "Applying UNET for ${SLIDEID}"
     qsub -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
     COUNTER=$((COUNTER+1))

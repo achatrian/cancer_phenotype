@@ -11,7 +11,6 @@ import numpy as np
 import imgaug as ia
 import warnings
 from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
-
 ia.seed(1)
 
 
@@ -37,9 +36,6 @@ class TileSegDataset(BaseDataset):
         except FileNotFoundError as err:
             raise ValueError("Given path does not correspond to any split file") from err
         assert self.paths, "Cannot be empty"
-        if self.opt.slide_id:
-            self.paths = sorted(path for path in paths if self.opt.slide_id in str(path.parents[1].name))  # first parent should 'tiles' folder
-        assert self.paths, "Filtered paths list cannot be empty"
         if self.opt.load_ground_truth:
             self.gt_paths = [Path(str(path).replace('_img_', '_mask_')) for path in self.paths]  # FIXME adapt to annotations
         self.randomcrop = RandomCrop(self.opt.patch_size)
@@ -68,7 +64,6 @@ class TileSegDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--slide_id', type=str, default='', help="If a slide id is specified, only tiles from that slide are read by the dataset")
         parser.add_argument('--load_ground_truth', action='store_true', help="Whether to attemp to load ground truth masks for the tiles")
         parser.add_argument('--one_class', action='store_true', help="Whether the dataset should merge all the labels into a background vs objects problem")
         parser.add_argument('--split_file', type=str, default='', help="File containing data division in train - test split")
@@ -146,7 +141,7 @@ class TileSegDataset(BaseDataset):
                 'tile_x': tile_x, 'tile_y': tile_y}
         coords_info['x_offset'] = area_x + tile_x
         coords_info['y_offset'] = area_y + tile_y
-        coords_info['slide_id'] = re.match('.+?(?=_TissueTrain_)', os.path.basename(image_path)).group()  # tested on regex101.com
+        coords_info['slide_id'] = re.match('.+?(?=_TissueTrain_)', Path(image_path).name).group()  # tested on regex101.com
         return coords_info
 
     def get_tile_coords_info(self, image_path):
@@ -219,6 +214,17 @@ class TileSegDataset(BaseDataset):
             data['target'] = gt
             data['target_path'] = str(gt_path)
         return data
+
+    def make_subset(self, selector='', selector_type='match', store_name='paths'):
+        # TODO to test
+        if hasattr(self.opt, 'slide_id'):
+            slide_ids = self.split['train'] if self.opt.is_train else self.split['test']
+            if not any(slide_id in self.opt.slide_id for slide_id in slide_ids):
+                raise ValueError(
+                    f"Slide not in {'train' if self.opt.is_train else 'test'} split for {self.opt.split_file}")
+        super().make_subset(self.opt.slide_id)
+        if self.opt.load_ground_truth:
+            super().make_subset(self.opt.slide_id, store_name='gt_paths')
 
 
 ####

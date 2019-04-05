@@ -67,6 +67,8 @@ def create_dataset(opt, validation_phase=False):
 
 
 def create_dataloader(dataset):
+    if len(dataset) == 0:
+        raise ValueError(f"Dataset {dataset.name()} is empty")
     try:
         opt = dataset.opt
     except AttributeError:

@@ -3,7 +3,7 @@ import math
 import copy
 import warnings
 from collections import defaultdict, OrderedDict, namedtuple
-from itertools import combinations, product, chain
+from itertools import combinations, product
 import logging
 from datetime import datetime
 import time

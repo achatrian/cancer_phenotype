@@ -21,20 +21,14 @@ class AreaTilesDataset(BaseDataset):
         super(AreaTilesDataset, self).__init__()
         self.opt = opt
         self.file_list = []
-        self.label = []
+        self.labels = []
         phase_dir = os.path.join(self.opt.data_dir, self.opt.phase)
         folders = [name for name in os.listdir(phase_dir) if os.path.isdir(os.path.join(phase_dir, name))]
         file_list = []
         for folder in folders:
             file_list += glob.glob(os.path.join(phase_dir, folder, 'tiles', '*_img_*.png'))
-        if self.opt.slide_id:
-            # If slide_id is given, retain only tiles for that slide
-            for i, file_name in reversed(list(enumerate(file_list))):
-                slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(file_name)).group()  # tested on regex101.com
-                if slide_id != self.opt.slide_id:
-                    del file_list[i]
         self.file_list = file_list
-        self.label = [x.replace('_img_', '_mask_') for x in file_list]
+        self.labels = [x.replace('_img_', '_mask_') for x in file_list]
         self.randomcrop = RandomCrop(self.opt.patch_size)
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
@@ -47,14 +41,13 @@ class AreaTilesDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--slide_id', type=str, default='', help="If a slide id is specified, only tiles from that slide are read by the dataset")
         parser.add_argument('--one_class', action='store_false', help="Merge labels of target into a binary mask")
         parser.add_argument('--coords_pattern', type=str, default='\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})')
         return parser
 
     def __getitem__(self, idx):
         img_name = self.file_list[idx]
-        gt_name = self.label[idx]
+        gt_name = self.labels[idx]
 
         bgr_img = cv2.imread(img_name, -1)
         b, g, r = cv2.split(bgr_img)  # get b,g,r
@@ -131,6 +124,19 @@ class AreaTilesDataset(BaseDataset):
                 'slide_id': slide_id,
                 'downsample': downsample,
                 'x_offset': x_offset, 'y_offset': y_offset}
+    
+    def make_subset(self, selector='', selector_type='match', store_name='paths'):
+        # TODO to test
+        if hasattr(self.opt, 'slide_id'):
+            # If slide_id is given, retain only tiles for that slide
+            file_list, labels = self.file_list, self.labels
+            for i, file_name in reversed(list(enumerate(file_list))):
+                slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(file_name)).group()  # tested on regex101.com
+                if slide_id != self.opt.slide_id:
+                    del file_list[i]
+                    del labels[i]
+            self.file_list = file_list
+            self.labels = labels
 
 
 class AugDataset(AreaTilesDataset):
@@ -139,7 +145,7 @@ class AugDataset(AreaTilesDataset):
         super(AugDataset, self).__init__()
         if generated_only:
             self.file_list = []
-            self.label = []
+            self.labels = []
         n = "[0-9]"
         names = ["_rec1_", "_rec2_"] #, "_gen1_", "_gen2_"]
         no_aug_len = len(self.file_list)
@@ -149,7 +155,7 @@ class AugDataset(AreaTilesDataset):
                                    name + 'fake_B.png')
             file_list += glob.glob(to_glob)
         self.file_list += file_list
-        self.label += [x.replace('fake_B', 'real_A') for x in file_list]
+        self.labels += [x.replace('fake_B', 'real_A') for x in file_list]
         assert (len(self.file_list) > no_aug_len)
 
 
@@ -157,14 +163,14 @@ class TestDataset(AreaTilesDataset):
     def __init__(self, dir_, tile_size=256, bad_folds=[]):
         super(TestDataset, self).__init__()
         if bad_folds:
-            for image_file, label_file in zip(self.file_list, self.label):
+            for image_file, label_file in zip(self.file_list, self.labels):
                 image_name = os.path.basename(image_file)
                 label_name = os.path.basename(label_file)
                 assert(image_name[0:10] == label_name[0:10])
                 isbad = any([bad_fold in image_name for bad_fold in bad_folds])
                 if isbad:
                     self.file_list.remove(image_file)
-                    self.label.remove(label_file)
+                    self.labels.remove(label_file)
 
     @staticmethod
     def modify_commandline_options(parser, is_train):

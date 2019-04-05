@@ -16,11 +16,12 @@ if __name__ == '__main__':
     opt.serial_batches = True  # no shuffle
     opt.no_flip = True    # no flip
     opt.display_id = -1   # no visdom display
+    if opt.slide_id:
+        opt.slide_id = str(Path(opt.slide_id).with_suffix(''))
     dataset = create_dataset(opt)
     dataset.setup()
-    if opt.slide_id:  # remove all paths not belonging to desired slide -- id must be contained in path to file
-        indices = [i for i, path in enumerate(dataset.paths) if opt.slide_id in str(path)]  # NB only works for datasets that store paths in self.paths
-        dataset = dataset.make_subset(indices)
+    if opt.make_subset:
+        dataset.make_subset()
     dataloader = create_dataloader(dataset)
     model = create_model(opt)
     model.setup(dataset)
@@ -61,7 +62,7 @@ if __name__ == '__main__':
         slide_results['date'] = str(datetime.now())
         slide_results['model'] = model.model_tag
         slide_results['split'] = Path(opt.split_file).with_suffix('').name
-        slide_results['options'] = TestOptions().print_options(opt, True)
+        slide_results['options'] = TestOptions().print_options(opt, True).split('\n')
         slide_results['epoch'] = opt.load_epoch
         slide_results['message'] = message
         slide_results['losses'] = losses

@@ -148,7 +148,7 @@ class BaseModel:
             setattr(self, prefix + name + '_val', value)
         else:
             self.meters[name].update(value, n_samples)
-            setattr(self, prefix + name, self.meters[name].val)
+            setattr(self, prefix + name, self.meters[name].avg)
 
     @contextmanager
     def start_validation(self):

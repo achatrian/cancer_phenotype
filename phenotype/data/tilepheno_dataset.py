@@ -44,7 +44,7 @@ class TilePhenoDataset(BaseDataset):
                 self.split = json.load(split_json)
         except FileNotFoundError:
             self.ANNOTATION_SCALING_FACTOR = 0.1  # in case images were shrank before being annotated (for TCGA) TODO rescale annotation instead
-            # TODO could use an annotation_mpp to ensure that annotations taken at different magnifications are rescaled
+            warnings.warn(f"Using fixed annotation scaling factor of {self.ANNOTATION_SCALING_FACTOR}! Breaks if different.")
             tiles_path = Path(self.opt.data_dir) / 'data' / 'tiles'
             wsi_paths = [path for path in tiles_path.iterdir() if
                          path.is_dir()]  # one per wsi image the tiles were derived from
@@ -214,12 +214,17 @@ class TilePhenoDataset(BaseDataset):
         :param image_path:
         :return:
         """
-        coords_info = re.search(self.opt.coords_pattern, image_path.name).groups()  # tuple with all matched groups
+        coords_info = re.search(
+            '\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})',
+            image_path.name).groups()  # tuple with all matched groups
         downsample = float(coords_info[0])  # downsample is a float
         area_x, area_y, area_w, area_h, tile_x, tile_y = tuple(int(num) for num in coords_info[1:])
         coords_info = {'downsample': downsample,
                 'area_x': area_x, 'area_y': area_y, 'area_w': area_w, 'area_h': area_h,
                 'tile_x': tile_x, 'tile_y': tile_y}
+        coords_info['x_offset'] = area_x + tile_x
+        coords_info['y_offset'] = area_y + tile_y
+        coords_info['slide_id'] = re.match('.+?(?=_TissueTrain_)', Path(image_path).name).group()  # tested on regex101.com
         return coords_info
 
     def get_tile_coords_info(self, image_path):
@@ -228,8 +233,8 @@ class TilePhenoDataset(BaseDataset):
         :param image_path:
         :return:
         """
-        coords_info = re.search(self.opt.coords_pattern, Path(image_path).name).groups()  # tuple with all matched groups
-        coords_info = {'tile_x': int(coords_info[0]), 'tile_y': int(coords_info[1])}
+        coords_info = re.search(self.opt.coords_pattern, image_path.name).groups()  # tuple with all matched groups
+        coords_info = {'x_offset': int(coords_info[0]), 'y_offset': int(coords_info[1])}
         return coords_info
 
     def __getitem__(self, idx):
@@ -273,14 +278,13 @@ class TilePhenoDataset(BaseDataset):
             **coords_info,
         )
 
-    def make_subset(self, indices, store_name='paths'):
+    def make_subset(self, selector='', selector_type='match', store_name='paths'):
         r"""Wrap original make_subset to ensure slide id is in current split"""
         if hasattr(self.opt, 'slide_id'):
             slide_ids = self.split['train'] if self.opt.is_train else self.split['test']
-            if not any(self.opt.slide_id in slide_id for slide_id in slide_ids):
+            if not any(slide_id in self.opt.slide_id for slide_id in slide_ids):
                 raise ValueError(f"Slide not in {'train' if self.opt.is_train else 'test'} split for {self.opt.split_file}")
-        return super().make_subset(indices, store_name)
-
+        super().make_subset(self.opt.slide_id)
 
 # utils
 def question(data):

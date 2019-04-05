@@ -9,11 +9,15 @@ from deploy import create_deployer
 
 if __name__ == '__main__':
     opt = ApplyOptions().parse()
+    opt.display_id = -1   # no visdom display
     model = create_model(opt)
     # model.setup()  # done in predictor process, as it fails when net is push to cuda otherwise
     if model:
         model.share_memory()
     dataset = create_dataset(opt)
+    dataset.setup()
+    if opt.make_subset:
+        dataset.make_subset()
     dataloader = create_dataloader(dataset)
     deployer = create_deployer(opt)
     rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)  # https://github.com/fastai/fastai/issues/23#issuecomment-345091054

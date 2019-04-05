@@ -32,20 +32,24 @@ class WSIReader(OpenSlide):
         # compute read level based on mpp
         if self.opt.qc_mpp < self.opt.mpp:
             raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc.mpp} < {self.opt.mpp})")
-        mpp_x, mpp_y = float(self.properties[PROPERTY_NAME_MPP_X]),\
-                       float(self.properties[PROPERTY_NAME_MPP_Y])
+        self.PROPERTY_NAME_MPP_X = PROPERTY_NAME_MPP_X
+        self.PROPERTY_NAME_MPP_Y = PROPERTY_NAME_MPP_Y
+        mpp_x, mpp_y = float(self.properties[self.PROPERTY_NAME_MPP_X]),\
+                       float(self.properties[self.PROPERTY_NAME_MPP_Y])
         best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * mpp_x - self.opt.mpp))
         best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * mpp_y - self.opt.mpp))
         assert best_level_x == best_level_y; "This should be the same, unless pixel has different side lengths"
         self.read_level = int(best_level_x)  # from np.int64
+        self.read_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level]
         # same for quality_control read level
         best_level_qc_x = np.argmin(
             np.absolute(np.array(self.level_downsamples) * mpp_x - self.opt.qc_mpp)
         )
         best_level_qc_y = np.argmin(
             np.absolute(np.array(self.level_downsamples) * mpp_y - self.opt.qc_mpp))
-        assert best_level_qc_x == best_level_qc_y; "This should be the same, unless pixel has different side lengths"
+        assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
         self.qc_read_level = int(best_level_qc_x)
+        self.qc_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
 
     def find_tissue_locations(self, qc_store=None):
         """
@@ -58,7 +62,7 @@ class WSIReader(OpenSlide):
             self.read_locations(qc_store)
             if self.opt.verbose:
                 print("Read quality_control info for {}".format(os.path.basename(self.file_name)))
-        except FileNotFoundError as err:
+        except FileNotFoundError:
             print("Finding tissue tiles ...")
             tissue_locations = []
             qc_downsample = int(self.level_downsamples[self.qc_read_level])
@@ -85,8 +89,7 @@ class WSIReader(OpenSlide):
                         progress_bar.update()
                 self.tissue_locations = tissue_locations
                 self.save_locations()  # overwrite if existing
-                if self.opt.verbose:
-                    print("Performed quality control on {}".format(os.path.basename(self.file_name)))
+                print("Performed quality control on {}".format(os.path.basename(self.file_name)))
 
     def save_locations(self):
         """
@@ -160,8 +163,8 @@ class WSIReader(OpenSlide):
                 'target_qc_mpp': self.opt.qc_mpp,
                 'read_level': self.read_level,
                 'qc_read_level': self.qc_read_level,
-                'read_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level],
-                'qc_mpp': float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level],
+                'read_mpp': self.read_mpp,
+                'qc_mpp': self.qc_mpp,
                 'tissue_locations': self.tissue_locations
             },
                       res_file)

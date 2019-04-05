@@ -1,9 +1,7 @@
 import time
-import os
 from options.train_options import TrainOptions
 from data import create_dataset, create_dataloader
 from models import create_model
-from deploy import create_deployer
 from utils import create_visualizer
 
 if __name__ == '__main__':
@@ -64,8 +62,8 @@ if __name__ == '__main__':
             model.save_networks('latest')
             model.save_networks(epoch)
 
-        print('End of epoch %d / %d \t Time Taken: %d sec' %
-              (epoch, opt.nepoch + opt.nepoch_decay, time.time() - epoch_start_time))
+        print('{}: End of epoch {} / {} \t Time Taken: {:.3f} sec'.format
+              (opt.experiment_name, epoch, opt.nepoch + opt.nepoch_decay, time.time() - epoch_start_time))
         model.update_learning_rate()
 
         if opt.val_epoch_freq and epoch % opt.val_epoch_freq == 0:

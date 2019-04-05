@@ -38,7 +38,7 @@ IDS=()
 for SLIDEPATH in /well/rittscher/users/achatrian/ProstateCancer/Dataset/{train,test}/*; do
     SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
     SLIDEID="${SLIDENAME%%_TissueTrain_*}"
-    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
+    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
     # echo "Applying UNET for ${SLIDEID}"
     array_contains IDS ${SLIDEID}
     if [[ ! -z SLIDEID ]] && [[ ${CHECK} -eq 0 ]]

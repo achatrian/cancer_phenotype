@@ -12,7 +12,7 @@ class UNetModel(BaseModel):
         super(UNetModel, self).__init__(opt)
         self.opt = opt
         self.module_names = ['']
-        self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.fine_size, opt.max_multiple,
+        self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size, opt.max_multiple,
                         multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
         self.loss_names = ['ce', 'reg'] if self.opt.regularizer_coeff else ['ce']
         self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
@@ -23,7 +23,6 @@ class UNetModel(BaseModel):
                             ['dice{}'.format(c) for c in range(self.opt.num_class)]
         self.visual_names = ["input", "output", "target"]
         self.visual_types = ["image", "map", "map"]
-
         if self.is_train:
             self.optimizers = [torch.optim.Adam([
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] == 'bias'],
@@ -31,7 +30,6 @@ class UNetModel(BaseModel):
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] != 'bias'],
                  'lr': opt.learning_rate, 'weight_decay': opt.weight_decay}  # filter parameters have weight decay
             ])]
-
         self.input = None
         self.target = None
         self.output = None
