@@ -12,7 +12,7 @@ import multiprocessing as mp
 import queue
 import tqdm
 import numpy as np
-from scipy.misc import comb
+from scipy.special import comb
 import cv2
 
 
@@ -181,12 +181,12 @@ class AnnotationBuilder:
                     store_items = copy.deepcopy(layer['items'])  # copy to iterate over
                     to_remove = set() # store indices so that cycle is not repeated if either item has already been removed / discarded
                     for (i, item0), (j, item1) in tqdm.tqdm(combinations(enumerate(store_items), 2),
-                                                                leave=False, total=comb(N=len(store_items), k=2)):
+                                                            leave=False, total=comb(N=len(store_items), k=2)):
                         if i == j or i in to_remove or j in to_remove:
                             continue  # items are the same or items have already been processed
                         # Brute force approach, shapes are not matched perfectly, so if there are many points close to another
                         # point and distance dosesn't match the points 1-to-1 paths might be merged even though they don't
-                        try:
+                        try:  # get bounding boxes for contours from annotation meta-data
                             tile_rect0 = self.metadata[layer['name']]['tile_rect'][i]
                             tile_rect1 = self.metadata[layer['name']]['tile_rect'][j]
                         except KeyError as keyerr:
@@ -198,21 +198,25 @@ class AnnotationBuilder:
                             continue  # do nothing if items are not from touching/overlapping tiles
                         points_near, points_far = (tuple(self.item_points(item0 if origin_rect == 0 else item1)),
                                                    tuple(self.item_points(item0 if origin_rect == 1 else item1)))
+                        # points_near stores the points of the top and/or leftmost contour
                         if rects_positions == 'overlap':
+                            # if contours overlap, remove overlapping points from the bottom / rightmost contour
                             points_far = self.remove_overlapping_points(points_near, points_far)
-                            try:
-                                points_far[0]
-                            except IndexError as err:
-                                logging.error(str(err.args), exc_info=True)
-                        assert points_far, "Some points must remain from this operation, or positions should have been 'contained'"
+                            # try:
+                            #     points_far[0]
+                            # except IndexError as err:
+                            #     logging.error(str(err.args), exc_info=True)
+                        assert points_far, "Some points must remain from this operation, or rects_positions should have been 'contained'"
                         total_min_dist = 0.0
                         # noinspection PyBroadException
                         try:
+                            # find pairs of points, one in each contour, that may lie at boundary
                             closest_points, point_dist = self.find_closest_points(self.euclidean_dist, points_near, points_far, closeness_thresh)
                             if closest_points and len(closest_points) > 1:
                                 total_min_dist += sum(
                                     min(point_dist[p0][p1] if (p0, p1) in closest_points else 0 for p1 in points_far)
-                                    for p0 in points_near)  # sum dist
+                                    for p0 in points_near
+                                )  # sum dist
                                 if total_min_dist / len(closest_points) < dissimilarity_thresh:
                                     outer_points = self.get_merged(points_near, points_far, closest_points)
                                     # make bounding box for new contour
@@ -352,7 +356,7 @@ class AnnotationBuilder:
         :param eps: tolerance in checks
         :return: positions: overlap|horizontal|vertical|'' - the relative location of the two paths
                  origin_rect: meaning depends on relative positions of two boxes:
-                            * contained: which box is bigger
+                            * contained: which box is biggerpng
                             * horizontal: leftmost box
                             * vertical: topmost box
                             * overlap: topmost box
@@ -534,6 +538,9 @@ class AnnotationBuilder:
                 merged_num += len(store_items) - len(items)
                 num_iters += 1
                 iter_time = iter_time + (time.time() - iter_start_time - iter_time) / num_iters
+                logger.info("Wait for child processes joining main process ...")
+                for process in processes:
+                    process.join()
             if changed:
                 logger.info(f"[Layer '{layer['name']}'] Max number of iterations reached ({num_iters})")
             else:
@@ -542,6 +549,8 @@ class AnnotationBuilder:
             logger.info(f"[Layer '{layer['name']}'] {merged_num} total merged items in {layer_time:.2f}s.")
         self.merged = True
         logger.info("Done!")
+        logger.removeHandler(fh)
+        logger.removeHandler(ch)
 
 
 # to be pickled, classes must be top level objects
@@ -621,7 +630,8 @@ class ItemMerger(mp.Process):
                 if closest_points and len(closest_points) > 1:
                     total_min_dist += sum(
                         min(point_dist[p0][p1] if (p0, p1) in closest_points else 0 for p1 in points_far)
-                        for p0 in points_near)  # sum dist
+                        for p0 in points_near
+                    )  # sum dist
                     if total_min_dist / len(closest_points) < self.dissimilarity_thresh:
                         # Signal to other processes ASAP that the items have been processed
                         if i not in self.to_remove and j not in self.to_remove:  # check that either items haven't been processed by other worker in the meantime
@@ -659,6 +669,31 @@ class ItemMerger(mp.Process):
         self.output_queue.close()
         logger.info(f"Terminating process {self.id_} | mean merge time: {mean_merge_time:.2f}s total #merged: {merged_items}")
 
+
+def main():
+    r"""Load existing annotation and merge contours"""
+    import argparse
+
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--annotation_path', required=True, type=Path)
+    parser.add_argument('--closeness_threshold', type=float, default=5.0, help="")
+    parser.add_argument('--dissimilarity_threshold', type=float, default=4.0, help="")
+    parser.add_argument('--max_iter', type=int, default=1, help="")
+    parser.add_argument('--workers', type=int, default=4, help="")
+    parser.add_argument('--log_dir', type=str, default='', help="")
+    parser.add_argument('--append_merged_suffix', action='store_true', help="")
+    parser.add_argument('--sequential', action='store_true')
+    args, unparsed = parser.parse_known_args()
+    with open(args.annotation_path, 'r') as annotation_file:
+        annotation_json = json.load(annotation_file)
+    builder = AnnotationBuilder.from_object(annotation_json)
+    builder.merge_overlapping_segments(closeness_thresh=5.0, dissimilarity_thresh=4.0, max_iter=args.max_iter,
+                                       parallel=not args.sequential, num_workers=args.workers, log_dir=args.log_dir)
+    builder.dump_to_json(args.annotation_path.parent, name='merged' if args.append_merged_suffix else '')
+
+
+if __name__ == '__main__':
+    main()
 
 # @staticmethod
 # def find_extremes(close_point_pairs, distance):

@@ -16,42 +16,43 @@ module load cuda/9.0
 module load cudnn/7.0-9.0
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$1
-TCGA=$2
 echo -e "Apply commands:\n ${COMMANDS}"
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/generate:${PYTHONPATH}"
 shopt -s globstar
+COUNTER=0
 DATE=`date`
 JOBID=$(tr ' ' '_' <<< ${DATE})  # replace spaces with underscores
 JOBID=$(tr ':' '_' <<< ${JOBID})  # replace columns with underscores (or it breaks)
 JOBID="${JOBID}_${JOB_ID}"  # in case multiple jobs are run in the same second, add counter id to differentiate between them
-LOGDIR=/well/rittscher/users/achatrian/jobs_logs/test_many
+LOGDIR=/well/rittscher/users/achatrian/jobs_logs/apply_many_tile_based
 
-if [[ -z $2 ]]
-then
-    FILES=(/well/rittscher/projects/TCGA_prostate/TCGA/*/*)
-else
-    FILES=($2/*)  # expand to all files / dirs in given data directory
-fi
+array_contains () {
+# first input is array and second is element
+    local array="$1[@]"
+    local seeking=$2
+    CHECK=0
+    for element in "${!array}"; do
+        if [[ $element == $seeking ]]; then
+            CHECK=1
+            break
+        fi
+    done
+}
 
-# working on TCGA
-COUNTER=0
-for SLIDEPATH in "${FILES[@]}"; do
+IDS=()
+for SLIDEPATH in /well/rittscher/users/achatrian/ProstateCancer/Dataset/{train,test}/*; do
     SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
-    # check if file has .ndpi or .svs format. If not, skip iteration
-    if [[ $SLIDENAME == *.ndpi ]]
-    then
-        SLIDEID="${SLIDENAME%%.ndpi*}"
-        COUNTER=$((COUNTER+1))
-    elif [[ $SLIDENAME == *.svs ]]
-    then
-        SLIDEID="${SLIDENAME%%.svs*}"
-        COUNTER=$((COUNTER+1))
-    else
-        continue
-    fi
-    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
+    SLIDEID="${SLIDENAME%%_TissueTrain_*}"
+    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
     # echo "Applying UNET for ${SLIDEID}"
-    qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/o${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
-    COUNTER=$((COUNTER+1))
+    array_contains IDS ${SLIDEID}
+    if [[ ! -z SLIDEID ]] && [[ ${CHECK} -eq 0 ]]
+    then
+        touch $LOGDIR/"o${JOBID}_${SLIDEPATH}"
+        touch $LOGDIR/"e${JOBID}_${SLIDEPATH}"
+        qsub -o $LOGDIR/"o${JOBID}_${SLIDEPATH}" -e $LOGDIR/"e${JOBID}_${SLIDEPATH}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_apply.sh ${SLIDECOMMANDS}
+        COUNTER=$((COUNTER+1))
+        IDS+=(${SLIDEID})
+    fi
 done
 echo "Applying network to ${COUNTER} slides ..."

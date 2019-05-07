@@ -1,19 +1,19 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="apply_convert_annotations_area" type="PythonConfigurationType" factoryName="Python" folderName="segment">
     <module name="cancer_phenotype" />
-    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="INTERPRETER_OPTIONS" value="-O" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
       <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
-    <option name="SDK_HOME" value="" />
+    <option name="SDK_HOME" value="$USER_HOME$/anaconda3/bin/python" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/base" />
-    <option name="IS_MODULE_SDK" value="true" />
+    <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/base/apply.py" />
-    <option name="PARAMETERS" value="--task=segment --deployer_name=annconvert --slide_id=17_A047-4463_153D+-+2017-05-11+09.40.22 --dataset_name=areatiles --patch_size=2048 --fine_size=2048 --gpu_ids=-1 --ndeploy_workers=2 --batch_size=5 --data_dir=/well/rittscher/users/achatrian/ProstateCancer/Dataset --workers=2 --sync_timeout=60" />
+    <option name="PARAMETERS" value="--task=segment --deployer_name=annconvert --slide_id=17_A047-4463_153D+-+2017-05-11+09.40.22 --dataset_name=areatiles --patch_size=2048 --fine_size=2048 --gpu_ids=-1 --ndeploy_workers=2 --batch_size=5 --data_dir=/mnt/rescomp/users/achatrian/ProstateCancer/Dataset --workers=0 --sync_timeout=60" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

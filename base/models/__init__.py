@@ -40,12 +40,3 @@ def create_model(opt):
         instance = None
         print("no model was created")
     return instance
-
-
-# This code is from https://github.com/thomasjpfan/pytorch/blob/401ec389db2c9d2978917a6e4d1101b20340d7e7/torch/optim/lr_scheduler.py
-# This code is under review at PyTorch and is to be merged eventually to make CLR available to all.
-# Tested with pytorch 0.2.0
-
-from torch.optim import Optimizer
-import numpy as np
-

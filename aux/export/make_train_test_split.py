@@ -1,8 +1,6 @@
 import sys
-import os
 sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
                  '/well/rittscher/users/achatrian/cancer_phenotype'])
-import random
 import json
 from pathlib import Path
 import datetime

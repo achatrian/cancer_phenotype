@@ -41,27 +41,24 @@ class AreaTilesDataset(BaseDataset):
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        parser.add_argument('--one_class', action='store_false', help="Merge labels of target into a binary mask")
+        parser.add_argument('--one_class', action='store_true', help="Merge labels of target into a binary mask")
         parser.add_argument('--coords_pattern', type=str, default='\((\w\.\w{1,3}),(\w{1,6}),(\w{1,6}),(\w{1,6}),(\w{1,6})\)_img_(\w{1,6}),(\w{1,6})')
         return parser
 
     def __getitem__(self, idx):
+        random_cropped = False
         img_name = self.file_list[idx]
         gt_name = self.labels[idx]
-
         bgr_img = cv2.imread(img_name, -1)
         b, g, r = cv2.split(bgr_img)  # get b,g,r
-
         image = cv2.merge([r, g, b])  # switch it to rgb
         gt = cv2.imread(gt_name, -1)
         if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
             raise ValueError("{} is not valid".format(gt_name))
-
         if gt.ndim == 3 and gt.shape[2] == 3:
             gt = gt[..., 0]
         if self.opt.one_class:
             gt[gt > 0] = 255
-
         if image.shape[0:2] != (self.opt.patch_size,)*2:
             too_narrow = image.shape[1] < self.opt.patch_size
             too_short = image.shape[0] < self.opt.patch_size
@@ -72,19 +69,17 @@ class AreaTilesDataset(BaseDataset):
                 left, right = delta_w // 2, delta_w - (delta_w // 2)
                 image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_REFLECT)
                 gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_REFLECT)
-
             if image.shape[0] > self.opt.patch_size or image.shape[1] > self.opt.patch_size:
                 cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
                 cat = self.randomcrop(cat)
                 image = cat[:, :, 0:3]
                 gt = cat[:, :, 3]
-
+                random_cropped = True  # whether to add crop bias to offset in tile information below
             # scale image
             if self.opt.fine_size != self.opt.patch_size:
                 sizes = (self.opt.fine_size, ) * 2
                 image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
                 gt = cv2.resize(gt, sizes, interpolation=cv2.INTER_AREA)
-
         # im aug
         cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
         if self.opt.augment_level:
@@ -100,33 +95,28 @@ class AreaTilesDataset(BaseDataset):
             gt[np.logical_and(gt < 210, gt > 40)] = 1
             gt[gt >= 210] = 2
             gt[np.logical_and(gt != 1, gt != 2)] = 0
-
         # scale between 0 and 1
         image = image/255.0
         # normalised image between -1 and 1
         image = (image - 0.5)/0.5
-
         # convert to torch tensor
         assert(image.shape[-1] == 3)
         assert(len(gt.shape) == 2)
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
         gt = torch.from_numpy(gt.copy()).long()  # change to FloatTensor for BCE
-
         coords_info = re.search(self.opt.coords_pattern, os.path.basename(img_name)).groups()  # tuple with all matched groups
         downsample = float(coords_info[0])  # downsample is a float
         area_x, area_y, area_w, area_h, tile_x, tile_y = tuple(int(num) for num in coords_info[1:])
-        x_offset = area_x + tile_x + self.randomcrop.last_crop[0]
-        y_offset = area_y + tile_y + self.randomcrop.last_crop[1]
+        x_offset = area_x + tile_x + (self.randomcrop.last_crop[0] if random_cropped else 0)
+        y_offset = area_y + tile_y + (self.randomcrop.last_crop[1] if random_cropped else 0)
         slide_id = re.match('.+?(?=_TissueTrain_)', os.path.basename(img_name)).group()  # tested on regex101.com
-
         return {'input': image, 'target': gt, 'input_path': img_name, 'target_path': gt_name,
                 'slide_id': slide_id,
                 'downsample': downsample,
                 'x_offset': x_offset, 'y_offset': y_offset}
     
     def make_subset(self, selector='', selector_type='match', store_name='paths'):
-        # TODO to test
         if hasattr(self.opt, 'slide_id'):
             # If slide_id is given, retain only tiles for that slide
             file_list, labels = self.file_list, self.labels
@@ -137,6 +127,9 @@ class AreaTilesDataset(BaseDataset):
                     del labels[i]
             self.file_list = file_list
             self.labels = labels
+            print(f"Subset for {self.opt.slide_id} made with {len(self.file_list)} tiles was created")
+        else:
+            print(f"Can only create subset through opt.slide id for {self.name()} ...")
 
 
 class AugDataset(AreaTilesDataset):

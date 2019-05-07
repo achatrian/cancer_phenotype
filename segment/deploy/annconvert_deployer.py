@@ -5,6 +5,11 @@ from base.deploy.base_deployer import BaseDeployer
 from base.utils.mask_converter import MaskConverter
 from base.utils.annotation_builder import AnnotationBuilder
 from base.utils import utils
+# if __debug__:
+#     import matplotlib.pyplot as plt
+#     import numpy as np
+#     import cv2
+#     #from base.data.wsi_reader import WSIReader
 
 
 class AnnConvertDeployer(BaseDeployer):
@@ -22,6 +27,10 @@ class AnnConvertDeployer(BaseDeployer):
         parser.add_argument('--dissimilarity_threshold', default=4.0, help="Max average distance of close points for bounds to be merged")
         parser.add_argument('--max_iter', default=3, help="Max number of iterations in annotation merger")
         parser.add_argument('--sync_timeout', default=60, type=int, help="Queue time out when putting and getting before error is thrown")
+        parser.add_argument('--rescale_factor', default=0.0, type=float, help="Resize factor for contours")
+        if __debug__:
+            parser.add_argument('--slide_file', default='', type=Path)
+        parser.set_defaults(model='None')  # no neural net is needed
         return parser
 
     def name(self):
@@ -29,6 +38,8 @@ class AnnConvertDeployer(BaseDeployer):
 
     @staticmethod
     def run_worker(process_id, opt, model, input_queue, output_queue=None):
+        #if __debug__:
+            #slide = WSIReader(opt, opt.slide_file)
         # cannot send to cuda outside process in pytorch < 0.4.1 -- patch (torch.multiprocessing issue)
         print("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
         converter = MaskConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
@@ -39,9 +50,25 @@ class AnnConvertDeployer(BaseDeployer):
             if data is None:
                 input_queue.task_done()
                 break
+            j = 0
             for map_, slide_id, offset_x, offset_y in zip(
                     data['target'], data['slide_id'], data['x_offset'], data['y_offset']):
-                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y)
+                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y,
+                                                                    rescale_factor=None if not opt.rescale_factor else opt.rescale_factor)
+                if __debug__:
+                    #tile = slide.read_region((int(offset_x), int(offset_y)), level=0, size=tuple(map_.shape))
+                    #tile = np.array(tile)
+                    shifted_contours = [contour - np.array((offset_x, offset_y)) for contour in contours]
+                    tile = utils.tensor2im(data['input'][j], False)
+                    cv2.drawContours(tile, shifted_contours, -1, (0, 255, 255), 60)
+                    fig, axes = plt.subplots(1, 2)
+                    #fig.suptitle(Path(data['input_path'][0]).name)
+                    #axes[0].imshow(utils.tensor2im(data['input'][j], False))
+                    axes[0].imshow(utils.tensor2im(map_, True))
+                    axes[1].imshow(tile)
+                    #axes[2].set_title(f'{round(float(offset_x)* slide.mpp_x)}, {round(float(offset_y) * slide.mpp_y)}')
+                    plt.show()
+                    j += 1
                 output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
             num_images += data['input'].shape[0]
             if i % opt.print_freq == 0:

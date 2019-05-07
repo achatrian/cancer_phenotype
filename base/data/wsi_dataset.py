@@ -4,11 +4,13 @@ from itertools import accumulate
 import datetime
 import json
 import warnings
+import random
 import numpy as np
 from torchvision.transforms import ToTensor
 from .base_dataset import BaseDataset
 from utils import utils
 from .wsi_reader import WSIReader
+from base.utils.annotation_builder import AnnotationBuilder
 
 
 class WSIDataset(BaseDataset):
@@ -37,12 +39,15 @@ class WSIDataset(BaseDataset):
         parser.add_argument('--check_tile_blur', action='store_true', help="Reject tiles that result blurred according to my criterion")
         parser.add_argument('--check_tile_fold', action='store_true', help="Reject tiles that contain a fold according to my criterion")
         parser.add_argument('--overwrite_qc', action='store_true', help="Perform quality control on all slides and overwrite files")
+        parser.add_argument('--area_annotation_scale', type=float, default=1.0, help="If annotations are used to select subset of tiles in WSI, their contours are divided by this factor")
+        parser.add_argument('--max_total_tiled_area', type=int, default=5e6, help="Upper limit to area covered by dataset tiles, in um^2")
+        parser.add_argument('--max_num_subboxes', type=int, default=20, help="If max total tiled area > 0, this parameter chooses the number of boxes used to sample the tiles. More boxes means smaller boxes")
         return parser
 
     def name(self):
         return "WSIDataset"
 
-    def setup(self, good_files=tuple()):
+    def setup(self, good_files=tuple(), annotation_dir='tumour_area_annotations'):
         # Reset if setup is done again
         self.slides = []
         self.tiles_per_slide = []
@@ -67,6 +72,7 @@ class WSIDataset(BaseDataset):
         except IndexError:
             qc_store = None
         to_filter = bool(good_files)  # whether to use tuple files to filter slide files in data dir
+        # perform quality control on each file and store WSIReader instances
         for file in files:
             if not utils.is_pathname_valid(file):
                 raise FileNotFoundError("Invalid path: {}".format(file))
@@ -79,6 +85,43 @@ class WSIDataset(BaseDataset):
                 good_files.pop()
             slide = WSIReader(self.opt, file)
             slide.find_tissue_locations(qc_store)
+            # restrict location by tumour annotation area only
+            try:  # try to read annotation i
+                with open(Path(self.opt.data_dir) / 'data' / annotation_dir / (self.opt.slide_id + '.json'), 'r') \
+                        as annotation_file:
+                    annotation_obj = json.load(annotation_file)
+                    try:
+                        annotation_obj = annotation_obj['annotation']  # dealing with newest annotation format in AIDA
+                    except KeyError:
+                        pass
+                    annotation_obj['slide_id'] = self.opt.slide_id
+                    annotation_obj['project_name'] = 'tumour_area'
+                    annotation_obj['layer_names'] = ['Tumour area']
+                    contours, layer_name = AnnotationBuilder.from_object(annotation_obj).get_layer_points('Tumour area', contour_format=True)
+                    slide.filter_locations(contours, delimiters_scaling=self.opt.area_annotation_scale)
+            except FileNotFoundError:
+                warnings.warn(f"Could not load area annotation for {Path(slide.file_name).name}, returning tiles from whole image")
+            if self.opt.max_total_tiled_area:
+                # restrict locations by max area, by taking subboxes of slide
+                box_pixel_area = self.opt.max_total_tiled_area / slide.mpp_x / slide.mpp_y / self.opt.max_num_subboxes  # convert to pixels^2 first
+                boxes, iter_num, total_covered_area = [], 0, 0.0
+                while len(boxes) < self.opt.max_num_subboxes and total_covered_area < self.opt.max_total_tiled_area:
+                    covered_pixel_area = 0.0
+                    w = np.sqrt(box_pixel_area) * (1 + (-1) ** int(random.random() > 0.5) * random.random() / 10)  # not perfectly square, add small randomness (max/min = +- 10%)
+                    h = box_pixel_area / w
+                    scale_up = random.random()  # works quite well to get final desired area with few boxes
+                    h, w = h * (1 + scale_up), w * (1 + scale_up)
+                    x, y = random.choice(slide.tissue_locations)  # choose random location as box upper left corner
+                    # test if box contains tissue locations
+                    for i, (xt, yt) in enumerate(slide.tissue_locations):
+                        if x <= xt <= x + w and y <= yt <= y + h:
+                            covered_pixel_area += self.opt.patch_size ** 2
+                    if covered_pixel_area >= box_pixel_area * (0.99 ** iter_num):
+                        boxes.append((x, y, w, h))
+                        total_covered_area += covered_pixel_area * slide.mpp_x * slide.mpp_y
+                    iter_num += 1
+                slide.filter_locations(delimiters=boxes)
+                print(f"{self.name()}: total area covered for {name} is {int(total_covered_area)} um^2")
             self.tiles_per_slide.append(len(slide))
             self.slides.append(slide)
         self.tile_idx_per_slide = list(accumulate(self.tiles_per_slide))  # to index tiles quickly
@@ -108,3 +151,5 @@ class WSIDataset(BaseDataset):
     def make_subset(self, selector='', selector_type='match', store_name='paths'):
         if hasattr(self.opt, 'slide_id'):
             self.setup(good_files=(self.opt.slide_id,))
+        else:
+            super().make_subset(selector, selector_type, store_name)

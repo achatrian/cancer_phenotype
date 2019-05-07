@@ -1,6 +1,6 @@
 from __future__ import print_function
-import os
 import sys
+from pathlib import Path
 import errno
 import time
 import socket
@@ -715,22 +715,22 @@ def convert_to_grayscale(im_as_arr):
     return grayscale_im
 
 
-def save_gradient_images(gradient, file_name):
+def save_gradient_images(gradient, file_path):
     """
         Exports the original gradient image
 
     Args:
         gradient (np arr): Numpy array of the gradient with shape (3, 224, 224)
         file_name (str): File name to be exported
+        save_dir (str): path to saving location
     """
-    if not os.path.exists('../results'):
-        os.makedirs('../results')
     # Normalize
     gradient = gradient - gradient.min()
     gradient /= gradient.max()
     # Save image
-    path_to_file = os.path.join('../results', file_name + '.jpg')
-    save_image(gradient, path_to_file)
+    file_path = Path(file_path).with_suffix('.json')
+    mkdir(file_path)
+    save_image(gradient, file_path)
 
 
 def save_class_activation_images(org_img, activation_map, file_name):
@@ -755,7 +755,7 @@ def save_class_activation_images(org_img, activation_map, file_name):
     print(np.max(heatmap_on_image))
     path_to_file = os.path.join('../results', file_name+'_Cam_On_Image.png')
     save_image(heatmap_on_image, path_to_file)
-    # SAve grayscale heatmap
+    # Save grayscale heatmap
     print()
     print(np.max(activation_map))
     path_to_file = os.path.join('../results', file_name+'_Cam_Grayscale.png')
@@ -813,6 +813,8 @@ def save_image(im, path):
             im = im.transpose(1, 2, 0) * 255
         elif im.shape[0] == 3 and np.max(im) > 1:
             im = im.transpose(1, 2, 0)
+        else:
+            raise ValueError(f"Invalid array dimensions {im.shape} for image data")
         im = Image.fromarray(im.astype(np.uint8))
     im.save(path)
 

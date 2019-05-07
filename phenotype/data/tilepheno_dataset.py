@@ -233,7 +233,7 @@ class TilePhenoDataset(BaseDataset):
         :param image_path:
         :return:
         """
-        coords_info = re.search(self.opt.coords_pattern, image_path.name).groups()  # tuple with all matched groups
+        coords_info = re.search(self.opt.coords_pattern, Path(image_path).name).groups()  # tuple with all matched groups
         coords_info = {'x_offset': int(coords_info[0]), 'y_offset': int(coords_info[1])}
         return coords_info
 

@@ -1,12 +1,14 @@
 import os
+import argparse
 from pathlib import Path
 import re
 import warnings
 import csv
 import json
-import tqdm
+from numbers import Real
 import datetime
 import time
+import tqdm
 from openslide import OpenSlide, PROPERTY_NAME_MPP_X, PROPERTY_NAME_MPP_Y, PROPERTY_NAME_BACKGROUND_COLOR
 import numpy as np
 import cv2
@@ -16,6 +18,21 @@ from base.utils import utils
 
 
 class WSIReader(OpenSlide):
+
+    @staticmethod
+    def get_reader_options():
+        parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
+        parser.add_argument('slide_path', default='')
+        parser.add_argument('--qc_mpp', default=1.0, type=float, help="MPP value to perform quality control on slide")
+        parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
+        parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
+        parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
+        parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
+        parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
+        parser.add_argument('--patch_size', type=int, default=256, help="Pixel size of patches (at desired resolution)")
+        parser.add_argument('--verbose', action='store_true', help="Print more information")
+        opt, unknown = parser.parse_known_args()
+        return opt
 
     def __init__(self, opt, file_name):
         file_name = str(file_name)
@@ -29,27 +46,31 @@ class WSIReader(OpenSlide):
         self.locations = []
         self.tile_info = dict()
         self.qc = None
-        # compute read level based on mpp
-        if self.opt.qc_mpp < self.opt.mpp:
-            raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc.mpp} < {self.opt.mpp})")
         self.PROPERTY_NAME_MPP_X = PROPERTY_NAME_MPP_X
         self.PROPERTY_NAME_MPP_Y = PROPERTY_NAME_MPP_Y
-        mpp_x, mpp_y = float(self.properties[self.PROPERTY_NAME_MPP_X]),\
+        self.mpp_x, self.mpp_y = float(self.properties[self.PROPERTY_NAME_MPP_X]), \
                        float(self.properties[self.PROPERTY_NAME_MPP_Y])
-        best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * mpp_x - self.opt.mpp))
-        best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * mpp_y - self.opt.mpp))
-        assert best_level_x == best_level_y; "This should be the same, unless pixel has different side lengths"
-        self.read_level = int(best_level_x)  # from np.int64
-        self.read_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level]
-        # same for quality_control read level
-        best_level_qc_x = np.argmin(
-            np.absolute(np.array(self.level_downsamples) * mpp_x - self.opt.qc_mpp)
-        )
-        best_level_qc_y = np.argmin(
-            np.absolute(np.array(self.level_downsamples) * mpp_y - self.opt.qc_mpp))
-        assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
-        self.qc_read_level = int(best_level_qc_x)
-        self.qc_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
+        # compute read level based on mpp
+        if hasattr(opt, 'qc_mpp') and hasattr(opt, 'mpp'):
+            if self.opt.qc_mpp < self.opt.mpp:
+                raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc.mpp} < {self.opt.mpp})")
+            best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
+            best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
+            assert best_level_x == best_level_y; "This should be the same, unless pixel has different side lengths"
+            self.read_level = int(best_level_x)  # from np.int64
+            self.read_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level]
+            # same for quality_control read level
+            best_level_qc_x = np.argmin(
+                np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.qc_mpp)
+            )
+            best_level_qc_y = np.argmin(
+                np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.qc_mpp))
+            assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
+            self.qc_read_level = int(best_level_qc_x)
+            self.qc_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
+        else:
+            warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
+            self.find_tissue_locations = None
 
     def find_tissue_locations(self, qc_store=None):
         """
@@ -146,12 +167,44 @@ class WSIReader(OpenSlide):
     def __getitem__(self, item):
         return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
 
-    def export_tissue_tiles(self, tile_dir='tiles', export_contours=(), contour_scaling=None):
+    def filter_locations(self, delimiters, delimiters_scaling=None):
+        r"""
+        Select subset of locations based on a spatial delimiter
+        :param delimiters: seq of bounding boxes = (x, y, w, h), ... or seq of contours [[[0, 0], [0, 1]]], ...
+        :param delimiters_scaling: divide delimiters by this scaling
+        """
+        if delimiters_scaling:
+            delimiters = [(np.array(delimiter) / delimiters_scaling).astype(np.int32)
+                          for delimiter in delimiters if len(delimiter) > 0]
+        # check is done on first element of delimiters seq only
+        if len(delimiters[0]) == 4 and all(isinstance(dim, Real) for dim in delimiters[0]):
+            # Bounding box delimiters
+            internal_locations = set()
+            for delimiter in delimiters:
+                x, y, w, h = delimiter
+                for i, (xt, yt) in enumerate(self.tissue_locations):
+                    if x <= xt <= x + w and y <= yt <= y + h:
+                        internal_locations.add((xt, yt))
+        elif isinstance(delimiters[0], np.ndarray) and delimiters[0].ndim == 3:
+            # Contour delimiters
+            internal_locations = []
+            for i, (x, y) in enumerate(self.tissue_locations):
+                origin_corner = (int(x), int(y))
+                if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0
+                       for tumour_area in delimiters):
+                    internal_locations.append((x, y))
+        else:
+            raise ValueError(f"Delimiters needs to be sequence of bounding boxes or contours, not '{type(delimiters[0])}'")
+        if not internal_locations:
+            warnings.warn(f"Filtering resulted in empty reader for {Path(self.file_name).name}")
+        self.tissue_locations = tuple(internal_locations)
+
+    def export_tissue_tiles(self, tile_dir='tiles', export_delimiters=(), delimiters_scaling=None):
         r"""
         Save quality-controlled tiles
         :param tile_dir:
-        :param export_contours:
-        :param contour_scaling:
+        :param export_delimiters:
+        :param delimiters_scaling:
         :return:
         """
         sizes = (self.opt.patch_size, )*2
@@ -172,24 +225,15 @@ class WSIReader(OpenSlide):
             print("Begin exporting tiles ...")
             log_freq, start_time, last_print = 5, time.time(), 0
             exported_locations = []
-            if export_contours and contour_scaling:
-                    export_contours = [(contour / contour_scaling).astype(np.int32) for contour in export_contours if contour.size]
             with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
                 log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
+                if export_delimiters:
+                    self.filter_locations(export_delimiters, delimiters_scaling)  # TODO test
                 for x, y in tqdm.tqdm(self.tissue_locations):
-                    if export_contours:
-                        origin_corner = (int(x), int(y))
-                        #opposite_corner = (int(origin_corner[0] + self.opt.patch_size), int(origin_corner[1] + self.opt.patch_size))
-                        if any(cv2.pointPolygonTest(tumour_area, origin_corner, measureDist=False) >= 0 for tumour_area in export_contours):
-                            tile = self.read_region((x, y), self.read_level, sizes)
-                            tile = np.array(tile)
-                            imageio.imwrite(save_tiles_dir / f'{x}_{y}.png', tile)
-                            exported_locations.append(origin_corner)
-                    else:
-                        tile = self.read_region((x, y), self.read_level, sizes)
-                        tile = np.array(tile)
-                        imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
-                        exported_locations.append((x, y))
+                    tile = self.read_region((x, y), self.read_level, sizes)
+                    tile = np.array(tile)
+                    imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+                    exported_locations.append((x, y))
                     if len(exported_locations) % log_freq == 0 and last_print != len(exported_locations):
                         log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}s) Exported {len(exported_locations)} tiles ...\n")
                         last_print = len(exported_locations)
@@ -242,32 +286,24 @@ class WSIReader(OpenSlide):
 
     @staticmethod
     def is_blurred(image):
+        # TODO implement
         return False
 
     @staticmethod
     def is_folded(image):
+        # TODO implement
         return False
+
+    def read_region(self, location, level=None, size=None):
+        if size is None and not hasattr(self.opt, 'patch_size'):
+            raise ValueError("Either size or opt.patch_size must be defined")
+        return super().read_region(location, level=level if level is not None else self.read_level,
+                                   size=size or (self.opt.patch_size, )*2)
 
 
 if __name__ == '__main__':
-    import argparse
-    import sys
-    parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
-    parser.add_argument('--qc_mpp', default=1.0, type=float, help="MPP value to perform quality control on slide")
-    parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
-    parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
-    parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
-    parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
-    parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
-    parser.add_argument('--patch_size', type=int, default=256, help="Pixel size of patches (at desired resolution)")
-    parser.add_argument('--verbose', action='store_true', help="Print more information")
-    opt, unknown = parser.parse_known_args()
-
-    slide_path = Path(sys.argv[1])
-    if not slide_path.is_file():
-        raise ValueError(f"Invalid file input {str(slide_path)}")
-
-    wsi_reader = WSIReader(opt, slide_path)
+    opt = WSIReader.get_reader_options()
+    wsi_reader = WSIReader(opt, opt.slide_path)
     wsi_reader.find_tissue_locations()
     wsi_reader.export_tissue_tiles('tiles_temp')
 

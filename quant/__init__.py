@@ -1,23 +1,47 @@
 from pathlib import Path
 from functools import partial
-import argparse
 import json
 import numpy as np
 import cv2
 from numba import jit
 from base.utils.annotation_builder import AnnotationBuilder
+from base.data.wsi_reader import WSIReader
 NO_PYTHON = False  # switches from numpy-only to opencv + skimage
 
+r"""Functions to extract and order image and annotation data, for computing features and clustering"""
 
-def read_annotations(slide_ids, data_dir):
+
+def annotations_summary(contour_struct, print_file=''):
+    r"""Print summary of annotation data.
+    :param: output of read_annotation()
+    """
+    message = ""
+    for annotation_id, layer_struct in contour_struct.items():
+        slide_message = f"{annotation_id}:"
+        for layer_name, contours in layer_struct.items():
+            slide_message += f" {layer_name} {len(contours)} contours |"
+        message += slide_message + '\n'
+    print(message)
+    if print_file:
+        with open(print_file, 'w') as print_file:
+            print(message, file=print_file)
+
+
+def read_annotations(data_dir, slide_ids=()):
     r"""Read annotations for one / many slides
+    :param data_dir: folder containing the annotation files
+    :param slide_ids: ids of the annotations to be read
     :return: dict: annotation id --> (dict: layer_name --> layer points)
+    If there are more annotations for the same slide id, these are listed as keys
     """
     assert type(slide_ids) in (tuple, list, set)
     slide_ids = set(slide_ids)
     annotation_dir = Path(data_dir)/'data'/'annotations'
-    annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
-                        if any(slide_id in str(annotation_path.name) for slide_id in slide_ids)]
+    if slide_ids:
+        annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
+                            if any(slide_id in str(annotation_path.name) for slide_id in slide_ids)]
+    else:
+        annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()]
     contour_struct = dict()
     for annotation_path in annotation_paths:
         with open(annotation_path, 'r') as annotation_file:
@@ -73,7 +97,7 @@ def contour_to_mask(contour: np.ndarray, value=255, shape=(), mask=None):
     """
     assert type(contour) is np.ndarray, "Numpy array expected for contour"
     contour = contour.squeeze()
-    contour = contour - contour.min(0)
+    contour = contour - contour.min(0)  # remove slide offset
     contour_shape = (contour[:, 1].max(), contour[:, 0].max())  # dimensions of contour to image coords
     if shape:
         cut_points = []  # find all the indices of points that would fall outside of mask
@@ -117,11 +141,26 @@ def contours_to_multilabel_masks(slide_contours: dict, overlap_struct: list, sha
     return masks
 
 
-def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('slide_ids', type=str, nargs='+', help="Slide ids to process")  # this takes inputs without a name !!!
-    parser.add_argument('-d', '--data_dir', type=str, default='/well/rittscher/projects/TCGA_prostate/TCGA')
-    opt, unknown = parser.parse_known_args()
+def get_image_for_contour(contour, reader):
+    r"""
+    Extract image from slide corresponding to region covered by contour
+    """
+    x, y, w, h = cv2.boundingRect(contour)
+    return reader.read_region((x, y), level=0, size=(w, h))  # annotation coordinates should refer to lowest level
+
+
+class ContourProcessor:
+
+    def __init__(self, contour_lib, features, reader):
+        self.contour_lib = contour_lib
+        self.features = features
+        self.reader = reader
+
+    def __iter__(self):
+
+
+
+
 
 
 

@@ -124,6 +124,10 @@ class TileSegDeployer(BaseDeployer):
 
     def cleanup(self, output):
         annotation = output
+        # dump all the annotation objects to json
+        save_path = Path(self.opt.data_dir) / 'data' / 'annotations'
+        utils.mkdirs(str(save_path))
+        annotation.dump_to_json(save_dir=save_path)
         if self.opt.merge_segments:
             annotation.merge_overlapping_segments(closeness_thresh=self.opt.closeness_threshold,
                                                   dissimilarity_thresh=self.opt.dissimilarity_threshold,
@@ -131,10 +135,7 @@ class TileSegDeployer(BaseDeployer):
                                                   parallel=bool(self.opt.workers),
                                                   num_workers=self.opt.workers,
                                                   log_dir=self.opt.checkpoints_dir)
-        # dump all the annotation objects to json
-        save_path = Path(self.opt.data_dir) / 'data' / 'annotations'
-        utils.mkdirs(str(save_path))
-        annotation.dump_to_json(save_dir=save_path)
+            annotation.dump_to_json(save_dir=save_path, name='merged')
         print(f"Dumped to {str(save_path)}")
 
 
