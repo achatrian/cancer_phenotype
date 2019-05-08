@@ -3,7 +3,7 @@ r"""Feature computations from contours, masks, and images"""
 import numpy as np
 import cv2
 from skimage import measure
-from . import read_annotations
+from . import read_annotations, Feature
 
 
 def region_properties(mask, opencv=True, contour=None):
@@ -28,10 +28,11 @@ def region_properties(mask, opencv=True, contour=None):
         }
 
 
-def two_layer_region_properties(mask, hier=(200, 250)):
+def two_layer_region_properties(mask, hier=(200, 250), outer_contour=None):
     """ Works for 2 values - 0 is for background
     :param mask:
     :param hier: listing values from the outer contour inwards
+    :param outer_contour
     :return:
     """
     assert len(hier) == 2
@@ -40,7 +41,11 @@ def two_layer_region_properties(mask, hier=(200, 250)):
         assert tuple(np.unique(mask)) == (0, hier[1])
         return measure.regionprops(mask)
     else:
-        return region_properties(mask)
+        return region_properties(mask, contour=outer_contour)
+
+
+region_properties = Feature(('mask', 'contour'), region_properties)
+two_layer_region_properties = Feature(('mask', 'contour'), two_layer_region_properties)
 
 
 def main():

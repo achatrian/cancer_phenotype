@@ -5,14 +5,14 @@ import errno
 import time
 import socket
 import re
-from collections import OrderedDict, defaultdict
-from torch.autograd import Variable
+from collections import OrderedDict
 import torch.nn.functional as F
 from torch import nn
 from argparse import ArgumentTypeError
-import torch
 import numpy as np
-from PIL import Image
+from matplotlib.colors import LinearSegmentedColormap
+import cv2
+
 
 
 # Sadly, Python fails to provide the following magic number for us.
@@ -728,8 +728,8 @@ def save_gradient_images(gradient, file_path):
     gradient = gradient - gradient.min()
     gradient /= gradient.max()
     # Save image
-    file_path = Path(file_path).with_suffix('.json')
-    mkdir(file_path)
+    file_path = Path(file_path).with_suffix('.png')
+    mkdir(file_path.parent)
     save_image(gradient, file_path)
 
 
@@ -738,7 +738,7 @@ def save_class_activation_images(org_img, activation_map, file_name):
         Saves cam activation map and activation map on the original image
 
     Args:
-        org_img (PIL img): Original image
+        org_img (PIL example_grid): Original image
         activation_map (numpy arr): Activation map (grayscale) 0-255
         file_name (str): File name of the exported image
     """
@@ -766,7 +766,7 @@ def apply_colormap_on_image(org_im, activation, colormap_name):
     """
         Apply heatmap on image
     Args:
-        org_img (PIL img): Original image
+        org_img (PIL example_grid): Original image
         activation_map (numpy arr): Activation map (grayscale) 0-255
         colormap_name (str): Name of the colormap
     """
@@ -885,4 +885,45 @@ def get_positive_negative_saliency(gradient):
     pos_saliency = (np.maximum(0, gradient) / gradient.max())
     neg_saliency = (np.maximum(0, -gradient) / -gradient.min())
     return pos_saliency, neg_saliency
+
+
+# overlay two color grids, one of images and one of saliency maps
+c = ["white", "green", "yellow", 'red', 'red']
+v = [0,  0.2, 0.5, 0.8, 1.0]
+l = list(zip(v, c))
+threshold = 0.2
+cmap=LinearSegmentedColormap.from_list('rg', l, N=256)
+
+
+def overlay_grids(example_grid, gradient_grid):
+    r"""Korsuk's func to overlay images and gradient grids"""
+    gradient_grid = gradient_grid[:, :, 0]
+
+    cm_hot = cmap
+    im = np.array(gradient_grid)
+    im = cm_hot(im)
+    im = np.uint8(im * 255)
+    im = im[:, :, 0:3]
+
+    R = np.float16(example_grid[:, :, 0])
+    G = np.float16(example_grid[:, :, 1])
+    B = np.float16(example_grid[:, :, 2])
+
+    imR = np.float16(im[:, :, 0])
+    example_grid = np.float16(im[:, :, 1])
+    imB = np.float16(im[:, :, 2])
+
+    mask = gradient_grid / 255 > threshold
+    alpha = 0.4
+
+    R[mask] = R[mask] * (1 - alpha) + imR[mask] * alpha
+    G[mask] = G[mask] * (1 - alpha) + example_grid[mask] * alpha
+    B[mask] = B[mask] * (1 - alpha) + imB[mask] * alpha
+
+    R = np.uint8(R)
+    G = np.uint8(G)
+    B = np.uint8(B)
+
+    overlaid_grid = cv2.merge((R, G, B))
+    return overlaid_grid
 

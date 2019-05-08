@@ -143,11 +143,15 @@ class AnnotationBuilder:
         self.last_added_item['segments'] = segments
         return self
 
-    def merge_overlapping_segments(self, closeness_thresh=5.0, dissimilarity_thresh=4.0, max_iter=1,
+    def merge_overlapping_segments(self, closeness_thresh=5.0, dissimilarity_thresh=4.5, max_iter=1,
                                    parallel=True, num_workers=4, log_dir=''):
         """
         Compares all segments and merges overlapping ones
+        :param: closeness_thresh: upper bound threshold for pair of points to be considered as belonging to adjacent contours
+        :param: dissimilarity_thresh: average value threshold on point distance for two contours to be considered adjacent
+        :param: max_iter: number of merging iterations.
         """
+        assert closeness_thresh >= dissimilarity_thresh, "Average value threshold must be less than upper bound threshold"
         if parallel:
             self.parallel_merge_overlapping_segments(closeness_thresh, dissimilarity_thresh, max_iter, num_workers, log_dir=log_dir)
         else:
@@ -213,11 +217,8 @@ class AnnotationBuilder:
                             # find pairs of points, one in each contour, that may lie at boundary
                             closest_points, point_dist = self.find_closest_points(self.euclidean_dist, points_near, points_far, closeness_thresh)
                             if closest_points and len(closest_points) > 1:
-                                total_min_dist += sum(
-                                    min(point_dist[p0][p1] if (p0, p1) in closest_points else 0 for p1 in points_far)
-                                    for p0 in points_near
-                                )  # sum dist
-                                if total_min_dist / len(closest_points) < dissimilarity_thresh:
+                                total_min_dist += sum(point_dist[p0][p1] for (p0, p1) in closest_points)  # sum dist
+                                if total_min_dist / len(closest_points) < dissimilarity_thresh:  # if average distance between
                                     outer_points = self.get_merged(points_near, points_far, closest_points)
                                     # make bounding box for new contour
                                     x_out, y_out = (min(tile_rect0[0], tile_rect1[0]), min(tile_rect0[1], tile_rect1[1]))
@@ -255,30 +256,33 @@ class AnnotationBuilder:
 
     @staticmethod
     def find_closest_points(distance, points_near, points_far, closeness_thresh=3.0):
-        """
+        r"""
+        Finds pairs of closest points in contours, and returns them if they are within a distance threshold
         :param distance: distance metric taking two points and returning commutative value
         :param points_near:
         :param points_far:
-        :param closeness_thresh:
+        :param closeness_thresh: decide whether closest pair of points between contour is close enough for the contours
+        to be considered adjacent
         :return: pairs of corresponding points
                  distance between point pairs
         """
         point_dist = dict()  # point1 -> point2
         for (k, p0), (l, p1) in product(enumerate(points_near), enumerate(points_far)):
-            # distance comparison
+            # build structure containing distances between point pairs
             try:
                 point_dist[p0][p1] = distance(p0, p1)  # store distances
             except KeyError:
                 point_dist[p0] = OrderedDict()
                 point_dist[p0][p1] = distance(p0, p1)  # store distances
-            if tuple(point_dist[p0].keys()) != points_far[0:l + 1]:  # must have same order as well as same elements
-                assert tuple(point_dist[p0].keys()) == points_far[0:l + 1]  # must have same order as well as same elements
+            assert tuple(point_dist[p0].keys()) == points_far[0:l + 1]  # must have same order as well as same elements
         closest_points = set()
         for p0 in points_near:
             closest_idx = np.argmin(list(point_dist[p0].values())).item()  # must list() value_view, as it is not a sequence
             closest_point = points_far[closest_idx]
+            # if points are within threshold, they are added to set. Max len(closest_points) would be len(points_near).
+            # In practice, most points will be far, and will be thresholded out
             if point_dist[p0][closest_point] < closeness_thresh:
-                closest_points.add((p0, points_far[closest_idx]))
+                closest_points.add((p0, closest_point))
         return closest_points, point_dist
 
     @staticmethod
@@ -628,10 +632,7 @@ class ItemMerger(mp.Process):
                 closest_points, point_dist = self.f.find_closest_points(self.f.euclidean_dist, points_near, points_far,
                                                                         self.closeness_thresh)
                 if closest_points and len(closest_points) > 1:
-                    total_min_dist += sum(
-                        min(point_dist[p0][p1] if (p0, p1) in closest_points else 0 for p1 in points_far)
-                        for p0 in points_near
-                    )  # sum dist
+                    total_min_dist += sum(point_dist[p0][p1] for (p0, p1) in closest_points)  # sum dist
                     if total_min_dist / len(closest_points) < self.dissimilarity_thresh:
                         # Signal to other processes ASAP that the items have been processed
                         if i not in self.to_remove and j not in self.to_remove:  # check that either items haven't been processed by other worker in the meantime

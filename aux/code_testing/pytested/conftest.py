@@ -4,7 +4,7 @@ import base.options as options
 from base.utils import utils
 
 """
-Configuration file used by pytest before running tests.
+Configuration file used by pytested before running tests.
 Importing fixtures here allows usage in test files.
 https://gist.github.com/peterhurford/09f7dcda0ab04b95c026c60fa49c2a68
 """

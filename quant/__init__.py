@@ -1,11 +1,13 @@
 from pathlib import Path
 from functools import partial
 import json
+from itertools import chain, combinations
+from collections import namedtuple
 import numpy as np
 import cv2
-from numba import jit
 from base.utils.annotation_builder import AnnotationBuilder
 from base.data.wsi_reader import WSIReader
+
 NO_PYTHON = False  # switches from numpy-only to opencv + skimage
 
 r"""Functions to extract and order image and annotation data, for computing features and clustering"""
@@ -66,19 +68,19 @@ def find_overlap(slide_contours: dict, different_labels=True):
         labels.extend([layer_name] * len(layer_contours))
     contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
     overlap_struct = []
-    for parent_bb, parent_label in contour_bbs, labels:
+    for parent_bb, parent_label in zip(contour_bbs, labels):
         # Find out each contour's children (overlapping); if a parent is encountered, no relationship is recorded
         overlap_vector = []
-        for child_bb, child_label in contour_bbs, labels:
+        for child_bb, child_label in zip(contour_bbs, labels):
             if different_labels and parent_label == child_label:
                 overlap_vector.append(False)
                 continue  # contours of the same class are not classified as overlapping
             position, origin_bb, bb_areas = AnnotationBuilder.check_relative_rect_positions(parent_bb, child_bb, eps=0)
             if parent_bb == child_bb:  # don't do anything for same box
                 overlap_vector.append(False)
-            elif position == 'contained' and origin_bb == 0:
+            elif position == 'contained' and origin_bb == 0:  # flag contour when parent contains child
                 overlap_vector.append(True)
-            elif position == 'overlap':
+            elif position == 'overlap':  # flag contour when parent and child overlap to some extent
                 overlap_vector.append(True)
             else:
                 overlap_vector.append(False)
@@ -86,7 +88,7 @@ def find_overlap(slide_contours: dict, different_labels=True):
     return overlap_struct
 
 
-def contour_to_mask(contour: np.ndarray, value=255, shape=(), mask=None):
+def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, hier=(0, 200, 250)):
     r"""Convert a contour to the corresponding max - mask is
     :param contour:
     :param value:
@@ -117,17 +119,18 @@ def contour_to_mask(contour: np.ndarray, value=255, shape=(), mask=None):
     return mask
 
 
-def contours_to_multilabel_masks(slide_contours: dict, overlap_struct: list, shape=(), contour_to_mask=contour_to_mask):
+def contours_to_multilabel_masks(slide_contours: dict, overlap_struct: list, shape=(),
+                                 hier=(0, 200, 250), contour_to_mask=contour_to_mask):
     r"""
     Translate contours into masks, painting masks with overlapping contours with different labels
     :param slide_contours: dict of lists of np.array
     :param overlap_struct: overlap between contours
     :param shape: fix shape of output masks (independent on contour size)
     :param contour_to_mask: function for making masks
-    :return:
+    :return: outer contour, mask
     """
-    if shape:
-        contour_to_mask = partial(contour_to_mask, shape=shape)
+    if shape or hier:
+        contour_to_mask = partial(contour_to_mask, shape=shape, hier=hier)
     masks = []
     contours, labels = [], []
     for layer_name, layer_contours in slide_contours.items():
@@ -136,9 +139,8 @@ def contours_to_multilabel_masks(slide_contours: dict, overlap_struct: list, sha
     for i, overlap_vect in enumerate(overlap_struct):
         mask = contour_to_mask(contours[i])
         for child_idx in np.where(overlap_vect)[0]:
-            mask = contour_to_mask(contours[child_idx], mask)
-        masks.append(mask)
-    return masks
+            mask = contour_to_mask(contours[child_idx])  # writes on previous mask
+        yield mask
 
 
 def get_image_for_contour(contour, reader):
@@ -149,17 +151,41 @@ def get_image_for_contour(contour, reader):
     return reader.read_region((x, y), level=0, size=(w, h))  # annotation coordinates should refer to lowest level
 
 
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
+
+Feature = namedtuple('Feature', ('type', 'fn'), defaults=((), lambda x: x))  # class used in features to define feature functions
+
+
 class ContourProcessor:
 
-    def __init__(self, contour_lib, features, reader):
+    def __init__(self, contour_lib, overlap_struct, reader, features=None):
         self.contour_lib = contour_lib
+        self.overlap_struct = overlap_struct
         self.features = features
         self.reader = reader
+        if features:
+            allowed_feature_types = set(powerset(('contour', 'mask', 'image')))
+            assert set(feature.type for feature in features) <= allowed_feature_types, "must work on combination of the 3 datatypes"
 
-    def __iter__(self):
+    def __iter__(self, layer):
+        self.gen = contours_to_multilabel_masks(self.contour_lib, self.overlap_struct)
+        self.i = 0
+        return self
+
+    def __next__(self):
+        self.i += 1
+        outer_contour, mask = next(self.gen)  # will raise stop iteration when no more data is available
+        image = get_image_for_contour(outer_contour, self.reader)
+        return outer_contour, mask, image
 
 
 
+
+# if too slow, could get images for contours using multiprocessing dataloader-style
 
 
 
