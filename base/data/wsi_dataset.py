@@ -31,6 +31,7 @@ class WSIDataset(BaseDataset):
         self.to_tensor = ToTensor()
         if self.opt.is_apply and self.opt.workers > 0:
             warnings.warn("WSIReader is subclassed from OpenSlide, which has ctypes objects containing pointers. Since these cannot be pickled, dataloader breaks.")
+        self.good_files = None  # used by set up to know which image files to index
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
@@ -39,6 +40,9 @@ class WSIDataset(BaseDataset):
         parser.add_argument('--check_tile_blur', action='store_true', help="Reject tiles that result blurred according to my criterion")
         parser.add_argument('--check_tile_fold', action='store_true', help="Reject tiles that contain a fold according to my criterion")
         parser.add_argument('--overwrite_qc', action='store_true', help="Perform quality control on all slides and overwrite files")
+        parser.add_argument('--tissue_threshold', type=float, default=0.4, help="Threshold of tissue filling in tile for it to be considered a tissue tile")
+        parser.add_argument('--saturation_threshold', type=int, default=20, help="Saturation difference threshold of tilefor it to be considered a tissue tile")
+        parser.add_argument('--area_annotation_dir', type=str, default='tumour_area_annotation', help="Name of subdir where delimiting area annotations can be found")
         parser.add_argument('--area_annotation_scale', type=float, default=1.0, help="If annotations are used to select subset of tiles in WSI, their contours are divided by this factor")
         parser.add_argument('--max_total_tiled_area', type=int, default=5e6, help="Upper limit to area covered by dataset tiles, in um^2")
         parser.add_argument('--max_num_subboxes', type=int, default=20, help="If max total tiled area > 0, this parameter chooses the number of boxes used to sample the tiles. More boxes means smaller boxes")
@@ -47,7 +51,7 @@ class WSIDataset(BaseDataset):
     def name(self):
         return "WSIDataset"
 
-    def setup(self, good_files=tuple(), annotation_dir='tumour_area_annotations'):
+    def setup(self, good_files=tuple()):
         # Reset if setup is done again
         self.slides = []
         self.tiles_per_slide = []
@@ -66,6 +70,7 @@ class WSIDataset(BaseDataset):
         qc_result = sorted(qc_results,
                            key=lambda qc_name: datetime.datetime.strptime(qc_name.name[3:-5], "%Y-%m-%d"))  # strip 'qc_' and '.json'
         try:
+            # TODO not using this - remove (from WSIReader as well) -
             qc_name = qc_result[-1]  # most recent quality_control
             qc_store = json.load(open(root_path/'data'/'quality_control'/qc_name, 'r'))
             print(f"Using qc results from '{str(Path(qc_name).name)}'")
@@ -84,16 +89,12 @@ class WSIDataset(BaseDataset):
                     continue  # keep only strings matching good_files
                 good_files.pop()
             slide = WSIReader(self.opt, file)
-            slide.find_tissue_locations(qc_store)
+            slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold, qc_store)
             # restrict location by tumour annotation area only
             try:  # try to read annotation i
                 with open(Path(self.opt.data_dir) / 'data' / annotation_dir / (self.opt.slide_id + '.json'), 'r') \
                         as annotation_file:
                     annotation_obj = json.load(annotation_file)
-                    try:
-                        annotation_obj = annotation_obj['annotation']  # dealing with newest annotation format in AIDA
-                    except KeyError:
-                        pass
                     annotation_obj['slide_id'] = self.opt.slide_id
                     annotation_obj['project_name'] = 'tumour_area'
                     annotation_obj['layer_names'] = ['Tumour area']
@@ -150,6 +151,6 @@ class WSIDataset(BaseDataset):
 
     def make_subset(self, selector='', selector_type='match', store_name='paths'):
         if hasattr(self.opt, 'slide_id'):
-            self.setup(good_files=(self.opt.slide_id,))
+            self.good_files = (self.opt.slide_id,)  # when .setup() is called in main script, only slide is considered
         else:
             super().make_subset(selector, selector_type, store_name)

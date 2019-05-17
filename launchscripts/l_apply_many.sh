@@ -35,18 +35,33 @@ fi
 
 COUNTER=0
 for SLIDEPATH in "${FILES[@]}"; do
-    SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
+    NAME=$(basename "${SLIDEPATH}") # get basename only
     # check if file has .ndpi or .svs format. If not, skip iteration
-    if [[ $SLIDENAME == *.ndpi ]]
+    if [[ $NAME == *.ndpi ]]
     then
-        SLIDEID="${SLIDENAME%%.ndpi*}"
+        SLIDEID="${NAME%%.ndpi*}"
         COUNTER=$((COUNTER+1))
-    elif [[ $SLIDENAME == *.svs ]]
+    elif [[ $NAME == *.svs ]]
     then
-        SLIDEID="${SLIDENAME%%.svs*}"
+        SLIDEID="${NAME%%.svs*}"
         COUNTER=$((COUNTER+1))
     else
-        continue
+        # if iterating over dirs, look for images inside dirs
+        # TODO test
+        for SUBPATH in SLIDEPATH/*; do
+            SUBNAME=$(basename "${SLIDEPATH}") # get basename only
+            if [[ $SUBNAME == *.ndpi ]]
+            then
+                SLIDEID="${SUBNAME%%.ndpi*}"
+                COUNTER=$((COUNTER+1))
+            elif [[ $SUBNAME == *.svs ]]
+            then
+                SLIDEID="${SUBNAME%%.svs*}"
+                COUNTER=$((COUNTER+1))
+            else
+                continue
+            fi
+        done  # NB: JOB IS LAUNCHED ONLY OR LAST IMAGE IN SUBDIR
     fi
     SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
     qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_apply.sh ${SLIDECOMMANDS}

@@ -79,3 +79,115 @@ def create_dataloader(dataset):
                       batch_size=opt.batch_size if not is_val else opt.val_batch_size,
                       shuffle=not is_val and sampler is None,  # if a sampler is specified, shuffle must be false
                       num_workers=opt.workers, sampler=sampler)
+
+
+# utilities to organise patches
+class Node:
+    __slots__ = ['left', 'right', 'value', 'idx']  # to occupy less memory, as tree will have many nodes
+
+    def __init__(self, value, idx=None):
+        self.left = None
+        self.right = None
+        self.value = value
+        self.idx = idx
+
+    def __repr__(self):
+        return f"Node({self.value})"
+
+
+class Tree:
+    def __init__(self, criterion=lambda value, node_value: value < node_value):
+        self.root = None
+        self.nodes = []
+        self.criterion = criterion  # criterion to assign to the left
+        # speed up leaf computations, by starting computation from last computed leaves
+        # this works assuming no nodes are removed from tree
+        self._computed_leaves = []
+
+    def get_root(self):
+        return self.root
+
+    def add(self, value):
+        if self.root is None:
+            new_node = Node(value, idx=len(self.nodes))
+            self.root = new_node
+            self.nodes.append(new_node)
+        else:
+            self.add_to_node(value, self.root)
+
+    def add_to_node(self, value, node, left=None):
+        if (left is not None and left) or self.criterion(value, node.value):
+            if node.left is not None:
+                self.add_to_node(value, node.left)
+            else:
+                new_node = Node(value, idx=len(self.nodes))
+                node.left = new_node
+                self.nodes.append(new_node)
+        else:
+            if node.right is not None:
+                self.add_to_node(value, node.right)
+            else:
+                new_node = Node(value, idx=len(self.nodes))
+                node.right = new_node
+                self.nodes.append(new_node)
+
+    def find(self, value):
+        if self.root is not None:
+            return self._find(value, self.root)
+        else:
+            return None
+
+    def _find(self, value, node):
+        if value == node.value:
+            return node
+        elif value < node.value and node.leaves is not None:
+            self._find(value, node.leaves)
+        elif value > node.value and node.right is not None:
+            self._find(value, node.right)
+
+    def delete_tree(self):
+        # garbage collector will do this for us.
+        self.root = None
+
+    def get_leaves(self):
+        leaves = []
+        current_nodes = [self.root] if not self._computed_leaves else self._computed_leaves
+        while len(current_nodes) > 0:
+            next_nodes = []
+            for node in current_nodes:
+                if node.left is None and node.right is None:
+                    leaves.append(node)
+                    continue
+                if node.left is not None:
+                    next_nodes.append(node.left)
+                if node.right is not None:
+                    next_nodes.append(node.right)
+            current_nodes = next_nodes
+        self._computed_leaves = leaves
+        return leaves
+
+    def print_tree(self):
+        if self.root is not None:
+            self._print_tree(self.root)
+
+    def _print_tree(self, node):
+        if node is not None:
+            self._print_tree(node.left)
+            print(str(node.value) + ' ')
+            self._print_tree(node.right)
+
+    def __iter__(self):
+        r"""Breadth first traversal"""
+        current_nodes = [self.root]
+        while len(current_nodes) > 0:
+            next_nodes = []  # nodes in this list are labelled as 'discovered'
+            for node in current_nodes:
+                yield node.value
+                if node.left is not None:
+                    next_nodes.append(node.left)
+                if node.right is not None:
+                    next_nodes.append(node.right)
+            current_nodes = next_nodes
+
+    # could update leaves whenever new node is added to save time, rather than traversing tree each time
+    # or copy algorithm from https://github.com/joowani/binarytree/blob/master/binarytree/__init__.py

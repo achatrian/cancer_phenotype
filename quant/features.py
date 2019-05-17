@@ -1,11 +1,50 @@
 r"""Feature computations from contours, masks, and images"""
 
+from inspect import getfullargspec
 import numpy as np
 import cv2
 from skimage import measure
-from . import read_annotations, Feature
+from . import read_annotations
 
 
+class Feature:
+    r"""Decorator class to wrap feature functions
+    Incorporates type checks on input
+    """
+    __slots__ = ['function', 'type_', 'name']
+    # how-to-python: docstring and __slots__ defined this way are class attributes
+
+    def __init__(self, function):
+        # TODO test
+        self.function = function
+        type_ = set(getfullargspec(function).args)  # get all argument names
+        assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'image'}
+        self.type_ = type_
+        self.name = function.__name__
+
+    @staticmethod
+    def is_contour(arg):  # specifies contour format
+        return isinstance(arg, np.ndarray) and arg.ndim == 3 and arg.shape[2] == 2
+
+    @staticmethod
+    def is_mask(arg, num_classes=0):  # specifies mask format
+        return isinstance(arg, np.ndarray) and np.unique(arg) <= (num_classes or 10) and arg.ndim == 2
+
+    @staticmethod
+    def is_image(arg):  # specifies image format
+        return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
+
+    def __call__(self, args, **kwargs):
+        if 'contour' in self.type_ and not any(self.is_contour(arg) for arg in args):
+            raise ValueError(f"Arguments do not contain contour-type input (f: {self.name})")
+        if 'mask' in self.type_ and not any(self.is_mask(arg) for arg in args):
+            raise ValueError(f"Arguments does not contain mask-type input (f: {self.name})")
+        if 'image' in self.type_ and not any(self.is_mask(arg) for arg in args):
+            raise ValueError(f"Arguments does not contain image-type input (f: {self.name})")
+        return self.function(args, **kwargs)
+
+
+@Feature
 def region_properties(mask, opencv=True, contour=None):
     """Region props, take the ones that are useful
     :param mask: input mask to compute features from
@@ -28,6 +67,7 @@ def region_properties(mask, opencv=True, contour=None):
         }
 
 
+@Feature
 def two_layer_region_properties(mask, hier=(200, 250), outer_contour=None):
     """ Works for 2 values - 0 is for background
     :param mask:
@@ -42,10 +82,6 @@ def two_layer_region_properties(mask, hier=(200, 250), outer_contour=None):
         return measure.regionprops(mask)
     else:
         return region_properties(mask, contour=outer_contour)
-
-
-region_properties = Feature(('mask', 'contour'), region_properties)
-two_layer_region_properties = Feature(('mask', 'contour'), two_layer_region_properties)
 
 
 def main():

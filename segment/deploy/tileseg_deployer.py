@@ -68,7 +68,7 @@ class TileSegDeployer(BaseDeployer):
                 offset_x, offset_y = data['x_offset'][i], data['y_offset'][i]
                 rescale_factor = float(data['read_mpp'][i] / data['base_mpp'][i]) if 'read_mpp' in data else 2.0
                 contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y, rescale_factor)
-                output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
+                output_queue.put((contours, labels, boxes, (int(offset_x), int(offset_y)) + (opt.patch_size * rescale_factor,) * 2), timeout=opt.sync_timeout)
                 if opt.save_masks:
                     mask = utils.tensor2im(map_, segmap=True,
                                            num_classes=converter.num_classes)  # transforms tensors into mask label image
@@ -109,9 +109,9 @@ class TileSegDeployer(BaseDeployer):
                 break
             elif isinstance(data, Integral):
                 continue
-            contours, labels, boxes = data
-            for contour, label, box in zip(contours, labels, boxes):
-                annotation.add_item(label, 'path', tile_rect=box)
+            contours, labels, boxes, tile_rect = data
+            for contour, label in zip(contours, labels):
+                annotation.add_item(label, 'path', tile_rect=tile_rect)
                 contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
                 annotation.add_segments_to_last_item(contour)
             n_contours += len(contours)

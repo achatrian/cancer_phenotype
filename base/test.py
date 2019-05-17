@@ -20,9 +20,9 @@ if __name__ == '__main__':
     if opt.slide_id:
         opt.slide_id = str(Path(opt.slide_id).with_suffix(''))
     dataset = create_dataset(opt)
-    dataset.setup()
     if opt.make_subset:
         dataset.make_subset()
+    dataset.setup()  # NB swapped in position .make_subset() and .setup()
     dataloader = create_dataloader(dataset)
     model = create_model(opt)
     model.setup(dataset)

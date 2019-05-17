@@ -15,9 +15,9 @@ if __name__ == '__main__':
     if model:
         model.share_memory()
     dataset = create_dataset(opt)
-    dataset.setup()
     if opt.make_subset:
         dataset.make_subset()
+    dataset.setup()  # NB swapped in position .make_subset() and .setup()
     dataloader = create_dataloader(dataset)
     deployer = create_deployer(opt)
     rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)  # https://github.com/fastai/fastai/issues/23#issuecomment-345091054
