@@ -44,14 +44,14 @@ class WSIDataset(BaseDataset):
         parser.add_argument('--saturation_threshold', type=int, default=20, help="Saturation difference threshold of tilefor it to be considered a tissue tile")
         parser.add_argument('--area_annotation_dir', type=str, default='tumour_area_annotation', help="Name of subdir where delimiting area annotations can be found")
         parser.add_argument('--area_annotation_scale', type=float, default=1.0, help="If annotations are used to select subset of tiles in WSI, their contours are divided by this factor")
-        parser.add_argument('--max_total_tiled_area', type=int, default=5e6, help="Upper limit to area covered by dataset tiles, in um^2")
-        parser.add_argument('--max_num_subboxes', type=int, default=20, help="If max total tiled area > 0, this parameter chooses the number of boxes used to sample the tiles. More boxes means smaller boxes")
+        parser.add_argument('--max_total_tiled_area', type=int, default=1e7, help="Upper limit to area covered by dataset tiles, in um^2")
+        parser.add_argument('--max_num_subboxes', type=int, default=30, help="If max total tiled area > 0, this parameter chooses the number of boxes used to sample the tiles. More boxes means smaller boxes")
         return parser
 
     def name(self):
         return "WSIDataset"
 
-    def setup(self, good_files=tuple()):
+    def setup(self):
         # Reset if setup is done again
         self.slides = []
         self.tiles_per_slide = []
@@ -64,7 +64,8 @@ class WSIDataset(BaseDataset):
         paths = list(root_path.glob('./*.svs')) + list(root_path.glob('./*/*.svs')) + \
                 list(root_path.glob('./*.ndpi')) + list(root_path.glob('./*/*.ndpi'))  # avoid expensive recursive search
         files = sorted((str(path) for path in paths), key=lambda file: os.path.basename(file))  # sorted by basename
-        good_files = sorted(good_files, reverse=True)  # reversed, as last element is checked and then popped from the list
+        # good files are in reversed order, as last element is checked and then popped from the list
+        good_files = sorted(self.good_files, reverse=True) if self.good_files else ()
         # read quality_control results if available (last produced by date):
         qc_results = root_path.glob('data/quality_control/qc_*')
         qc_result = sorted(qc_results,
@@ -92,13 +93,14 @@ class WSIDataset(BaseDataset):
             slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold, qc_store)
             # restrict location by tumour annotation area only
             try:  # try to read annotation i
-                with open(Path(self.opt.data_dir) / 'data' / annotation_dir / (self.opt.slide_id + '.json'), 'r') \
-                        as annotation_file:
+                with open(Path(self.opt.data_dir) / 'data' / self.opt.area_annotation_dir /
+                          (self.opt.slide_id + '.json'), 'r') as annotation_file:
                     annotation_obj = json.load(annotation_file)
                     annotation_obj['slide_id'] = self.opt.slide_id
                     annotation_obj['project_name'] = 'tumour_area'
                     annotation_obj['layer_names'] = ['Tumour area']
-                    contours, layer_name = AnnotationBuilder.from_object(annotation_obj).get_layer_points('Tumour area', contour_format=True)
+                    contours, layer_name = AnnotationBuilder.from_object(annotation_obj).\
+                        get_layer_points('Tumour area', contour_format=True)
                     slide.filter_locations(contours, delimiters_scaling=self.opt.area_annotation_scale)
             except FileNotFoundError:
                 warnings.warn(f"Could not load area annotation for {Path(slide.file_name).name}, returning tiles from whole image")

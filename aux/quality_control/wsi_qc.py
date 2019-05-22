@@ -1,5 +1,6 @@
 import sys
 import os
+import argparse
 sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
                  '/well/rittscher/users/achatrian/cancer_phenotype'])
 from itertools import chain
@@ -29,14 +30,21 @@ class SlidePreprocessor(mp.Process):
                 break
             slide = WSIReader(self.opt, file)
             print(f"[{self.process_id}] processing {os.path.basename(file)}")
-            slide.find_tissue_locations()
+            slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold)
             if self.export_tiles:
                 slide.export_tissue_tiles()
             self.queue.task_done()
 
 
 def main():
-    opt = WSIReader.get_reader_options()
+    opt = WSIReader.get_reader_options(include_path=False)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=Path, required=True)
+    parser.add_argument('--workers', type=int, default=4)
+    opt2, extra = parser.parse_known_args()
+    setattr(opt, 'data_dir', opt2.data_dir)
+    setattr(opt, 'workers',  opt2.workers)
+    setattr(opt, 'overwrite_qc', True)
     root_path = Path(opt.data_dir)
     paths = chain(root_path.glob('**/*.svs'), root_path.glob('**/*.ndpi'))
     files = sorted((str(path) for path in paths), key=lambda file: os.path.basename(file))  # sorted by basename

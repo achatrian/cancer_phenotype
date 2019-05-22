@@ -20,17 +20,23 @@ from base.utils import utils, debug
 class WSIReader(OpenSlide):
 
     @staticmethod
-    def get_reader_options():
-        parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]")
-        parser.add_argument('slide_path', default='')
+    def get_reader_options(include_path=True, include_thresholds=True):
+        parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]" if include_path else None)
+        if include_path:
+            parser.add_argument('slide_path', type=str, default='')
         parser.add_argument('--qc_mpp', default=4.0, type=float, help="MPP value to perform quality control on slide")
-        parser.add_argument('--mpp', default=0.25, type=float, help="MPP value to read images from slide")
+        parser.add_argument('--mpp', default=0.50, type=float, help="MPP value to read images from slide")
         parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
         parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
         parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
         parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
         parser.add_argument('--patch_size', type=int, default=1024, help="Pixel size of patches (at desired resolution)")
         parser.add_argument('--verbose', action='store_true', help="Print more information")
+        if include_thresholds:
+            parser.add_argument('--tissue_threshold', type=float, default=0.4,
+                                help="Threshold of tissue filling in tile for it to be considered a tissue tile")
+            parser.add_argument('--saturation_threshold', type=int, default=25,
+                                help="Saturation difference threshold of tile for it to be considered a tissue tile")
         opt, unknown = parser.parse_known_args()
         return opt
 
@@ -71,7 +77,7 @@ class WSIReader(OpenSlide):
             self.qc_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
         else:
             warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
-            self.find_tissue_locations = lambda: print("No mpp or qc_mpp options - cannot perform quality control")
+            self.find_tissue_locations = lambda tt, st: print("No mpp or qc_mpp options - cannot perform quality control")
         self.tissue_threshold = None
         self.tissue_percentage = None
         self.saturation_threshold = None
@@ -189,7 +195,7 @@ class WSIReader(OpenSlide):
     def __getitem__(self, item):
         return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
 
-    def filter_locations(self, delimiters, delimiters_scaling=None, loc_tol=0.5):
+    def filter_locations(self, delimiters, delimiters_scaling=None, loc_tol=0.2):
         r"""
         Select subset of locations based on a spatial delimiter
         :param delimiters: seq of bounding boxes = (x, y, w, h), ... or seq of contours [[[0, 0], [0, 1]]], ...
@@ -311,7 +317,7 @@ class WSIReader(OpenSlide):
 if __name__ == '__main__':
     opt = WSIReader.get_reader_options()
     wsi_reader = WSIReader(opt, opt.slide_path)
-    wsi_reader.find_tissue_locations()
+    wsi_reader.find_tissue_locations(opt.tissue_threshold, opt.saturation_threshold)
     wsi_reader.export_tissue_tiles('tiles_temp')
 
 

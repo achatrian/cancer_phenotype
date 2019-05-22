@@ -62,7 +62,7 @@ class BaseDeployer(mp.Process):
             workers.append(worker)
 
         # optional gather-worker to process outputs of workers
-        gatherer = mp.Process(target=self.gather, args=(self, output_queue, sync), name=self.worker_name + 'Gatherer', daemon=False)
+        gatherer = mp.Process(target=self.gather, args=(self, output_queue, sync), name=self.worker_name + 'Gatherer', daemon=True)
         workers.append(gatherer)
         return workers
 

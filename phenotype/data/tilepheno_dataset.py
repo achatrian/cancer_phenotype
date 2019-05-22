@@ -251,7 +251,7 @@ class TilePhenoDataset(BaseDataset):
                 image = self.aug_seq.augment_image(image)
         # scale between 0 and 1
         image = image / 255.0
-        # normalised image between -1 and 1
+        # normalise image between -1 and 1
         image = (image - 0.5) / 0.5
         # convert to torch tensor
         assert (image.shape[-1] == 3)
