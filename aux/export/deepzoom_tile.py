@@ -98,6 +98,10 @@ class DeepZoomImageTiler(object):
     def run(self):
         self._write_tiles()
         self._write_dzi()
+        # Saves the property as a .json
+        properties = dict(self._dz._osr.properties)
+        properties['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
+        json.dump(properties, open(os.path.join("{}_files".format(self._basename), "properties.json"), 'w'))
 
     def _write_tiles(self):
         for level in range(self._dz.level_count):

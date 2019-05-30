@@ -2,6 +2,7 @@ from pathlib import Path
 from functools import partial
 from typing import Union
 from numbers import Real
+import warnings
 import numpy as np
 from scipy.spatial import distance
 import cv2
@@ -90,7 +91,8 @@ def find_overlap(slide_contours: dict, different_labels=True):
     return overlap_struct, contours, contour_bbs, labels
 
 
-def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_origin=None):
+def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_origin=None,
+                    fit_to_size='contour'):
     r"""Convert a contour to the corresponding max - mask is
     :param contour:
     :param value:
@@ -98,9 +100,15 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_or
     :param pad: amount
     :param mask: mask onto which to paint the new contour
     :param mask_origin: position of mask in slide coordinates
+    :param fit_to_size: whether to crop contour to mask if mask is too small or mask to contour if contour is too big
     :return:
     """
     assert type(contour) is np.ndarray and contour.size > 0, "Numpy array expected for contour"
+    assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
+    assert shape or mask is not None or (len(shape) == 3 and shape[2] == 3), "If mask is created from shape, this must be of the form (H, W, 3)"
+    if mask is not None and mask.ndim == 2:
+        warnings.warn("Contour drawing works only on 3 channel mask, expanding color dim ...")
+        mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
     contour = contour.squeeze()
     if isinstance(mask, np.ndarray) and mask_origin:
         assert len(mask_origin) == 2, "Must be x and y coordinate of mask offset"
@@ -108,22 +116,26 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_or
     else:
         contour = contour - contour.min(0)  # remove slide offset (don't modify internal reference)
     # below: dimensions of contour to image coords (+1's are to match bounding box dims from cv2.boundingRect)
-    contour_dims = (contour[:, 1].max() + 1, contour[:, 0].max() + 1)
+    contour_dims = (contour[:, 1].max() + 1, contour[:, 0].max() + 1)  # xy to rc coordinates
     shape = mask.shape if not shape and isinstance(mask, np.ndarray) else contour_dims
     if mask is None:
         mask = np.zeros(shape)
-    cut_points = []  # find all the indices of points that would fall outside of mask
-    if shape[0] < contour_dims[0]:
-        cut_points.extend(np.where(contour[:, 0].squeeze() > shape[0])[0])
-    if shape[1] < contour_dims[1]:
-        cut_points.extend(np.where(contour[:, 1].squeeze() > shape[1])[0])
-    points_to_keep = sorted(set(range(contour.shape[0])) - set(cut_points))
-    if len(points_to_keep) == 0:
-        raise ValueError(f"Contour and mask do not overlap (contour origin {contour.min(0)}, mask shape {shape}, mask origin {mask_origin})")
-    contour = contour[points_to_keep, :]
-    mask = np.pad(mask, np.array(mask.shape) - np.array(shape), 'constant')
-    assert mask.shape == shape
-    cv2.drawContours(mask, [contour], -1, value, thickness=-1)  # thickness=-1 fills the entire area inside
+    y_diff, x_diff = contour_dims[0] - shape[0], contour_dims[1] - shape[1]
+    if fit_to_size == 'contour':
+        cut_points = []  # find all the indices of points that would fall outside of mask
+        if y_diff > 0:
+            cut_points.extend(np.where(contour[:, 0].squeeze() > shape[0])[0])
+        if x_diff > 0:
+            cut_points.extend(np.where(contour[:, 1].squeeze() > shape[1])[0])
+        points_to_keep = sorted(set(range(contour.shape[0])) - set(cut_points))
+        if len(points_to_keep) == 0:
+            raise ValueError(f"Contour and mask do not overlap (contour origin {contour.min(0)}, mask shape {shape}, mask origin {mask_origin})")
+        contour = contour[points_to_keep, :]
+    elif fit_to_size == 'mask':
+        pad_width = ((0, y_diff if y_diff > 0 else 0), (0, x_diff if x_diff > 0 else 0), (0, 0))
+        mask = np.pad(mask, pad_width, 'constant')
+    assert mask.shape[0] >= contour[:, 1].max() + 1 and mask.shape[1] >= contour[:, 0].max() + 1
+    cv2.drawContours(mask, [contour], -1, (value, 0, 0), thickness=-1)  # thickness=-1 fills the entire area inside
     return mask
 
 
@@ -285,7 +297,7 @@ class ContourProcessor:
         return features, self.description, data
 
     def get_features(self):
-        r"""Process all the contours and return the features"""
+        r"""Extract features from all contours"""
         f, d, centroids = [], [], []
         with tqdm.tqdm(total=len(self.contours)) as pbar:
             last_index = 0

@@ -1,7 +1,7 @@
 import os
 import glob
 from optparse import OptionParser
-from deepzoom_tile import DeepZoomStaticTiler
+from deepzoom_tile import DeepZoomStaticTiler  # python 2 import
 import signal
 
 r"Creates deepzoom images for all the WSIs in a folder"

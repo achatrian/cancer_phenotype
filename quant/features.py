@@ -187,10 +187,16 @@ orb_extractor = feature.ORB(n_keypoints=NUM_KEYPOINTS)
 
 @MakeFeature(list(f'orb_d{i}:{j}' for i in range(NUM_KEYPOINTS) for j in range(256)))
 def orb_descriptor(gray_image):
-    orb_extractor.detect_and_extract(gray_image)
-    descriptors = orb_extractor.descriptors.astype(np.uint8)
-    if descriptors.shape[0] < NUM_KEYPOINTS or descriptors.shape[1] < 256:
-        descriptors = np.pad(descriptors,
-                             ((0, NUM_KEYPOINTS - descriptors.shape[0]), (0, 256 - descriptors.shape[1])),
-                             'constant')
+    try:
+        orb_extractor.detect_and_extract(gray_image)
+        descriptors = orb_extractor.descriptors.astype(np.uint8)
+        if descriptors.shape[0] < NUM_KEYPOINTS or descriptors.shape[1] < 256:
+            descriptors = np.pad(descriptors,
+                                 ((0, NUM_KEYPOINTS - descriptors.shape[0]), (0, 256 - descriptors.shape[1])),
+                                 'constant')
+    except RuntimeError as err:
+        if any(arg.startswith('ORB found no features') for arg in err.args):
+            descriptors = np.zeros((NUM_KEYPOINTS, 256))
+        else:
+            raise
     return descriptors.astype(np.uint8).flatten()

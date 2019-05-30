@@ -887,43 +887,12 @@ def get_positive_negative_saliency(gradient):
     return pos_saliency, neg_saliency
 
 
-# overlay two color grids, one of images and one of saliency maps
-c = ["white", "green", "yellow", 'red', 'red']
-v = [0,  0.2, 0.5, 0.8, 1.0]
-l = list(zip(v, c))
-threshold = 0.2
-cmap=LinearSegmentedColormap.from_list('rg', l, N=256)
-
-
-def overlay_grids(example_grid, gradient_grid):
-    r"""Korsuk's func to overlay images and gradient grids"""
-    gradient_grid = gradient_grid[:, :, 0]
-
-    cm_hot = cmap
-    im = np.array(gradient_grid)
-    im = cm_hot(im)
-    im = np.uint8(im * 255)
-    im = im[:, :, 0:3]
-
-    R = np.float16(example_grid[:, :, 0])
-    G = np.float16(example_grid[:, :, 1])
-    B = np.float16(example_grid[:, :, 2])
-
-    imR = np.float16(im[:, :, 0])
-    example_grid = np.float16(im[:, :, 1])
-    imB = np.float16(im[:, :, 2])
-
-    mask = gradient_grid / 255 > threshold
-    alpha = 0.4
-
-    R[mask] = R[mask] * (1 - alpha) + imR[mask] * alpha
-    G[mask] = G[mask] * (1 - alpha) + example_grid[mask] * alpha
-    B[mask] = B[mask] * (1 - alpha) + imB[mask] * alpha
-
-    R = np.uint8(R)
-    G = np.uint8(G)
-    B = np.uint8(B)
-
-    overlaid_grid = cv2.merge((R, G, B))
-    return overlaid_grid
+def overlay_grids(example_grid, gradient_grid, threshold=0.2):
+    r"""overlay images and gradient grids by alpha blending"""
+    # https://docs.opencv.org/trunk/d0/d86/tutorial_py_image_arithmetics.html
+    # overlay two color grids, one of images and one of saliency maps
+    gradient_grid[gradient_grid < threshold] = 0.0
+    gradient_grid = gradient_grid * 255.0  # gradient grid goes from 0 to 1
+    example_grid = (example_grid + 1) / 2.0 * 255.0  # example grid goes from -1 to 1
+    return cv2.addWeighted(example_grid, 0.5, gradient_grid, 0.5, 0)
 
