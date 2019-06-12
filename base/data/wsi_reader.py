@@ -20,7 +20,7 @@ from base.utils import utils, debug
 class WSIReader(OpenSlide):
 
     @staticmethod
-    def get_reader_options(include_path=True, include_thresholds=True):
+    def get_reader_options(include_path=True, include_thresholds=True, args=()):
         parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]" if include_path else None)
         if include_path:
             parser.add_argument('slide_path', type=str, default='')
@@ -37,7 +37,10 @@ class WSIReader(OpenSlide):
                                 help="Threshold of tissue filling in tile for it to be considered a tissue tile")
             parser.add_argument('--saturation_threshold', type=int, default=25,
                                 help="Saturation difference threshold of tile for it to be considered a tissue tile")
-        opt, unknown = parser.parse_known_args()
+        if args:
+            opt, unknown = parser.parse_known_args(args)
+        else:
+            opt, unknown = parser.parse_known_args()
         return opt
 
     def __init__(self, opt, file_name):

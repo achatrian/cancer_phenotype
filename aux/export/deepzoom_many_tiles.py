@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import glob
 from optparse import OptionParser
 from deepzoom_tile import DeepZoomStaticTiler  # python 2 import
@@ -30,6 +31,7 @@ if __name__ == '__main__':
     parser.add_option('-s', '--size', metavar='PIXELS', dest='tile_size',
                 type='int', default=254,
                 help='tile size [254]')
+    parser.add_option('--overwrite', action='store_true')
 
     (opts, args) = parser.parse_args()
     try:
@@ -37,8 +39,18 @@ if __name__ == '__main__':
     except IndexError:
         parser.error('Missing data folder argument')
 
-    slide_paths = list(glob.glob(os.path.join(slide_dir_path, '**/*.svs'), recursive=True))
-    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '**/*.ndpi'), recursive=True))
+    slide_paths = list(glob.glob(os.path.join(slide_dir_path, '*.svs')))
+    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*/*.svs')))
+    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*.ndpi')))
+    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*/*.ndpi')))
+    if not opts.overwrite:
+        remove_counter = 0
+        for path in slide_paths.copy():
+            path = Path(path)
+            if (path.parent/'data'/'dzi'/path.with_suffix('.dzi').name).is_file():
+                slide_paths.remove(str(path))
+                remove_counter += 1
+        print("Skipping {} previously converted images (use --overwrite to avoid this)...".format(remove_counter))
 
     class TimeoutException(Exception):  # Custom exception class
         pass
@@ -61,7 +73,7 @@ if __name__ == '__main__':
                                 opts.workers, opts.with_viewer).run()
             # Whatever your function that might hang
         except TimeoutException:
-            continue  # continue the for loop if function A takes more than 5 second
+            continue  # continue the for loop if function A takes more than timeout
         else:
             # Reset the alarm
             signal.alarm(0)

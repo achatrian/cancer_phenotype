@@ -18,6 +18,8 @@ if __name__ == '__main__':
     target_file = Path('masks')/('mask_' + Path(source_file).name)
     original_dzi = TileGenerator(str(dzi_dir/source_file))  # NB target is used as source !!
     mask_dzi = TileGenerator(str(dzi_dir/target_file))  # NB target is used as source !!
+    original_dzi.properties['mpp'], mask_dzi.properties['mpp'] = (float(original_dzi.properties['mpp']),
+                                                                  float(mask_dzi.properties['mpp']))
     original_level = int(np.argmin(np.absolute(np.power(2, np.arange(0, 6)) *
                                                original_dzi.properties['mpp'] - opt.mpp)))
     converted_level = int(np.argmin(np.absolute(np.power(2, np.arange(0, 6)) *
@@ -37,11 +39,14 @@ if __name__ == '__main__':
     area_contour = max((contour for contour in contours), key=cv2.contourArea)
     # read downsampled region corresponding to tumour area annotation and extract contours
     x, y, w, h = cv2.boundingRect(area_contour)
+    # if base layer is not copied from mask, need to read at half the origin as mask dimensions will be halved
+    x_read = x if mask_dzi.width == original_dzi.width else int(x / rescale_factor)
+    y_read = y if mask_dzi.height == original_dzi.height else int(y / rescale_factor)
     w_read, h_read = int(w / rescale_factor), int(h / rescale_factor)
-    mask = mask_dzi.read_region((x, y), converted_level, (w_read, h_read))
+    mask = mask_dzi.read_region((x_read, y_read), converted_level, (w_read, h_read))
     converter = MaskConverter(dist_threshold=opt.distance_threshold)
     print("Extracting contours from mask ...")
-    contours, labels, boxes = converter.mask_to_contour(mask, x, y, rescale_factor=None)  # don't rescale map inside
+    contours, labels, boxes = converter.mask_to_contour(mask, x_read, y_read, rescale_factor=None)  # don't rescale map inside
     # rescale contours
     if rescale_factor != 1.0:
         print(f"Rescaling contours by {rescale_factor:.2f}")

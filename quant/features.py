@@ -1,5 +1,7 @@
 r"""Feature computations from contours, masks, and images"""
 from inspect import getfullargspec
+import time
+import warnings
 import numpy as np
 from skimage import measure
 from skimage import color
@@ -12,17 +14,18 @@ from base.utils import debug
 class Feature:
     r"""Feature callable
     """
-    __slots__ = ['function', 'type_', 'returns', 'name']
+    __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls']
     # how-to-python: docstring and __slots__ defined this way are class attributes
 
     def __init__(self, function, returns):
-        # TODO test
         self.function = function
         type_ = set(getfullargspec(function).args)
         assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'image'} or type_ >= {'gray_image'}
         self.type_ = type_
         self.returns = returns
         self.name = function.__name__
+        self.call_time = 0.0
+        self.n_calls = 0
 
     @staticmethod
     def is_contour(arg):  # specifies contour format
@@ -50,7 +53,9 @@ class Feature:
             raise ValueError(f"Arguments does not contain image-type input (f: {self.name})")
         if 'gray_image' in self.type_ and not self.is_gray_image(kwargs['gray_image']):
             raise ValueError(f"Arguments does not contain grayscale image-type input (f: {self.name})")
+        start_time = time.time()
         output = self.function(**kwargs)
+        self.call_time = (time.time() - start_time - self.call_time) / (self.n_calls + 1) + self.call_time
         if len(output) != len(self.returns):
             raise ValueError(f"Feature description has different length from feature output ({len(self.returns)} ≠ {len(output)})")
         return output

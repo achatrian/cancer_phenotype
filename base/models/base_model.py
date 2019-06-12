@@ -150,6 +150,10 @@ class BaseModel:
             self.meters[name].update(value, n_samples)
             setattr(self, prefix + name, self.meters[name].avg)
 
+    def u_(self, name, value, n_samples=None):
+        r"""Shortcut to update measures"""
+        self.update_measure_value(name, value, n_samples=n_samples)
+
     @contextmanager
     def start_validation(self):
         """

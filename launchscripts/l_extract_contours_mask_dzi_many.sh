@@ -24,7 +24,7 @@ DATE=`date`
 JOBID=$(tr ' ' '_' <<< ${DATE})  # replace spaces with underscores
 JOBID=$(tr ':' '_' <<< ${JOBID})  # replace columns with underscores (or it breaks)
 JOBID="${JOBID}_${JOB_ID}"  # in case multiple jobs are run in the same second, add counter id to differentiate between them
-LOGDIR=/well/rittscher/users/achatrian/jobs_logs/process_dzi_many
+LOGDIR=/well/rittscher/users/achatrian/jobs_logs/extract_contours_mask_dzi_many
 cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts
 
 if [[ -z $2 ]]
@@ -65,6 +65,6 @@ for SLIDEPATH in "${FILES[@]}"; do
         done  # NB: JOB IS LAUNCHED ONLY OR LAST IMAGE IN SUBDIR
     fi
     SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
-    qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_process_dzi.sh ${SLIDECOMMANDS}
+    qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -P rittscher.prjc -q long.qc -pe shmem 2 ./l_extract_contours_mask_dzi.sh ${SLIDECOMMANDS}
 done
-echo "Processing ${COUNTER} dzi's ..."
+echo "Extracting annotation from ${COUNTER} dzi's ..."

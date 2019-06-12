@@ -7,7 +7,8 @@ from numbers import Integral
 from collections import OrderedDict, defaultdict
 from itertools import product
 
-__author__ = "andreachatrian"
+
+# FIXME kinda useless
 
 
 class TableReader:

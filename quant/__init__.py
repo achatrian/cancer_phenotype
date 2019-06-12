@@ -12,6 +12,7 @@ import tqdm
 from base.utils.annotation_builder import AnnotationBuilder
 from base.utils import utils
 from base.data.wsi_reader import WSIReader
+from dzi_io.dzi_io import DZI_IO
 NO_PYTHON = False  # switches from numpy-only to opencv + skimage
 
 r"""Functions to extract and order image and annotation data, for computing features and clustering"""
@@ -105,10 +106,6 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_or
     """
     assert type(contour) is np.ndarray and contour.size > 0, "Numpy array expected for contour"
     assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
-    assert shape or mask is not None or (len(shape) == 3 and shape[2] == 3), "If mask is created from shape, this must be of the form (H, W, 3)"
-    if mask is not None and mask.ndim == 2:
-        warnings.warn("Contour drawing works only on 3 channel mask, expanding color dim ...")
-        mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
     contour = contour.squeeze()
     if isinstance(mask, np.ndarray) and mask_origin:
         assert len(mask_origin) == 2, "Must be x and y coordinate of mask offset"
@@ -116,7 +113,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_or
     else:
         contour = contour - contour.min(0)  # remove slide offset (don't modify internal reference)
     # below: dimensions of contour to image coords (+1's are to match bounding box dims from cv2.boundingRect)
-    contour_dims = (contour[:, 1].max() + 1, contour[:, 0].max() + 1)  # xy to rc coordinates
+    contour_dims = (contour[:, 1].max() + 1, contour[:, 0].max() + 1)  # xy to row-columns (rc) coordinates
     shape = mask.shape if not shape and isinstance(mask, np.ndarray) else contour_dims
     if mask is None:
         mask = np.zeros(shape)
@@ -124,18 +121,26 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=(), mask=None, mask_or
     if fit_to_size == 'contour':
         cut_points = []  # find all the indices of points that would fall outside of mask
         if y_diff > 0:
-            cut_points.extend(np.where(contour[:, 0].squeeze() > shape[0])[0])
+            cut_points.extend(np.where(contour[:, 1].squeeze() > shape[0])[0])  # y to row
         if x_diff > 0:
-            cut_points.extend(np.where(contour[:, 1].squeeze() > shape[1])[0])
+            cut_points.extend(np.where(contour[:, 0].squeeze() > shape[1])[0])  # x to column
         points_to_keep = sorted(set(range(contour.shape[0])) - set(cut_points))
         if len(points_to_keep) == 0:
             raise ValueError(f"Contour and mask do not overlap (contour origin {contour.min(0)}, mask shape {shape}, mask origin {mask_origin})")
         contour = contour[points_to_keep, :]
+        contour_dims = (contour[:, 1].max() + 1, contour[:, 0].max() + 1)  # xy to rc coordinates
     elif fit_to_size == 'mask':
         pad_width = ((0, y_diff if y_diff > 0 else 0), (0, x_diff if x_diff > 0 else 0), (0, 0))
         mask = np.pad(mask, pad_width, 'constant')
-    assert mask.shape[0] >= contour[:, 1].max() + 1 and mask.shape[1] >= contour[:, 0].max() + 1
-    cv2.drawContours(mask, [contour], -1, (value, 0, 0), thickness=-1)  # thickness=-1 fills the entire area inside
+    elif fit_to_size:
+        raise ValueError(f"Invalid fit_to_size option: {fit_to_size}")
+    assert mask.shape[0] >= contour_dims[0] - 1 and mask.shape[1] >= contour_dims[1] - 1, "Shifted contour should fit in mask"
+    cv2.drawContours(mask, [contour], -1, value, thickness=-1)  # thickness=-1 fills the entire area inside
+    # assert np.unique(mask).size > 1, "Cannot return empty (0) mask after contour drawing"
+    if np.unique(mask).size <= 1:
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")  # print this warning each time it occurs
+            warnings.warn("Returning empty mask after drawing ...")
     return mask
 
 
@@ -198,9 +203,11 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         yield mask, i
 
 
-def get_image_for_contour(contour: np.array, reader: WSIReader):
+def get_image_for_contour(contour: np.array, reader: Union[WSIReader, DZI_IO]):
     r"""
     Extract image from slide corresponding to region covered by contour
+    :param contour: area of interest
+    :param reader: object implementing .read_region to extract the desired image
     """
     x, y, w, h = cv2.boundingRect(contour)
     # level below: annotation coordinates should refer to lowest level
@@ -215,7 +222,6 @@ class ContourProcessor:
     :param reader: WSIReader instance to read images corresponding to contours
     :param features: list of Features to apply to the contours / images / masks"""
     def __init__(self, contour_lib, overlap_struct, bounding_boxes, label_values, reader, features=()):
-        # TODO test
         if isinstance(contour_lib, dict):
             contours, labels = [], []
             for layer_name, layer_contours in contour_lib.items():
@@ -240,6 +246,7 @@ class ContourProcessor:
         self.description = description  # what features does the processor output
         self.skip_label = None
         self.indices = set()
+        self.discarded = []
 
     def __iter__(self, skip_label='lumen'):
         if skip_label:
@@ -254,10 +261,14 @@ class ContourProcessor:
     def __next__(self):
         self.i += 1
         mask, index = next(self.gen)  # will raise stop iteration when no more data is available
-        self.indices.add(index)
         contour = self.contours[index]
-        label = self.labels[index]
         image = get_image_for_contour(contour, self.reader)
+        label = self.labels[index]
+        bounding_box = self.bounding_boxes[index]
+        if not self.reader.is_HnE(image, small_obj_size_factor=1/6):
+            self.discarded.append(index)
+            return None, None, None
+        self.indices.add(index)
         gray_image = color.rgb2gray(image.astype(np.float)).astype(np.uint8)
         # TODO compute features on resized image too ?
         # scale between 0 and 1
@@ -287,38 +298,35 @@ class ContourProcessor:
                     round(contour_moments['m01'] / contour_moments['m00']))
         data = {
             'index': index,
-            'contour': contour,
-            'mask': mask,
-            'image': image,
+            'contour': contour.tolist(),  # cannot serialize np.ndarray
             'label': label,
             'centroid': centroid,
-            'bounding_rect': self.bounding_boxes[index]
+            'bounding_rect': tuple(self.bounding_boxes[index])
         }
         return features, self.description, data
 
     def get_features(self):
-        r"""Extract features from all contours"""
-        f, d, centroids = [], [], []
+        r"""Extract features from all contours.
+        Also returns small data items about each gland and distance between glands"""
+        f, data, bounding_rects, centroids = [], [], [], []
         with tqdm.tqdm(total=len(self.contours)) as pbar:
             last_index = 0
-            for feats, self.description, data in self:
+            for feats, self.description, datum in self:
+                if feats is None:
+                    continue
                 f.append(feats)
-                d.append({
-                    'index': data['index'],
-                    'label': data['label'],
-                    'centroid': data['centroid'],
-                    'bounding_rect': data['bounding_rect']
-                })  # avoid returning the mask, image and contour data
-                centroids.append(data['centroid'])
-                pbar.update(data['index'] - last_index)
-                last_index = data['index']
-        df = DataFrame(np.array(f), index=centroids, columns=self.description)
+                data.append(datum)
+                bounding_rects.append(datum['bounding_rect'])
+                centroids.append(datum['centroid'])
+                pbar.update(datum['index'] - last_index)
+                last_index = datum['index']
+        f = np.array(f)
+        assert f.size > 0, "Feature array must not be empty."
+        df = DataFrame(np.array(f),
+                       index=tuple('{}_{}_{}_{}'.format(*bb) for bb in bounding_rects),
+                       columns=self.description)
         centroids = np.array(centroids)
         dist = distance.cdist(centroids, centroids, 'euclidean')
-        return df, d, dist
+        return df, data, dist
 
 # if too slow, could get images for contours using multiprocessing dataloader-style
-
-
-
-

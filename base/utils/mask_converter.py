@@ -1,4 +1,4 @@
-"""
+r"""
 Class for translating binary masks into vertice mappings.
 Supports:
 AIDA format
@@ -11,8 +11,7 @@ from scipy.stats import mode
 from scipy.ndimage import morphology
 import skimage.morphology
 import cv2
-from base.utils import utils  # TODO move tensor2img to object in order to remove this dependency
-from base.utils import debug
+from base.utils import utils
 
 
 class MaskConverter:
@@ -342,12 +341,15 @@ class MaskConverter:
                 y0 <= y_h1 <= y_h0)
 
     @staticmethod
-    def remove_ambiguity(mask, dist_threshold=0.1, small_object_size=1024*0.4, final_closing_size=20):
+    def remove_ambiguity(mask, dist_threshold=0.1, small_object_size=1024*0.4, final_closing_size=20,
+                         final_dilation_size=5):
         """
         Morphologically removes noise in the image and returns solid contours
         :param mask: HxWx3 image with identical channels, or HxW image
         :param dist_threshold: multiplied by mode of peaks in distance transform -- e,g, 0.1 is 1/10 of the average peak
         :param small_object_size: objects smaller than this threshold will be removed from mask
+        :param final_closing_size: size of kernel used for closing of holes in large glands
+        :param final_dilate: size of kernel used for final dilation of mask values
         :return:
         """
         mask = copy.deepcopy(mask)
@@ -391,6 +393,7 @@ class MaskConverter:
         unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=small_object_size)
         # correct troughs left at gland boundaries in larger glands using closing
         unambiguous = skimage.morphology.binary_closing(unambiguous, np.ones((final_closing_size,)*2))
+        unambiguous = skimage.morphology.binary_dilation(unambiguous, np.ones(fo))
         return unambiguous.astype(np.uint8)
 
     def value2label(self, value):

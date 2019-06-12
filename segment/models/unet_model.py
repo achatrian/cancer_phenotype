@@ -9,7 +9,7 @@ from .networks import UNet
 class UNetModel(BaseModel):
 
     def __init__(self, opt):
-        super(UNetModel, self).__init__(opt)
+        super().__init__(opt)
         self.opt = opt
         self.module_names = ['']
         self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size, opt.max_multiple,
@@ -17,7 +17,6 @@ class UNetModel(BaseModel):
         self.loss_names = ['ce', 'reg'] if self.opt.regularizer_coeff else ['ce']
         self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.reg = network_utils.RegularizationLoss()
-        self.loss_reg, self.loss_ce = None, None
         self.metric_names = ['acc', 'dice'] + \
                             ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             ['dice{}'.format(c) for c in range(self.opt.num_class)]
@@ -30,10 +29,8 @@ class UNetModel(BaseModel):
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] != 'bias'],
                  'lr': opt.learning_rate, 'weight_decay': opt.weight_decay}  # filter parameters have weight decay
             ])]
-        self.input = None
-        self.target = None
-        self.output = None
-        self.image_paths = None
+        self.input, self.target, self.output, self.image_paths = (None,)*4
+
 
     # modify parser to add command line options,
     # and also change the default values if needed
@@ -61,9 +58,9 @@ class UNetModel(BaseModel):
             raise ValueError("Input not set for {}".format(self.name()))
         self.output = self.net(self.input)
         if self.target is not None:
-            self.update_measure_value('ce', self.ce(self.output, self.target))
+            self.u_('ce', self.ce(self.output, self.target))
             if self.opt.regularizer_coeff:
-                self.update_measure_value('reg', self.reg(self.net) * self.opt.regularizer_coeff)
+                self.u_('reg', self.reg(self.net) * self.opt.regularizer_coeff)
         elif self.opt.is_train:
             warnings.warn("Empty target assigned to model", UserWarning)
 
@@ -107,8 +104,8 @@ class UNetModel(BaseModel):
             class_dice.append(round(float(network_utils.dice_coeff(pred, gt)), 2))
         acc = float(np.mean(class_acc))
         dice = float(np.mean(class_dice))
-        self.update_measure_value('acc', acc)
-        self.update_measure_value('dice', dice)
+        self.u_('acc', acc)
+        self.u_('dice', dice)
         for c in range(len(class_acc)):
-            self.update_measure_value('metric_acc{}'.format(c), class_acc[c])
-            self.update_measure_value('metric_dice{}'.format(c), class_dice[c])
+            self.u_('metric_acc{}'.format(c), class_acc[c])
+            self.u_('metric_dice{}'.format(c), class_dice[c])

@@ -33,10 +33,10 @@ import os
 import re
 import shutil
 import sys
-from time import time, sleep
 from unicodedata import normalize
 
 VIEWER_SLIDE_NAME = 'slide'
+TIMEOUT = 120
 
 
 class TileWorker(Process):
@@ -60,9 +60,9 @@ class TileWorker(Process):
         dz = self._get_dz()
         while True:
             try:
-                data = self._queue.get(timeout=120)
+                data = self._queue.get(timeout=TIMEOUT)
             except Empty:
-                self._queue.task_done()
+                print("Empty queue, breaking out ...")
                 break
             if data is None:
                 self._queue.task_done()
@@ -97,11 +97,14 @@ class DeepZoomImageTiler(object):
 
     def run(self):
         self._write_tiles()
+        print("Finished writing tiles")
         self._write_dzi()
+        print("Dzi file was written")
         # Saves the property as a .json
         properties = dict(self._dz._osr.properties)
         properties['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
         json.dump(properties, open(os.path.join("{}_files".format(self._basename), "properties.json"), 'w'))
+        print("Properties json was written")
 
     def _write_tiles(self):
         for level in range(self._dz.level_count):
@@ -116,9 +119,9 @@ class DeepZoomImageTiler(object):
                     if not os.path.exists(tilename):
                         try:
                             self._queue.put((self._associated, level, (col, row),
-                                    tilename), timeout=120)
+                                    tilename), timeout=TIMEOUT)
                         except Full:
-                            self._queue.task_done()
+                            print("Full queue, breaking out ...")
                             break
                     self._tile_done()
 
