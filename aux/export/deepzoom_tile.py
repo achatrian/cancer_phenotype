@@ -18,7 +18,7 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-"""An example program to generate a Deep Zoom directory tree from a slide.
+"""An example program to encode a Deep Zoom directory tree from a slide.
 Requires Pillow version <3.0 e.g. 2.1"""
 
 from __future__ import print_function
@@ -275,7 +275,7 @@ if __name__ == '__main__':
                 help='JPEG compression quality [90]')
     parser.add_option('-r', '--viewer', dest='with_viewer',
                 action='store_true',
-                help='generate directory tree with HTML viewer')
+                help='encode directory tree with HTML viewer')
     parser.add_option('-s', '--size', metavar='PIXELS', dest='tile_size',
                 type='int', default=254,
                 help='tile size [254]')

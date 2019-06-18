@@ -21,7 +21,7 @@ else
 fi
 
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
-export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/generate:${PYTHONPATH}"
+export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype/base/utils:${PYTHONPATH}"
 python /well/rittscher/users/achatrian/cancer_phenotype/base/utils/annotation_builder.py --annotation_path=$1 \
 --max_iter=$MAX_ITER --append_merged_suffix

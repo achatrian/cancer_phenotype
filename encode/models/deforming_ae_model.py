@@ -5,7 +5,7 @@ from base.models.base_model import BaseModel
 from .networks import Encoders, Dense_Encoders, BiasReduceLoss, TotalVaryLoss, SelfSmoothLoss2
 from .networks import DecodersIntegralWarper2 as Decoders
 from .networks import Dense_DecodersIntegralWarper2 as Dense_Decoders
-from generate.utils import dae_utils as utils
+from encode.utils import dae_utils as utils
 
 
 class DeformingAEModel(BaseModel):

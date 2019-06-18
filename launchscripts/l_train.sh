@@ -17,7 +17,7 @@ module load cudnn/7.0-9.0
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$(tr ',' ' ' <<< $1)  # substitute commas with spaces
 echo -e "Train commands:\n ${COMMANDS}"
-export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/generate:${PYTHONPATH}"
+export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"
 LOGDIR=/well/rittscher/users/achatrian/jobs_logs/train
 touch $LOGDIR/
 python  /well/rittscher/users/achatrian/cancer_phenotype/base/train.py ${COMMANDS}

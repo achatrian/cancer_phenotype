@@ -5,25 +5,33 @@ import time
 from tqdm import tqdm
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import IsolationForest
+from sklearn.decomposition import PCA, FastICA
 import pandas as pd
 
 
 class Experiment:
 
     def __init__(self, name, step_names, steps, outlier_removal=IsolationForest(), caching_path=None):
+        if len(step_names) != len(steps):
+            raise ValueError(f"Step_names and steps must have equal length ({len(step_names)} != {len(steps)}")
         self.name = name
         self.step_names = step_names
+        self.steps = steps
         self.x = None
         self.loaded_paths = []
         self.y = None
-        self.pipeline = Pipeline(
-            memory=caching_path,
-            steps=list((name, step) for name, step in zip(step_names, steps))
-        )
+        if self.step_names:
+            self.pipeline = Pipeline(
+                memory=caching_path,
+                steps=list((name, step) for name, step in zip(step_names, steps))
+            )
+        else:
+            self.pipeline = None
         self.outlier_removal = outlier_removal
         self.caching_path = caching_path
         self.x_original = None
         self.fitted = False
+        self.dim_reducer = None
 
     def read_data(self, feature_path: Union[str, Path]):
         feature_path = Path(feature_path)
@@ -53,6 +61,8 @@ class Experiment:
         if len(frames) == 1:
             self.x = frames[0]
         else:
+            keys = tuple((path.with_suffix('')).name for path in self.loaded_paths)
+            print(keys)
             self.x = pd.concat(frames, keys=tuple((path.with_suffix('')).name for path in self.loaded_paths))
         print(f"{len(self.loaded_paths)} feature files were loaded.")
 
@@ -89,12 +99,25 @@ class Experiment:
             self.x = pd.DataFrame(data=x, columns=columns, index=self.x.index)
         self.fitted = True
 
+    def dim_reduction(self, ndim=2, type='PCA'):
+        r"""Get reduced dimensionality"""
+        decomposition = PCA(n_components=ndim) if type == 'PCA' else FastICA(n_components=ndim)
+        x = self.x.values
+        if x.shape[1] == ndim:
+            return self.x
+        x = decomposition.fit_transform(x)
+        columns = list(self.step_names[-2] + str(i) for i in range(x.shape[1]))  # e.g. PCA0 PCA1 ..
+        self.dim_reducer = decomposition
+        return pd.DataFrame(data=x, columns=columns, index=self.x.index)
+
     def get_subsets(self):
+        # TODO test
         r"""Assuming x uses a multindex, returns a dataframe for each field in the first level"""
         return {subset_name: self.x[subset_name] for subset_name in self.x.index.levels[0]}
 
     def save_results(self, save_dir):
         r"""Save experiment results"""
+        # TODO test
         if '~' in str(save_dir):
             save_dir = Path(save_dir).expanduser()
         xpath = Path(save_dir)/f'x_{self.name}_{"fitted" if self.fitted else ""}.json'
@@ -102,6 +125,7 @@ class Experiment:
         if self.y is not None:
             ypath = Path(save_dir)/f'y_{self.name}.json'
             self.y.to_json(open(ypath, 'w'), orient='split')
+
 
 
 

@@ -43,13 +43,13 @@ class WSIReader(OpenSlide):
             opt, unknown = parser.parse_known_args()
         return opt
 
-    def __init__(self, opt, file_name):
+    def __init__(self, opt=None, file_name=''):
         file_name = str(file_name)
         super(WSIReader, self).__init__(file_name)
         slide_format = WSIReader.detect_format(file_name)
         if not slide_format:
             warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
-        self.opt = opt
+        self.opt = opt or WSIReader.get_reader_options(False, True)
         self.file_name = file_name
         self.tissue_locations = []
         self.locations = []

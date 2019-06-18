@@ -3,15 +3,14 @@ import json
 import math
 import copy
 import warnings
-from collections import defaultdict, OrderedDict, namedtuple
-from itertools import combinations, product, tee
+from collections import defaultdict, namedtuple
+from itertools import tee
 import logging
 from datetime import datetime
 import time
 import multiprocessing as mp
 from pathlib import Path
 import numpy as np
-from scipy.special import comb
 from scipy.spatial.distance import cdist
 import matplotlib.pyplot as plt
 import cv2
@@ -278,6 +277,16 @@ class AnnotationBuilder:
         print(message)
         return message
 
+    # def filter_points(self, layer_idx, function, contour_format=False):
+    #     layer_points, layer_name = self.get_layer_points(layer_idx, contour_format=contour_format)
+    #     points_selection = [function(points) for points in layer_points]
+    #     layer = self._obj['layers'][layer_idx]
+    #     for selection in points_selection:
+    #         if selection:
+    #             del layer['items'][]
+
+
+    # merging methods (unused)
     def merge_overlapping_segments(self, centroid_thresh=300.0, closeness_thresh=500.0, max_iter=1,
                                    parallel=False, num_workers=4, log_dir='', timeout=60, size_threshold=0.1):
         """
@@ -585,7 +594,7 @@ class AnnotationBuilder:
         # remove multiple identical points - as they can cause errors
         points = set()
         for segment in item['segments']:
-            point = tuple(segment['point'].values())
+            point = tuple(segment['point'].values()) # x and y
             if point not in points:
                 points.add(point)
                 yield point

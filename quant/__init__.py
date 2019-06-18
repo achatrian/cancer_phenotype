@@ -10,7 +10,6 @@ from skimage import color
 from pandas import DataFrame
 import tqdm
 from base.utils.annotation_builder import AnnotationBuilder
-from base.utils import utils
 from base.data.wsi_reader import WSIReader
 from dzi_io.dzi_io import DZI_IO
 NO_PYTHON = False  # switches from numpy-only to opencv + skimage
@@ -63,7 +62,7 @@ def read_annotations(data_dir, slide_ids=()):
 def find_overlap(slide_contours: dict, different_labels=True):
     r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
     :param slide_contours:
-    :param different_labels: o
+    :param different_labels: whether overlap is reported only for contours of different classes
     :return:
     """
     contours, labels = [], []
@@ -190,16 +189,16 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         overlap_vect = overlap_struct[i]
         mask = contour_to_mask(contours[i], value=label_values[labels[i]])
         x_parent, y_parent, w_parent, h_parent = bounding_boxes[i]
-        for child_idx in np.where(overlap_vect)[0]:
-            if contours[child_idx].size < 2:
-                skips.append(child_idx)
-            if child_idx in skips:
+        for child_index in np.where(overlap_vect)[0]:
+            if contours[child_index].size < 2:
+                skips.append(child_index)
+            if child_index in skips:
                 continue
-            x_child, y_child, w_child, h_child = bounding_boxes[child_idx]
+            x_child, y_child, w_child, h_child = bounding_boxes[child_index]
             if h_parent * w_parent > h_child * w_child:  # if parent bigger than child write on previous mask
-                mask = contour_to_mask(contours[child_idx], mask=mask, mask_origin=(x_parent, y_parent),
-                                       value=label_values[labels[child_idx]])
-            skips.append(child_idx)  # don't yield this contour again
+                mask = contour_to_mask(contours[child_index], mask=mask, mask_origin=(x_parent, y_parent),
+                                       value=label_values[labels[child_index]])
+            skips.append(child_index)  # don't yield this contour again
         yield mask, i
 
 
@@ -213,6 +212,45 @@ def get_image_for_contour(contour: np.array, reader: Union[WSIReader, DZI_IO]):
     # level below: annotation coordinates should refer to lowest level
     image = reader.read_region((x, y), level=0, size=(w, h)).convert('RGB')
     return np.array(image)
+
+
+class MultiLabelMasking:
+    def __init__(self, slide_contours: Union[dict, tuple], outer_label: str, label_values: dict,
+                shape=(), contour_to_mask=contour_to_mask):
+        self.slide_contours = slide_contours
+        if isinstance(slide_contours, dict):
+            self.contours, self.labels = [], []
+            for layer_name, layer_contours in slide_contours.items():
+                self.contours.extend(layer_contours)
+                self.labels.extend([layer_name] * len(layer_contours))
+        else:
+            self.contours, self.labels = slide_contours
+        self.checked_contours_indices = tuple(i for i, contour in enumerate(self.contours) if contour.size < 2)
+        self.contours = [contour for i, contour, in enumerate(self.contours) if i in self.checked_contours_indices]
+        self.labels = [label for i, label, in enumerate(self.labels) if i in self.checked_contours_indices]
+        self.label_values = label_values
+        self.outer_label = outer_label
+        self.outer_contours_indices = tuple(i for i, label in enumerate(self.labels) if label == outer_label)
+        self.overlap_struct, self.contours, self.bounding_boxes, self.labels = find_overlap(slide_contours)
+        self.shape = shape
+        self.contour_to_mask = partial(contour_to_mask, shape=shape) if shape else contour_to_mask
+
+    def __len__(self):
+        return len(self.outer_contours_indices)
+
+    def __getitem__(self, index) -> np.array:
+        if index > len(self):
+            raise ValueError("Index exceeds number of outer contours")
+        outer_index = self.outer_contours_indices[index]
+        overlap_vect = self.overlap_struct[outer_index]
+        mask = contour_to_mask(self.contours[outer_index], value=self.label_values[self.labels[outer_index]])
+        x_parent, y_parent, w_parent, h_parent = self.bounding_boxes[outer_index]
+        for child_index in np.where(overlap_vect)[0]:
+            x_child, y_child, w_child, h_child = self.bounding_boxes[child_index]
+            if h_parent * w_parent > h_child * w_child:  # if parent bigger than child write on previous mask
+                mask = contour_to_mask(self.contours[child_index], mask=mask, mask_origin=(x_parent, y_parent),
+                                       value=self.label_values[self.labels[child_index]])
+        return mask
 
 
 class ContourProcessor:
@@ -229,7 +267,7 @@ class ContourProcessor:
                 labels.extend([layer_name] * len(layer_contours))
         else:
             contours, labels = contour_lib
-        self.contours = contours
+        self.contours = contours 
         self.labels = labels
         self.overlap_struct = overlap_struct
         self.bounding_boxes = bounding_boxes

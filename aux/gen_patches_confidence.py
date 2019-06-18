@@ -75,7 +75,7 @@ def main():
         # get a pointer to wsi
         wsi = openslide.OpenSlide(wsi_file)
 
-        # # generate sobol sequence
+        # # encode sobol sequence
         # X = sobol_seq.i4_sobol_generate(2, int(1e6))
         # X[:, 0] *= gt.shape[0]
         # X[:, 1] *= gt.shape[1]

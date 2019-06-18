@@ -13,9 +13,21 @@ from dzi_io.dzi_io import DZI_IO
 
 class TileExporter:
     # TODO test
-    def __init__(self, annotation: AnnotationBuilder, reader: Union[WSIReader, DZI_IO], tile_size=None):
-        self.annotation = annotation
-        self.reader = reader
+    def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2):
+        self.data_dir = Path(data_dir)
+        annotations_path = Path(self.data_dir)/'data'/'annotations'
+        try:
+            self.slide_path = next(path for path in self.data_dir.iterdir() if slide_id in path.name
+                                   and path.name.endswith(('.svs', 'ndpi', 'tiff')))
+        except StopIteration:
+            raise ValueError(f"No annotation matching slide id: {slide_id}")
+        try:
+            self.annotation_path = next(path for path in annotations_path.iterdir() if slide_id in path.name)
+        except StopIteration:
+            raise ValueError(f"No annotation matching slide id: {slide_id}")
+        slide_opt = WSIReader.get_reader_options(False, False, args=(f'--mpp={mpp}',))
+        self.slide = WSIReader(slide_opt, self.slide_path)
+        self.annotation = AnnotationBuilder.from_annotation_path(self.annotation_path)
         self.tile_size = tile_size
         self.center_crop = CenterCrop(self.tile_size)
 
@@ -98,7 +110,7 @@ class TileExporter:
         contours, layer_name = self.annotation.get_layer_points(layer, contour_format=True)
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
-            image = self.get_contour_image(contour, self.reader)
+            image = self.get_contour_image(contour, self.slide)
             mask = self.contour_to_mask(contour, shape=(self.tile_size,) * 2 if self.tile_size else ())
             assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
             if self.tile_size is not None:
@@ -154,5 +166,17 @@ class CenterCrop(object):
         x1 = int(round((w - tw) / 2.))
         y1 = int(round((h - th) / 2.))
         return img[y1:y1+th, x1:x1+tw, ...]
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=Path, required=True)
+    parser.add_argument('--slide_id', type=str, required=True)
+    parser.add_argument('--mpp', type=float, default=0.2)
+    parser.add_argument('--tile_size', type=int, default=1024)
+    args = parser.parse_args()
+    tiler = TileExporter(args.data_dir, args.slide_id, args.mpp, args.tile_size)
+    tiler.export_tiles('epithelium', )
 
 

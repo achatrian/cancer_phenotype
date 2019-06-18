@@ -24,5 +24,5 @@ module load cuda/9.0
 module load cudnn/7.0-9.0
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$(tr ',' ' ' <<< $1)
-export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/generate:${PYTHONPATH}"
+export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"
 python /well/rittscher/users/achatrian/cancer_phenotype/aux/quality_control/wsi_qc.py ${COMMANDS} 1>${OUTPUTLOG} 2> ${ERRORLOG}
