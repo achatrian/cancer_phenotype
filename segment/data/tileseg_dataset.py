@@ -165,7 +165,7 @@ class TileSegDataset(BaseDataset):
         else:
             resolution_data = None
         image = imageio.imread(image_path)
-        if self.opt.load_ground_truth:
+        if self.opt.load_ground_truth:  # FIXME are all these options really needed ? Code is hard to read
             # process image and ground truth together to keep spatial correspondence
             gt_path = self.gt_paths[idx]
             gt = imageio.imread(gt_path)

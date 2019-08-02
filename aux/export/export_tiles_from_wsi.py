@@ -1,4 +1,3 @@
-import pickle
 import sys
 import warnings
 from pathlib import Path
@@ -8,14 +7,14 @@ sys.path.extend([
     '/well/rittscher/users/achatrian/cancer_phenotype/',
     '/well/rittscher/users/achatrian/cancer_phenotype/base'
 ])
-from base.data.wsi_reader import WSIReader
-from base.utils.annotation_builder import AnnotationBuilder
+from image.wsi_reader import WSIReader
+from annotation.annotation_builder import AnnotationBuilder
 from base.options.base_options import BaseOptions
 
 
 def main(slide_file):
     sys.argv.pop(0)
-    sys.argv.append('--dataset_name=wsi')
+    sys.argv.append('--dataset_name=wsi')  # don't need to do this, can pass args to parser directly
     sys.argv.append('--gpu_ids=-1')
     sys.argv.append('--patch_size=1024')
     sys.argv.append('--mpp=2.5')

@@ -7,7 +7,7 @@ import numpy as np
 from scipy.misc import imresize
 from skimage import transform
 from . import utils
-from . import html
+from . import html_
 
 if sys.version_info[0] == 2:
     VisdomExceptionBase = Exception

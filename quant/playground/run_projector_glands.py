@@ -3,8 +3,10 @@ import argparse
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
 import pandas as pd
+import numpy as np
+from skimage import color
 from quant.experiment import Experiment
-from base.data.wsi_reader import WSIReader
+from image.wsi_reader import WSIReader
 
 
 if __name__ == '__main__':
@@ -16,14 +18,25 @@ if __name__ == '__main__':
     args.log_dir.makedirs(exist_ok=True)
     metadata_path = args.log_dir/'metadata.tsv'
     exp = Experiment('projector', [], [])
-    exp.read_data_from_dir(args.data_dir/'data'/'features')
+    exp.read_data(args.data_dir/'data'/'features'/'all.h5')
     index = exp.x.index.levels[0] if isinstance(exp.x.index, pd.core.index.MultiIndex) else list(exp.x.index)
     bounding_boxes = list(tuple(int(d) for d in s.split('_')) for s in exp.x.index)
-    slide = WSIReader(fi)  # TODO put slide id in
-    images = tf.Variable(mnist.test.images, name='images')
-    with open(metadata_path, 'w') as metadata_file:
-        for row in mnist.test.labels:
-            metadata_file.write('%d\n' % row)
+    images, slide_labels = [], []
+    for slide_path in args.data_dir.iterdir():
+        if slide_path.suffix not in ('.ndpi', '.svs'):
+            continue
+        slide = WSIReader(file_name=str(slide_path))
+        slide_id = slide_path.with_suffix('').name
+        x_slide = exp.x[slide_id]
+        bounding_boxes = tuple(tuple(d for d in s.split('_')) for s in list(x_slide.index))
+        slide_images = list(np.array(slide.read_region((x, y), 0, (w, h))) for x, y, w, h in bounding_boxes)
+        for i, slide_image in slide_images:
+            if slide_image.shape[2] == 4:
+                slide_images[i] = color.rgba2rgb(slide_image)
+        images.extend(slide_images)
+        slide_labels.extend()
+    images = tf.Variable(images, name='images')
+
     with tf.Session() as sess:
         saver = tf.train.Saver([images])
         sess.run(images.initializer)
@@ -36,60 +49,6 @@ if __name__ == '__main__':
         embedding.metadata_path = metadata
         # Saves a config file that TensorBoard will read during startup.
         projector.visualize_embeddings(tf.summary.FileWriter(LOG_DIR), config)
-
-
-# Make objects for feature extraction
-# orb = cv2.ORB_create()  # ORB features
-
-kernels = []
-for theta in range(4):
-    theta = theta / 4. * np.pi
-    for sigma in (1, 5):
-        for frequency in (0.05, 0.25):
-            # Gabor patches
-            kernel = np.real(gabor_kernel(frequency, theta=theta, sigma_x=sigma, sigma_y=sigma))
-            kernel = np.tile(kernel[...,np.newaxis], (1,1,3))
-            kernels.append(kernel)
-
-
-def feature_extraction(imgs, gts):
-    """
-    :param imgs:
-    :param gts:
-    :return:
-
-    Extract features:
-    SIFT
-    ORB > SIFT
-    SHAPE
-    FILTER BANK RESPONSE
-    """
-
-    features = []
-    for n, (img, gt) in enumerate(zip(imgs, gts)):
-        gt = gt.squeeze()
-        if not gt.any():
-            gt = np.ones(gt.shape, dtype=np.bool)
-
-        # kp = orb.detect(img, None)
-        # kp, orb_descriptors = orb.compute(img, kp)
-
-        kernel_descriptors = []
-        for k, kernel in enumerate(kernels):
-            filtered = ndi.convolve(img, kernel, mode='wrap')
-            kernel_descriptors.extend((filtered[gt > 0].mean(), filtered[gt > 0].var()))
-
-        haralick_feats = mahotas.features.haralick(img.astype(np.uint8), distance=2)
-        haralick_feats = list(haralick_feats.flatten())
-
-        props = regionprops(gt.astype(np.uint8), cache=True)[0]
-        props_list = [props.equivalent_diameter, props.eccentricity, props.extent]
-        props_list += list(props.moments_central.flatten())
-
-        gland_feats = kernel_descriptors + haralick_feats + props_list
-        features.append(gland_feats)
-    assert features
-    return np.array(features)
 
 
 def make_thumbnail(img, gt, th_size, label=None):
@@ -217,7 +176,6 @@ def create_sprite_image(images):
                 this_img = images[this_filter]
                 spriteimage[i * img_h:(i + 1) * img_h,
                 j * img_w:(j + 1) * img_w] = this_img
-
     return spriteimage
 
 
@@ -233,57 +191,3 @@ def write_metadata(filename, labels):
             f.write("{}\t{}\n".format(index, label))
 
     print('Metadata file saved in {}'.format(filename))
-
-
-sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-
-ia.seed(7)
-alpha = 0.3
-seq = iaa.Sequential(
-    [
-        # apply the following augmenters to most images
-        iaa.Fliplr(0.8),  # horizontally flip
-        iaa.Flipud(0.8),  # vertically flip
-        # crop images by -5% to 10% of their height/width
-        # sometimes(iaa.CropAndPad(
-        #     percent=(-0.05, 0.1),
-        #     pad_mode=ia.ALL,
-        #     pad_cval=(0, 255)
-        # )),
-        iaa.Affine(
-            scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
-            # scale images to 80-120% of their size, individually per axis
-            translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
-            # translate by -20 to +20 percent (per axis)
-            rotate=(-45, 45),  # rotate by -45 to +45 degrees
-            shear=(-2, 2),  # shear by -16 to +16 degrees
-            order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
-            cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
-            mode=ia.ALL  # use any of scikit-image's warping modes (see 2nd image from the top for examples)
-        ),
-    ],
-    random_order=True
-)
-seq = seq.to_deterministic()  # to ensure that every image is augmented in the same way (so that features are more comparable)
-def augment_glands(imgs, gts, N=1):
-    """
-    :param imgs:
-    :param gts:
-    :param N:
-    :return: Original images + N augmented copies of images and ground truths
-    """
-    if N:
-        M = imgs.shape[0]
-        # Does nothing for N = 0
-        imgs = (imgs + 1) / 2 * 255
-        order = [m + M*n for m in range(M) for n in range(N+1)] # reorder images so that images for same gland are consecutive
-        if gts.ndim < imgs.ndim:
-            gts = gts[..., np.newaxis]
-        cat = np.concatenate([imgs, gts], axis=3)
-        cat = np.tile(cat, (N,1,1,1))
-        out = seq.augment_images(cat)  # works on batch of images
-        gts = np.concatenate((gts, out[..., 3:4]), axis=0)  # need to keep channel dim
-        imgs = np.concatenate((imgs, out[..., 0:3]), axis=0)
-        imgs, gts = imgs[order], gts[order]
-        imgs = (imgs / 255 - 0.5)/0.5  # from -1 to 1
-    return imgs, gts

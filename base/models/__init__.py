@@ -1,5 +1,5 @@
 import importlib
-from .base_model import BaseModel
+from base.models.base_model import BaseModel
 
 
 def find_model_using_name(model_name, task_name):
@@ -17,7 +17,8 @@ def find_model_using_name(model_name, task_name):
     target_model_name = model_name.replace('_', '') + 'model'
     for name, cls in modellib.__dict__.items():
         if name.lower() == target_model_name.lower() \
-           and next(iter(cls.__bases__)).__module__.endswith(BaseModel.__module__):  # check that base class is BaseModel
+           and any(cls0.__module__.endswith(BaseModel.__module__) for cls0 in cls.__mro__):  # check that base class is BaseModel
+            # issubclass doesn't work if import was absolute in model definition, as here it is relative
             model = cls
 
     if model is None:

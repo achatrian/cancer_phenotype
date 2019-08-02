@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from base.utils.base_visualizer import BaseVisualizer, VisdomExceptionBase
-from base.utils import utils, html
+from base.utils import utils, html_
 
 
 class SegmentVisualizer(BaseVisualizer):
@@ -71,7 +71,7 @@ class SegmentVisualizer(BaseVisualizer):
                 img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
                 utils.save_image(image_numpy, img_path)
             # update website
-            webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, reflesh=1)
+            webpage = html_.HTML(self.web_dir, 'Experiment name = %s' % self.name, reflesh=1)
             for n in range(epoch, 0, -1):
                 webpage.add_header('epoch [%d]' % n)
                 ims, txts, links = [], [], []

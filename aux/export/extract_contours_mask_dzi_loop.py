@@ -4,11 +4,9 @@ import json
 import numpy as np
 import cv2
 import tqdm
-from dzi_io.tile_generator import TileGenerator
-from utils.annotation_builder import AnnotationBuilder
-from utils.mask_converter import MaskConverter
-from utils import debug
-
+from image.dzi_io import TileGenerator
+from annotation.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
 
 r"""Script to run mask extraction for all .dzi's in one process"""
 # TODO useful ?

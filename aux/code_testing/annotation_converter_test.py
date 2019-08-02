@@ -2,8 +2,8 @@ import re
 from pathlib import Path
 import pytest
 import imageio
-from base.utils.mask_converter import MaskConverter
-from base.utils.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
+from annotation.annotation_builder import AnnotationBuilder
 
 
 @pytest.fixture

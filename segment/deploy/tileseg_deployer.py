@@ -5,8 +5,8 @@ from queue import Empty
 from datetime import datetime
 import imageio
 from base.deploy.base_deployer import BaseDeployer
-from base.utils.mask_converter import MaskConverter
-from base.utils.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
+from annotation.annotation_path_merger import AnnotationPathMerger
 from base.utils import utils
 
 
@@ -93,7 +93,7 @@ class TileSegDeployer(BaseDeployer):
         logger.addHandler(fh)
         logger.addHandler(ch)
         logger.info("Start gathering data")
-        annotation = AnnotationBuilder(deployer.opt.slide_id, deployer.opt.aida_project_name, ['epithelium', 'lumen', 'background'])
+        annotation = AnnotationPathMerger(deployer.opt.slide_id, deployer.opt.aida_project_name, ['epithelium', 'lumen', 'background'])
         i, n_contours = 0, 0
         while True:
             if i > 0 and isinstance(data, Integral):

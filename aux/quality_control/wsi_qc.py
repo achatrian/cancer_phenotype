@@ -6,7 +6,7 @@ sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
 from itertools import chain
 import multiprocessing as mp
 from pathlib import Path
-from base.data.wsi_reader import WSIReader
+from image.wsi_reader import WSIReader
 
 
 r"Script to perform quality control on all the slides in a directory"

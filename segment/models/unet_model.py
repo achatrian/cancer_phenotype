@@ -110,5 +110,5 @@ class UNetModel(BaseModel):
         self.update_measure_value('acc', acc)
         self.update_measure_value('dice', dice)
         for c in range(len(class_acc)):
-            self.update_measure_value('metric_acc{}'.format(c), class_acc[c])
-            self.update_measure_value('metric_dice{}'.format(c), class_dice[c])
+            self.update_measure_value('acc{}'.format(c), class_acc[c])
+            self.update_measure_value('dice{}'.format(c), class_dice[c])

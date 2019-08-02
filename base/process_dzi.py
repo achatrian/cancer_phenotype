@@ -10,9 +10,9 @@ import tqdm
 from options.process_dzi_options import ProcessDZIOptions
 from models import create_model
 from utils.utils import tensor2im
-from dzi_io.tile_generator import TileGenerator
-from utils.annotation_builder import AnnotationBuilder
-from utils.mask_converter import MaskConverter
+from image.dzi_io import TileGenerator
+from annotation.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
 
 
 def process_image(image, input_path, model):

@@ -20,7 +20,7 @@ class MaskConverter:
     """
 
     def __init__(self, dist_threshold=0.1, value_hier=(0, (160, 200), 250), min_contour_area=3000,
-                 label_value_map=None, label_interval_map=None, fix_ambiguity=True):
+                 label_value_map=None, label_interval_map=None, label_options=None, fix_ambiguity=True):
         """
         :param dist_threshold:
         :param value_hier:
@@ -40,12 +40,16 @@ class MaskConverter:
             'lumen': (225, 250),
             'background': (0, 80)
         }
+        self.label_options = label_options or {
+            'epithelium': {'small_object_size': 1024*0.4},
+            'lumen': {'small_object_size': 256*0.4}
+        }
         assert set(self.label_value_map.keys()) == set(self.label_interval_map.keys()), 'inconsistent annotation classes'
         assert all(isinstance(t, tuple) and len(t) == 2 and t[0] <= t[1] for t in self.label_interval_map.values())
         self.num_classes = len(self.label_value_map)
 
     def mask_to_contour(self, mask, x_offset=0, y_offset=0, rescale_factor=None):
-        """
+        r"""
         Extracts the contours one class at a time
         :param mask:
         :param x_offset:
@@ -59,12 +63,14 @@ class MaskConverter:
         if mask.ndim < 3:
             mask = mask[..., 0]
         contours, labels = [], []
-        for value in self.label_value_map.values():
-            if value == self.label_value_map['background']:
+        for label, value in self.label_value_map.items():
+            if label == 'background':
                 continue  # don't extract contours for background
             value_binary_mask = self.threshold_by_value(value, mask)
             if self.fix_ambiguity:
-                value_binary_mask = self.remove_ambiguity(value_binary_mask, self.dist_threshold)  # makes small glands very small
+                value_binary_mask = self.remove_ambiguity(value_binary_mask,
+                                                          self.dist_threshold,
+                                                          **self.label_options[label])  # makes small glands very small
             else:
                 value_binary_mask = value_binary_mask[..., 0]  # 1 channel mask for contour finding
             if int(cv2.__version__.split('.')[0]) == 3:
@@ -93,7 +99,7 @@ class MaskConverter:
 
     def mask_to_contour_all_classes(self, mask, x_offset=0, y_offset=0,
                                     contour_approx_method=cv2.CHAIN_APPROX_TC89_KCOS):
-        """
+        r"""
         Extracts the contours once only
         :param mask:
         :param x_offset: x_offset offset
@@ -130,7 +136,7 @@ class MaskConverter:
         return good_contours, good_labels, bounding_boxes
 
     def threshold_by_value(self, value, mask):
-        """
+        r"""
         Use label hierarchy to threshold values
         :param value:
         :return:
@@ -150,7 +156,7 @@ class MaskConverter:
         return mask
 
     def binarize(self, mask):
-        """
+        r"""
         Uses self.value_hier to determine which label should be inside which other label.
         The last level is the innermost one
         If different label values are on the same level, this should be passed as a tuple.
@@ -172,7 +178,7 @@ class MaskConverter:
 
     @staticmethod
     def get_inner_values(mask, contour):
-        """
+        r"""
         :param mask:
         :param contour:
         :return: mask values within contour
@@ -197,7 +203,7 @@ class MaskConverter:
         return values_within_contour, mode_value
 
     def get_contours_labels(self, mask, contours, hierarchy):
-        """
+        r"""
         Baseline - uses cv2 hierarchy
         :param mask:
         :param contours:
@@ -259,7 +265,7 @@ class MaskConverter:
         return contours_labels
 
     def get_contour_labels_by_overlap(self, mask, contours):
-        """
+        r"""
         Check what bounding contours are contained within each other
         :param mask:
         :param contours:
@@ -342,14 +348,14 @@ class MaskConverter:
 
     @staticmethod
     def remove_ambiguity(mask, dist_threshold=0.1, small_object_size=1024*0.4, final_closing_size=20,
-                         final_dilation_size=5):
-        """
+                         final_dilation_size=2):
+        r"""
         Morphologically removes noise in the image and returns solid contours
         :param mask: HxWx3 image with identical channels, or HxW image
         :param dist_threshold: multiplied by mode of peaks in distance transform -- e,g, 0.1 is 1/10 of the average peak
         :param small_object_size: objects smaller than this threshold will be removed from mask
         :param final_closing_size: size of kernel used for closing of holes in large glands
-        :param final_dilate: size of kernel used for final dilation of mask values
+        :param final_dilation_size: size of kernel used for final dilation of mask values
         :return:
         """
         mask = copy.deepcopy(mask)
@@ -361,6 +367,7 @@ class MaskConverter:
         # noise removal
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(mask_1c, cv2.MORPH_OPEN, kernel, iterations=2)
+        opening = opening.astype(np.uint8)
         # refine -ve area (includes background)
         refined_bg = cv2.dilate(opening, kernel, iterations=3)
         # refine foreground area
@@ -383,7 +390,7 @@ class MaskConverter:
         # mark the region of unknown with zero
         markers[unknown == 250] = 0
         # watershed
-        markers = cv2.watershed(mask, markers)
+        markers = cv2.watershed(mask.astype(np.uint8), markers)
         # threshold out boundaries and background (-    1 and 0 respectively)
         markers = cv2.morphologyEx(cv2.medianBlur(markers.astype(np.uint8), 3), cv2.MORPH_OPEN, kernel, iterations=2)
         unambiguous = np.uint8(cv2.medianBlur(markers.astype(np.uint8), 3) > 1) * 255
@@ -393,7 +400,8 @@ class MaskConverter:
         unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=small_object_size)
         # correct troughs left at gland boundaries in larger glands using closing
         unambiguous = skimage.morphology.binary_closing(unambiguous, np.ones((final_closing_size,)*2))
-        unambiguous = skimage.morphology.binary_dilation(unambiguous, np.ones(fo))
+        # dilate to ensure border was not chipped away by foreground selection above
+        unambiguous = skimage.morphology.binary_dilation(unambiguous, np.ones((final_dilation_size,)*2))
         return unambiguous.astype(np.uint8)
 
     def value2label(self, value):

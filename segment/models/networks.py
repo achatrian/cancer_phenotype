@@ -214,6 +214,27 @@ class UNet(torch.nn.Module):
         return y
 
 
+class UNetFeatExtract(UNet):
+
+    def forward(self, x):
+        x = self.input_block(x)
+        encoded = []
+        for d in range(self.depth):
+            enc = getattr(self, 'enc{}'.format(d))
+            encoded.append(enc(x))
+            x = encoded[-1]
+        x = self.center(x)
+        center = x
+
+        for d in range(self.depth-1, -1, -1):
+            dec = getattr(self, 'dec{}'.format(d))
+            x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
+            x = dec(x)
+
+        x = F.interpolate(self.output_block(x), (self.tile_size,) * 2, mode='bilinear')
+        y = self.final_conv(x)
+        return y, center
+
 
 
 

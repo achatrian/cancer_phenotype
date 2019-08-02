@@ -1,8 +1,7 @@
-from pytest import fixture, mark
+from pytest import fixture
 import imageio
 import numpy as np
-from base.utils.annotation_builder import AnnotationBuilder
-from base.utils.mask_converter import MaskConverter
+from annotation.mask_converter import MaskConverter
 from quant import contour_to_mask
 
 

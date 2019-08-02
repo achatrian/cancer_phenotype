@@ -24,7 +24,7 @@ class WSIReader(OpenSlide):
         parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]" if include_path else None)
         if include_path:
             parser.add_argument('slide_path', type=str, default='')
-        parser.add_argument('--qc_mpp', default=4.0, type=float, help="MPP value to perform quality control on slide")
+        parser.add_argument('--qc_mpp', default=2.0, type=float, help="MPP value to perform quality control on slide")
         parser.add_argument('--mpp', default=0.50, type=float, help="MPP value to read images from slide")
         parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
         parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
@@ -38,6 +38,8 @@ class WSIReader(OpenSlide):
             parser.add_argument('--saturation_threshold', type=int, default=25,
                                 help="Saturation difference threshold of tile for it to be considered a tissue tile")
         if args:
+            if isinstance(args, dict):
+                args = tuple(f'--{key}={value}' for key, value in args.items())
             opt, unknown = parser.parse_known_args(args)
         else:
             opt, unknown = parser.parse_known_args()
@@ -63,7 +65,7 @@ class WSIReader(OpenSlide):
         # compute read level based on mpp
         if hasattr(opt, 'qc_mpp') and hasattr(opt, 'mpp'):
             if self.opt.qc_mpp < self.opt.mpp:
-                raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc.mpp} < {self.opt.mpp})")
+                raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc_mpp} < {self.opt.mpp})")
             best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
             best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
             assert best_level_x == best_level_y; "This should be the same, unless pixel has different side lengths"
@@ -186,7 +188,9 @@ class WSIReader(OpenSlide):
                 quality_control = json.load(slide_loc_file)
                 if quality_control['mpp_x'] != self.mpp_x or quality_control['mpp_y'] != self.mpp_y or \
                     quality_control['qc_read_level'] != self.qc_read_level or quality_control['qc_mpp'] != self.qc_mpp:
-                    raise ValueError(f"Mismatching slide and quality control information for {Path(self.file_name).name}")
+                    raise ValueError(f"Mismatching slide and quality control information for {Path(self.file_name).name} (slide/file) "
+                                     f"mpp_x: {self.mpp_x:.2f}/{quality_control['mpp_x']:.2f}; mpp_y: {self.mpp_y:.2f}/{quality_control['mpp_y']:.2f}; "
+                                     f"qc_mpp: {self.qc_mpp:.2f}/{quality_control['qc_mpp']:.2f}; qc_read_level: {self.qc_read_level:.2f}/{quality_control['qc_read_level']:.2f}")
                 if quality_control['patch_size'] != self.opt.patch_size:
                     warnings.warn(f"Using different patch size ({self.opt.patch_size}) from quality control patch size ({quality_control['patch_size']})")
                 self.tissue_locations = quality_control['tissue_locations']
@@ -196,6 +200,7 @@ class WSIReader(OpenSlide):
         return len(self.tissue_locations)
 
     def __getitem__(self, item):
+        r"""Returns tissue tiles"""
         return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
 
     def filter_locations(self, delimiters, delimiters_scaling=None, loc_tol=0.2):

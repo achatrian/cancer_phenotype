@@ -77,9 +77,9 @@ class waspIntrinsicComposer(nn.Module):
     def __init__(self, opt):
         super(waspIntrinsicComposer, self).__init__()
         self.ngpu = opt.ngpu
-        self.nc = opt.nc
+        self.input_channels = opt.input_channels
     def forward(self, shading, albedo):
-        self.shading = shading.repeat(1,self.nc,1,1)
+        self.shading = shading.repeat(1,self.input_channels,1,1)
         self.img = torch.mul(self.shading, albedo)
         return self.img
 
@@ -118,64 +118,65 @@ class waspGridSpatialIntegral(nn.Module):
 
 # an encoder architecture
 class waspEncoder(nn.Module):
-    def __init__(self, opt, ngpu=1, nc=1, ndf = 32, ndim = 128):
+    def __init__(self, opt, ngpu=1, input_channels=1, num_filters = 32, num_dim = 128):
         super(waspEncoder, self).__init__()
         self.ngpu = ngpu
-        self.ndim = ndim
+        self.num_dim = num_dim
         self.main = nn.Sequential(
-            # input is (nc) x 64 x 64
-            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            # input is (input_channels) x 64 x 64
+            nn.Conv2d(input_channels, num_filters, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, False),
-            # state size. (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ndf * 2),
+            # state size. (num_filters) x 32 x 32
+            nn.Conv2d(num_filters, num_filters * 2, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_filters * 2),
             nn.LeakyReLU(0.2, False),
-            # state size. (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ndf * 4),
+            # state size. (num_filters*2) x 16 x 16
+            nn.Conv2d(num_filters * 2, num_filters * 4, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_filters * 4),
             nn.LeakyReLU(0.2, False),
-            # state size. (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ndf * 8),
+            # state size. (num_filters*4) x 8 x 8
+            nn.Conv2d(num_filters * 4, num_filters * 8, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_filters * 8),
             nn.LeakyReLU(0.2, False),
-            # state size. (ndf*8) x 4 x 4
-            nn.Conv2d(ndf * 8, ndim, 4, 4, 0, bias=False),
+            # state size. (num_filters*8) x 4 x 4
+            nn.Conv2d(num_filters * 8, num_dim, 4, 4, 0, bias=False),
             nn.Sigmoid()
         )
 
     def forward(self, input):
-        output = self.main(input).view(-1,self.ndim)
+        output = self.main(input).view(-1,self.num_dim)
         #print(output.size())
         return output
 
 # a decoder architecture
 class waspDecoder(nn.Module):
-    def __init__(self, opt, ngpu=1, nz=128,  nc=1, ngf=32, lb=0, ub=1):
+    def __init__(self, opt, ngpu=1, nz=128,  input_channels=1, num_gen_filters=32, lb=0, ub=1):
+        # ngf --> num_gen_filters
         super(waspDecoder, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
-            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
-            nn.InstanceNorm2d(ngf * 8),
+            nn.ConvTranspose2d(nz, num_gen_filters * 8, 4, 1, 0, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 8),
             nn.ReLU(True),
-            # state size. (ngf*8) x 4 x 4
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf * 4),
+            # state size. (num_gen_filters*8) x 4 x 4
+            nn.ConvTranspose2d(num_gen_filters * 8, num_gen_filters * 4, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 4),
             nn.ReLU(True),
-            # state size. (ngf*4) x 8 x 8
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf * 2),
+            # state size. (num_gen_filters*4) x 8 x 8
+            nn.ConvTranspose2d(num_gen_filters * 4, num_gen_filters * 2, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 2),
             nn.ReLU(True),
-            # state size. (ngf*2) x 16 x 16
-            nn.ConvTranspose2d(ngf * 2,ngf, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf),
+            # state size. (num_gen_filters*2) x 16 x 16
+            nn.ConvTranspose2d(num_gen_filters * 2,num_gen_filters, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters),
             nn.ReLU(True),
-            # state size. (ngf) x 32 x 32
-            nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf),
+            # state size. (num_gen_filters) x 32 x 32
+            nn.ConvTranspose2d(num_gen_filters, num_gen_filters, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters),
             nn.ReLU(True),
-            # state size. (nc) x 64 x 64
-            nn.ConvTranspose2d(ngf, nc, 3, 1, 1, bias=False),
+            # state size. (input_channels) x 64 x 64
+            nn.ConvTranspose2d(num_gen_filters, input_channels, 3, 1, 1, bias=False),
             nn.Hardtanh(lb,ub)
         )
 
@@ -188,32 +189,32 @@ class waspDecoder(nn.Module):
 
 # a decoder architecture
 class waspDecoderTanh(nn.Module):
-    def __init__(self, opt, ngpu=1, nz=128,  nc=1, ngf=32, lb=0, ub=1):
+    def __init__(self, opt, ngpu=1, nz=128,  input_channels=1, num_gen_filters=32, lb=0, ub=1):
         super(waspDecoderTanh, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
-            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
-            nn.InstanceNorm2d(ngf * 8),
+            nn.ConvTranspose2d(nz, num_gen_filters * 8, 4, 1, 0, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 8),
             nn.Tanh(),
-            # state size. (ngf*8) x 4 x 4
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf * 4),
+            # state size. (num_gen_filters*8) x 4 x 4
+            nn.ConvTranspose2d(num_gen_filters * 8, num_gen_filters * 4, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 4),
             nn.Tanh(),
-            # state size. (ngf*4) x 8 x 8
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf * 2),
+            # state size. (num_gen_filters*4) x 8 x 8
+            nn.ConvTranspose2d(num_gen_filters * 4, num_gen_filters * 2, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters * 2),
             nn.Tanh(),
-            # state size. (ngf*2) x 16 x 16
-            nn.ConvTranspose2d(ngf * 2,ngf, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf),
+            # state size. (num_gen_filters*2) x 16 x 16
+            nn.ConvTranspose2d(num_gen_filters * 2,num_gen_filters, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters),
             nn.Tanh(),
-            # state size. (ngf) x 32 x 32
-            nn.ConvTranspose2d(ngf, ngf, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(ngf),
+            # state size. (num_gen_filters) x 32 x 32
+            nn.ConvTranspose2d(num_gen_filters, num_gen_filters, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(num_gen_filters),
             nn.Tanh(),
-            # state size. (nc) x 64 x 64
-            nn.ConvTranspose2d(ngf, nc, 3, 1, 1, bias=False),
+            # state size. (input_channels) x 64 x 64
+            nn.ConvTranspose2d(num_gen_filters, input_channels, 3, 1, 1, bias=False),
             #nn.Hardtanh(lb,ub),
             nn.Sigmoid()
         )
@@ -315,65 +316,65 @@ class DenseTransitionBlockDecoder(nn.Module):
         return self.main(inputs)
 
 class waspDenseEncoder(nn.Module):
-    def __init__(self, opt, ngpu=1, nc=1, ndf = 32, ndim = 128, activation=nn.LeakyReLU, args=[0.2, False], f_activation=nn.Sigmoid, f_args=[]):
+    def __init__(self, opt, ngpu=1, input_channels=1, num_filters=32, num_dim = 128, activation=nn.LeakyReLU, args=[0.2, False], f_activation=nn.Sigmoid, f_args=[]):
         super(waspDenseEncoder, self).__init__()
         self.ngpu = ngpu
-        self.ndim = ndim
+        self.num_dim = num_dim
 
         self.main = nn.Sequential(
-                # input is (nc) x 64 x 64
-                nn.Conv2d(nc, ndf, 4, stride=2, padding=1),
+                # input is (input_channels) x 64 x 64
+                nn.Conv2d(input_channels, num_filters, 4, stride=2, padding=1),
 
-                # state size. (ndf) x 32 x 32
-                DenseBlockEncoder(ndf, 6),
-                DenseTransitionBlockEncoder(ndf, ndf*2, 2, activation=activation, args=args),
+                # state size. (num_filters) x 32 x 32
+                DenseBlockEncoder(num_filters, 6),
+                DenseTransitionBlockEncoder(num_filters, num_filters*2, 2, activation=activation, args=args),
 
-                # state size. (ndf*2) x 16 x 16
-                DenseBlockEncoder(ndf*2, 12),
-                DenseTransitionBlockEncoder(ndf*2, ndf*4, 2, activation=activation, args=args),
+                # state size. (num_filters*2) x 16 x 16
+                DenseBlockEncoder(num_filters*2, 12),
+                DenseTransitionBlockEncoder(num_filters*2, num_filters*4, 2, activation=activation, args=args),
 
-                # state size. (ndf*4) x 8 x 8
-                DenseBlockEncoder(ndf*4, 24),
-                DenseTransitionBlockEncoder(ndf*4, ndf*8, 2, activation=activation, args=args),
+                # state size. (num_filters*4) x 8 x 8
+                DenseBlockEncoder(num_filters*4, 24),
+                DenseTransitionBlockEncoder(num_filters*4, num_filters*8, 2, activation=activation, args=args),
 
-                # state size. (ndf*8) x 4 x 4
-                DenseBlockEncoder(ndf*8, 16),
-                DenseTransitionBlockEncoder(ndf*8, ndim, 4, activation=activation, args=args),
+                # state size. (num_filters*8) x 4 x 4
+                DenseBlockEncoder(num_filters*8, 16),
+                DenseTransitionBlockEncoder(num_filters*8, num_dim, 4, activation=activation, args=args),
                 f_activation(*f_args),
         )
 
     def forward(self, input):
-        output = self.main(input).view(-1,self.ndim)
+        output = self.main(input).view(-1,self.num_dim)
         return output
 
 class waspDenseDecoder(nn.Module):
-    def __init__(self, opt, ngpu=1, nz=128, nc=1, ngf=32, lb=0, ub=1, activation=nn.ReLU, args=[False], f_activation=nn.Hardtanh, f_args=[0,1]):
+    def __init__(self, opt, ngpu=1, nz=128, input_channels=1, num_gen_filters=32, lb=0, ub=1, activation=nn.ReLU, args=[False], f_activation=nn.Hardtanh, f_args=[0,1]):
         super(waspDenseDecoder, self).__init__()
         self.ngpu   = ngpu
         self.main   = nn.Sequential(
             # input is Z, going into convolution
-            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(nz, num_gen_filters * 8, 4, 1, 0, bias=False),
 
-            # state size. (ngf*8) x 4 x 4
-            DenseBlockDecoder(ngf*8, 16),
-            DenseTransitionBlockDecoder(ngf*8, ngf*4),
+            # state size. (num_gen_filters*8) x 4 x 4
+            DenseBlockDecoder(num_gen_filters*8, 16),
+            DenseTransitionBlockDecoder(num_gen_filters*8, num_gen_filters*4),
 
-            # state size. (ngf*4) x 8 x 8
-            DenseBlockDecoder(ngf*4, 24),
-            DenseTransitionBlockDecoder(ngf*4, ngf*2),
+            # state size. (num_gen_filters*4) x 8 x 8
+            DenseBlockDecoder(num_gen_filters*4, 24),
+            DenseTransitionBlockDecoder(num_gen_filters*4, num_gen_filters*2),
 
-            # state size. (ngf*2) x 16 x 16
-            DenseBlockDecoder(ngf*2, 12),
-            DenseTransitionBlockDecoder(ngf*2, ngf),
+            # state size. (num_gen_filters*2) x 16 x 16
+            DenseBlockDecoder(num_gen_filters*2, 12),
+            DenseTransitionBlockDecoder(num_gen_filters*2, num_gen_filters),
 
-            # state size. (ngf) x 32 x 32
-            DenseBlockDecoder(ngf, 6),
-            DenseTransitionBlockDecoder(ngf, ngf),
+            # state size. (num_gen_filters) x 32 x 32
+            DenseBlockDecoder(num_gen_filters, 6),
+            DenseTransitionBlockDecoder(num_gen_filters, num_gen_filters),
 
-            # state size (ngf) x 64 x 64
-            nn.InstanceNorm2d(ngf),
+            # state size (num_gen_filters) x 64 x 64
+            nn.InstanceNorm2d(num_gen_filters),
             activation(*args),
-            nn.ConvTranspose2d(ngf, nc, 3, stride=1, padding=1, bias=False),
+            nn.ConvTranspose2d(num_gen_filters, input_channels, 3, stride=1, padding=1, bias=False),
             f_activation(*f_args),
         )
     def forward(self, inputs):
@@ -389,15 +390,17 @@ class waspDenseDecoder(nn.Module):
 # encoders of DAE
 class Encoders(nn.Module):
     def __init__(self, opt):
+        # zdim --> latent_dim; wdim --> warp_grid_dim; idim --> texture_dim
         super(Encoders, self).__init__()
         self.ngpu = opt.ngpu
-        self.encoder = waspEncoder(opt, ngpu=1, nc=opt.nc, ndf = opt.ndf, ndim = opt.zdim)
-        self.zImixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.idim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.wdim)
+        self.encoder = waspEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters=opt.num_filters, num_dim = opt.latent_dim)
+        self.zImixer = waspMixer(opt, ngpu=1, nin=opt.latent_dim, nout=opt.texture_dim)
+        self.zWmixer = waspMixer(opt, ngpu=1, nin=opt.latent_dim, nout=opt.warp_grid_dim)
+        self.z, self.zImg, self.zWarp = (None,) * 3
 
-    def forward(self, input):
-        self.z     = self.encoder(input)
-        self.zImg  = self.zImixer(self.z)
+    def forward(self, input_):
+        self.z = self.encoder(input_)
+        self.zImg = self.zImixer(self.z)
         self.zWarp = self.zWmixer(self.z)
         return self.z, self.zImg, self.zWarp
 
@@ -406,11 +409,11 @@ class Encoders_Intrinsic(nn.Module):
     def __init__(self, opt):
         super(Encoders_Intrinsic, self).__init__()
         self.ngpu = opt.ngpu
-        self.encoder = waspEncoder(opt, ngpu=1, nc=opt.nc, ndf = opt.ndf, ndim = opt.zdim)
-        #self.zImixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.idim)
-        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.sdim)
-        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.tdim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.wdim)
+        self.encoder = waspEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
+        #self.zImixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.texture_dim)
+        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.sdim)
+        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.tdim)
+        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -425,9 +428,9 @@ class Dense_Encoders(nn.Module):
     def __init__(self, opt):
         super(Dense_Encoders, self).__init__()
         self.ngpu = opt.ngpu
-        self.encoder = waspDenseEncoder(opt, ngpu=1, nc=opt.nc, ndf = opt.ndf, ndim = opt.zdim)
-        self.zImixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.idim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.wdim)
+        self.encoder = waspDenseEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
+        self.zImixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.texture_dim)
+        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -440,10 +443,10 @@ class Dense_Encoders_Intrinsic(nn.Module):
     def __init__(self, opt):
         super(Dense_Encoders_Intrinsic, self).__init__()
         self.ngpu = opt.ngpu
-        self.encoder = waspDenseEncoder(opt, ngpu=1, nc=opt.nc, ndf = opt.ndf, ndim = opt.zdim)
-        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.sdim)
-        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.tdim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.zdim, nout = opt.wdim)
+        self.encoder = waspDenseEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
+        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.sdim)
+        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.tdim)
+        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -460,16 +463,17 @@ class DecodersIntegralWarper2(nn.Module):
         super(DecodersIntegralWarper2, self).__init__()
         self.imagedimension = opt.imgSize
         self.ngpu = opt.ngpu
-        self.idim = opt.idim
-        self.wdim = opt.wdim
-        self.decoderI = waspDecoder(opt, ngpu=self.ngpu, nz=opt.idim, nc=opt.nc, ngf=opt.ngf, lb=0, ub=1)
-        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.wdim, nc=2, ngf=opt.ngf, lb=0, ub=0.1)
+        self.texture_dim = opt.texture_dim
+        self.warp_grid_dim = opt.warp_grid_dim
+        self.decoderI = waspDecoder(opt, ngpu=self.ngpu, nz=opt.texture_dim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=0.1)
         self.warper   = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
         self.cutter = nn.Hardtanh(-1,1)
+
     def forward(self, zI, zW, basegrid):
-        self.texture = self.decoderI(zI.view(-1,self.idim,1,1))
-        self.diffentialWarping = self.decoderW(zW.view(-1,self.wdim,1,1))*(5.0/self.imagedimension)
+        self.texture = self.decoderI(zI.view(-1,self.texture_dim,1,1))
+        self.diffentialWarping = self.decoderW(zW.view(-1,self.warp_grid_dim,1,1))*(5.0/self.imagedimension)
         self.warping = self.integrator(self.diffentialWarping)-1.2
         self.warping = self.cutter(self.warping)
         self.resWarping = self.warping-basegrid
@@ -483,13 +487,13 @@ class DecodersIntegralWarper2_Intrinsic(nn.Module):
         super(DecodersIntegralWarper2_Intrinsic, self).__init__()
         self.imagedimension = opt.imgSize
         self.ngpu = opt.ngpu
-        self.idim = opt.idim
+        self.texture_dim = opt.texture_dim
         self.sdim = opt.sdim
         self.tdim = opt.tdim
-        self.wdim = opt.wdim
-        self.decoderS = waspDecoder(opt, ngpu=self.ngpu, nz=opt.sdim, nc=1, ngf=opt.ngf, lb=0, ub=1)
-        self.decoderT = waspDecoder(opt, ngpu=self.ngpu, nz=opt.tdim, nc=opt.nc, ngf=opt.ngf, lb=0, ub=1)
-        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.wdim, nc=2, ngf=opt.ngf, lb=0, ub=0.1)
+        self.warp_grid_dim = opt.warp_grid_dim
+        self.decoderS = waspDecoder(opt, ngpu=self.ngpu, nz=opt.sdim, input_channels=1, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderT = waspDecoder(opt, ngpu=self.ngpu, nz=opt.tdim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=0.1)
         self.intrinsicComposer = waspIntrinsicComposer(opt)
         self.warper   = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
@@ -498,7 +502,7 @@ class DecodersIntegralWarper2_Intrinsic(nn.Module):
         self.shading = self.decoderS(zS.view(-1,self.sdim,1,1))
         self.texture = self.decoderT(zT.view(-1,self.tdim,1,1))
         self.img = self.intrinsicComposer(self.shading, self.texture)
-        self.diffentialWarping = self.decoderW(zW.view(-1,self.wdim,1,1))*(5.0/self.imagedimension)
+        self.diffentialWarping = self.decoderW(zW.view(-1,self.warp_grid_dim,1,1))*(5.0/self.imagedimension)
         self.warping = self.integrator(self.diffentialWarping)-1.2
         self.warping = self.cutter(self.warping)
         self.resWarping = self.warping-basegrid
@@ -512,16 +516,16 @@ class Dense_DecodersIntegralWarper2(nn.Module):
         super(Dense_DecodersIntegralWarper2, self).__init__()
         self.imagedimension = opt.imgSize
         self.ngpu = opt.ngpu
-        self.idim = opt.idim
-        self.wdim = opt.wdim
-        self.decoderI = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.idim, nc=opt.nc, ngf=opt.ngf, lb=0, ub=1)
-        self.decoderW = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.wdim, nc=2, ngf=opt.ngf, lb=0, ub=1, activation=nn.Tanh, args=[], f_activation=nn.Sigmoid, f_args=[])
+        self.texture_dim = opt.texture_dim
+        self.warp_grid_dim = opt.warp_grid_dim
+        self.decoderI = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.texture_dim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderW = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=1, activation=nn.Tanh, args=[], f_activation=nn.Sigmoid, f_args=[])
         self.warper   = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
         self.cutter = nn.Hardtanh(-1,1)
     def forward(self, zI, zW, basegrid):
-        self.img = self.decoderI(zI.view(-1,self.idim,1,1))
-        self.diffentialWarping = self.decoderW(zW.view(-1,self.wdim,1,1))*(5.0/self.imagedimension)
+        self.img = self.decoderI(zI.view(-1,self.texture_dim,1,1))
+        self.diffentialWarping = self.decoderW(zW.view(-1,self.warp_grid_dim,1,1))*(5.0/self.imagedimension)
         self.warping = self.integrator(self.diffentialWarping)-1.2
         self.warping = self.cutter(self.warping)
         self.resWarping = self.warping-basegrid
@@ -534,16 +538,16 @@ class Dense_DecodersIntegralWarper2_Intrinsic(nn.Module):
         super(Dense_DecodersIntegralWarper2_Intrinsic, self).__init__()
         self.imagedimension = opt.imgSize
         self.ngpu = opt.ngpu
-        self.idim = opt.idim
+        self.texture_dim = opt.texture_dim
         self.sdim = opt.sdim
         self.tdim = opt.tdim
-        self.wdim = opt.wdim
+        self.warp_grid_dim = opt.warp_grid_dim
         # shading decoder
-        self.decoderS = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.sdim, nc=1, ngf=opt.ngf, lb=0, ub=1)
+        self.decoderS = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.sdim, input_channels=1, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
         # albedo decoder
-        self.decoderT = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.tdim, nc=opt.nc, ngf=opt.ngf, lb=0, ub=1)
+        self.decoderT = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.tdim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
         # deformation decoder
-        self.decoderW = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.wdim, nc=2, ngf=opt.ngf, lb=0, ub=1, activation=nn.Tanh, args=[], f_activation=nn.Sigmoid, f_args=[])
+        self.decoderW = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=1, activation=nn.Tanh, args=[], f_activation=nn.Sigmoid, f_args=[])
         # shading*albedo=texture
         self.intrinsicComposer = waspIntrinsicComposer(opt)
         # deformation offset decoder
@@ -555,7 +559,7 @@ class Dense_DecodersIntegralWarper2_Intrinsic(nn.Module):
         self.shading = self.decoderS(zS.view(-1,self.sdim,1,1))
         self.texture = self.decoderT(zT.view(-1,self.tdim,1,1))
         self.img     = self.intrinsicComposer(self.shading, self.texture)
-        self.diffentialWarping = self.decoderW(zW.view(-1,self.wdim,1,1))*(5.0/self.imagedimension)
+        self.diffentialWarping = self.decoderW(zW.view(-1,self.warp_grid_dim,1,1))*(5.0/self.imagedimension)
         self.warping = self.integrator(self.diffentialWarping)-1.2
         self.warping = self.cutter(self.warping)
         self.resWarping = self.warping-basegrid

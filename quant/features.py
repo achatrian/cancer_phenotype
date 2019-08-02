@@ -1,5 +1,6 @@
 r"""Feature computations from contours, masks, and images"""
 from inspect import getfullargspec
+from pathlib import Path
 import time
 import warnings
 import numpy as np
@@ -9,12 +10,37 @@ from skimage import feature
 import mahotas as mh
 from mahotas.features import surf  # needs separate import or does not work
 from base.utils import debug
+from joblib import Memory
+# caching_path = Path('~/python_caches').expanduser()
+#memory = Memory(caching_path, bytes_limit=5e6, verbose=False)  # caching images so that checks are run faster
+# caching_path.mkdir(exist_ok=True)
+
+
+#@memory.cache
+def is_contour(arg):  # specifies contour format
+    return isinstance(arg, np.ndarray) and arg.ndim == 3 and arg.shape[2] == 2
+
+
+#@memory.cache
+def is_mask(arg, num_classes=0):  # specifies mask format
+    return isinstance(arg, np.ndarray) and np.unique(arg).size <= (num_classes or 10) and arg.ndim == 2
+
+
+#@memory.cache
+def is_image(arg):  # specifies image format (RGB mapped to [-1, 1])
+    return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
+
+
+#@memory.cache
+def is_gray_image(arg):  # specifies gray image format (grayscale mapped to [-1, 1])
+    return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 2
 
 
 class Feature:
     r"""Feature callable
     """
-    __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls']
+    __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls',
+                 'is_contour', 'is_mask', 'is_image', 'is_gray_image']
     # how-to-python: docstring and __slots__ defined this way are class attributes
 
     def __init__(self, function, returns):
@@ -26,32 +52,17 @@ class Feature:
         self.name = function.__name__
         self.call_time = 0.0
         self.n_calls = 0
-
-    @staticmethod
-    def is_contour(arg):  # specifies contour format
-        return isinstance(arg, np.ndarray) and arg.ndim == 3 and arg.shape[2] == 2
-
-    @staticmethod
-    def is_mask(arg, num_classes=0):  # specifies mask format
-        return isinstance(arg, np.ndarray) and np.unique(arg).size <= (num_classes or 10) and arg.ndim == 2
-
-    @staticmethod
-    def is_image(arg):  # specifies image format (RGB mapped to [-1, 1])
-        return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
-
-    @staticmethod
-    def is_gray_image(arg):  # specifies gray image format (grayscale mapped to [-1, 1])
-        return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 2
+        # TODO test memoized function attributes
 
     def __call__(self, **kwargs):
         # NB: only keyword arguments work with Features
-        if 'contour' in self.type_ and not self.is_contour(kwargs['contour']):
+        if 'contour' in self.type_ and not is_contour(kwargs['contour']):
             raise ValueError(f"Arguments do not contain contour-type input (f: {self.name})")
-        if 'mask' in self.type_ and not self.is_mask(kwargs['mask']):
+        if 'mask' in self.type_ and not is_mask(kwargs['mask']):
             raise ValueError(f"Arguments does not contain mask-type input (f: {self.name})")
-        if 'image' in self.type_ and not self.is_image(kwargs['image']):
+        if 'image' in self.type_ and not is_image(kwargs['image']):
             raise ValueError(f"Arguments does not contain image-type input (f: {self.name})")
-        if 'gray_image' in self.type_ and not self.is_gray_image(kwargs['gray_image']):
+        if 'gray_image' in self.type_ and not is_gray_image(kwargs['gray_image']):
             raise ValueError(f"Arguments does not contain grayscale image-type input (f: {self.name})")
         start_time = time.time()
         output = self.function(**kwargs)

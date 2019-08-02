@@ -3,12 +3,10 @@ import json
 import re
 import numpy as np
 import cv2
-from dzi_io.tile_generator import TileGenerator
+from image.dzi_io import TileGenerator
 from options.process_dzi_options import ProcessDZIOptions
-from utils.annotation_builder import AnnotationBuilder
-from utils.mask_converter import MaskConverter
-from utils import debug
-
+from annotation.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
 
 if __name__ == '__main__':
     opt = ProcessDZIOptions().parse()

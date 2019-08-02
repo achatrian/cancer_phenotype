@@ -32,7 +32,7 @@ class DeformingAEModel(BaseModel):
                 optim.Adam(self.netEncoders.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)),
                 optim.Adam(self.netDecoders.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             ]
-        self.input, self.target, self.output, self.image_paths = (None,)*4
+        self.input, self.mask, self.output, self.image_paths = (None,)*4
 
     def name(self):
         return "DeformingAEModel"
@@ -40,7 +40,27 @@ class DeformingAEModel(BaseModel):
     @staticmethod
     def modify_commandline_options(parser, is_train):
         # TODO complete
+        parser.add_argument('--latent_dim', type=int, default=128, help="dimensionality of general latent code (before disentangling)")
+        parser.add_argument('--warp_grid_dim', type=int, default=128, help="dimensionality of warping grid (deformation field) latent code")
+        parser.add_argument('--texture_dim', type=int, default=16, help="dimensionality of texture latent code")
+        parser.add_argument('--num_gen_filters', type=int, default=32, help="number of filters in generator")
+        parser.set_defaults(num_filters=32)  # set number of filters in discriminator
+        # defaults are for patch size = 64 (Korsuk used default parameters) # TODO scale up
         return parser
+    
+    def set_input(self, data):
+        # talk of mask rather than target, as target is input itself
+        self.input = data['input']  # 1
+        self.visual_paths = {'input': data['input_path'],
+                             'output': [''] * len(data['input_path'])}  # and 3 must be returned by dataset
+        if not self.opt.is_apply:
+            self.mask = data['mask']  # 2
+            if 'target_path' in data:
+                self.visual_paths['mask'] = data['target_path']  # 4 is optional, only for when available
+        if self.opt.gpu_ids and (self.input.device.type == 'cpu' or self.mask.device.type == 'cpu'):
+            self.input = self.input.cuda(device=self.device)
+            if not self.opt.is_apply:
+                self.mask = self.mask.cuda(device=self.device)
 
     def forward(self):
         dp0_img = utils.parseSampledDataPoint(self.input, self.opt.nc)

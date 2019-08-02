@@ -1,15 +1,11 @@
-import os
 import sys
 sys.path.extend(['../../..', '../../base'])
 from pathlib import Path
-import json
-import copy
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
-from base.utils.annotation_builder import AnnotationBuilder
-from quant import read_annotations, contour_to_mask, mark_point_on_mask
+from annotation.annotation_builder import AnnotationBuilder
+from annotation import contour_to_mask
 
 
 def test_merge_contours():

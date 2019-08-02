@@ -37,7 +37,7 @@ class BaseDeployer(mp.Process):
         if sentinel:
             for i in range(self.opt.ndeploy_workers):
                 queue.put(None)  # sentinel for workers to terminate
-            queue.join()
+        queue.join()
 
     def get_workers(self, model, input_queue, output_queue=None, sync=()):
         """
@@ -62,8 +62,9 @@ class BaseDeployer(mp.Process):
             workers.append(worker)
 
         # optional gather-worker to process outputs of workers
-        gatherer = mp.Process(target=self.gather, args=(self, output_queue, sync), name=self.worker_name + 'Gatherer', daemon=True)
-        workers.append(gatherer)
+        if self.opt.gatherer:
+            gatherer = mp.Process(target=self.gather, args=(self, output_queue, sync), name=self.worker_name + 'Gatherer', daemon=True)
+            workers.append(gatherer)
         return workers
 
     @staticmethod
@@ -85,7 +86,7 @@ class BaseDeployer(mp.Process):
         """
         pass
 
-    def cleanup(self, output):
+    def cleanup(self, output=None):
         """
         Abstract method, called to process all data at end (main process)
         :return:

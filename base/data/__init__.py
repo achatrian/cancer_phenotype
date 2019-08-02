@@ -1,7 +1,6 @@
 import importlib
 from torch.utils.data import DataLoader
 from .base_dataset import BaseDataset
-from . import wsi_reader  # to import when importing base
 from . import table_reader
 
 

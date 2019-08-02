@@ -8,7 +8,7 @@ from options.test_options import TestOptions
 from data import create_dataset, create_dataloader
 from models import create_model
 from utils.base_visualizer import save_images
-from utils import html, create_visualizer, utils
+from utils import html_, create_visualizer, utils
 r"Test script for network, aggregates results over whole validation dataset"
 
 if __name__ == '__main__':
@@ -28,7 +28,7 @@ if __name__ == '__main__':
     model.setup(dataset)
     # create a website
     web_dir = Path(opt.data_dir)/opt.experiment_name/f'{opt.phase}_{opt.load_epoch}'
-    webpage = html.HTML(str(web_dir), f'Experiment = {opt.experiment_name}, Phase = {opt.phase}, Epoch = {opt.load_epoch}')
+    webpage = html_.HTML(str(web_dir), f'Experiment = {opt.experiment_name}, Phase = {opt.phase}, Epoch = {opt.load_epoch}')
     if opt.eval:
         model.eval()
     print("Begin testing ...")

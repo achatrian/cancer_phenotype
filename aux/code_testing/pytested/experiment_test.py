@@ -1,7 +1,7 @@
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA, FastICA
+from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
-from quant.experiment import Experiment
+from annotation import Experiment
 
 
 def test_experiment():

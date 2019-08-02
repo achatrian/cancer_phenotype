@@ -50,9 +50,9 @@ if __name__ == '__main__':
                 for worker in workers:
                     if worker.name.endswith('Worker'):
                         worker.join()  # join before joining output queue
-
         if workers and workers[-1].name.endswith('Gatherer'):
             workers[-1].join()
+    deployer.cleanup()
 
 
 

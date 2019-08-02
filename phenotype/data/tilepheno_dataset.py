@@ -13,7 +13,7 @@ import imgaug as ia
 from tqdm import tqdm
 from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 from base.data.table_reader import TableReader
-from base.utils.annotation_builder import AnnotationBuilder
+from annotation.annotation_builder import AnnotationBuilder
 ia.seed(1)
 
 
@@ -286,9 +286,11 @@ class TilePhenoDataset(BaseDataset):
                 raise ValueError(f"Slide not in {'train' if self.opt.is_train else 'test'} split for {self.opt.split_file}")
         super().make_subset(self.opt.slide_id)
 
+
 # utils
 def question(data):
-    label = int(data['PTEN'] < 0)
+    # label = int(data['PTEN'] < 0)  # deep and shallow loss
+    label = int(data['PTEN'] == -2)  # only deep
     return label
 
 

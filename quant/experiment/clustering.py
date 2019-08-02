@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -7,14 +8,16 @@ from sklearn.ensemble import IsolationForest
 from skimage import transform, color
 import cv2
 import imageio
+from scipy.spatial.distance import cdist
 from . import Experiment
-from base.data.wsi_reader import WSIReader
+from image.wsi_reader import WSIReader
 
 
 class Clustering(Experiment):
-    def __init__(self, name, step_names, steps, outlier_removal=IsolationForest(), caching_path=None):
-        super().__init__(name, step_names, steps, outlier_removal, caching_path=None)
-        self.clusters = None
+    def __init__(self, name, step_names=(), steps=(), outlier_removal=IsolationForest(), caching_path=None, x=None,
+                 y=None, clusters=None):
+        super().__init__(name, step_names, steps, outlier_removal, caching_path=caching_path, x=x, y=y)
+        self.clusters = clusters
 
     def plot_clusters(self, colors=('b', 'g', 'r', 'c', 'm'), dim_reduction='PCA'):
         r"""Plot clusters for whole dataset. Assume y is vector of cluster indexes"""
@@ -29,24 +32,82 @@ class Clustering(Experiment):
             ix = np.where(cluster == self.y)[0]
             plt.scatter(x.iloc[ix, 0], x.iloc[ix, 1], color=colors[i])
 
-    def get_examples(self, data_dir=None, n_examples=5, mpp=0.2):
+    def get_examples(self, image_dir=None, n_examples=5, mpp=0.2, cluster_centers=None):
+        if self.x is None or self.y is None:
+            raise ValueError("Data has not been read / processed yet for cluster extraction")
+        if image_dir is None:
+            image_dir = Path(self.loaded_paths[0]).parents[2]
+            assert (image_dir / 'data').is_dir(), "image_dir should contain dir 'data'"
+        if self.clusters is None:
+            self.clusters = np.unique(self.y)
+        examples = []
+        for i, cluster in enumerate(tqdm(self.clusters, desc='clusters')):
+            x_cluster = self.x.iloc[(self.y == cluster).to_numpy().squeeze()]
+            examples.append([])
+            if cluster_centers is None:
+                sample_index = tuple(
+                    x_cluster.sample(n=n_examples, replace=False).index)  # randomly sample examples
+                if len(sample_index) < n_examples:
+                    sample_index = sample_index + sample_index[:n_examples]
+            else:
+                closest_points_indices = []  # list of lists, each list containing the index of a close point to one cluster
+                if isinstance(cluster_centers, np.ndarray) and cluster_centers.ndim == 2:
+                    dist = cdist(cluster_centers[i:i + 1, ...], x_cluster.to_numpy(), 'euclidean').squeeze()
+                    for n in range(n_examples):
+                        closest_points_indices.append(int(dist.argmin()))
+                        dist[closest_points_indices[-1]] = np.inf
+                elif len(cluster_centers) == len(self.clusters) and cluster_centers[0].ndim == 2:
+                    # case where cluster is described by multiple points (e.g. som + mc)
+                    cc = cluster_centers[i]  #
+                    dist = cdist(cc, x_cluster.to_numpy(), 'euclidean').squeeze()
+                    for n in range(n_examples):
+                        nn = n % min(n_examples, dist.shape[
+                            0])  # if there are more examples than cluster protoypes cycle through them
+                        closest_points_indices.append(int(dist[nn, ...].argmin()))
+                        dist[:, closest_points_indices[-1]] = np.inf  # make column corresponding to example nn infinite
+                else:
+                    raise ValueError("Invalid format for cluster_centers parameter")
+                if np.unique(closest_points_indices).size != len(closest_points_indices):
+                    warnings.warn(f"Only {np.unique(closest_points_indices).size} unique examples were found for cluster '{cluster}'")
+                sample_index = tuple(x_cluster.iloc[closest_points_indices].index)
+            for subset_id, bb_s in sample_index:
+                x, y, w, h = tuple(int(d) for d in bb_s.split('_'))
+                try:
+                    subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi']
+                                       if (image_dir / (subset_id + sfx)).is_file())
+                except StopIteration:
+                    raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an image file")
+                reader = WSIReader(file_name=str(subset_path))
+                image = np.array(reader.read_region((x, y), 0, (w, h)))  # changed level from None to 0 !!!
+                if image.shape[2] == 4:  # assume 4 channels images are RGBA
+                    image = color.rgba2rgb(image)
+                if image.max() <= 1.0 and image.min() >= 0.0:
+                    image = image * 255.0
+                image = image.astype(np.uint8)
+                examples[i].append(image)
+        return examples
+
+    def get_examples_per_subset(self, image_dir=None, n_examples=5, mpp=0.2, cluster_centers=None):
         r"""This methods assumes that the dataframe's index corresponds to the bounding box of tissue elements
+        :param image_dir
         :param n_examples: how many image examples to extract for image per cluster
         :param mpp:
+        :param cluster_centers: if not empty, examples that are closest to the cluster centers are taken
         """
         if self.x is None or self.y is None:
             raise ValueError("Data has not been read / processed yet for cluster extraction")
-        if data_dir is None:
-            data_dir = Path(self.loaded_paths[0]).parents[2]
-            assert (data_dir / 'data').is_dir(), "data_dir should contain dir 'data'"
-        self.clusters = np.unique(self.y)
+        if image_dir is None:
+            image_dir = Path(self.loaded_paths[0]).parents[2]
+            assert (image_dir / 'data').is_dir(), "image_dir should contain dir 'data'"
+        if self.clusters is None:
+            self.clusters = np.unique(self.y)
         examples = []
         for i, cluster in enumerate(tqdm(self.clusters, desc='clusters')):
             x_cluster = self.x.iloc[(self.y == cluster).to_numpy().squeeze()]
             examples.append(dict())
             for subset_id in tqdm(self.x.index.levels[0], desc='subsets'):
                 try:
-                    subset_path = next((data_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi'])
+                    subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi'])
                 except StopIteration:
                     raise ValueError(f"Data dir does not contain image for {subset_id}")
                 examples[i][subset_id] = []
@@ -56,8 +117,31 @@ class Clustering(Experiment):
                     x_subset = x_cluster.loc[subset_id]
                 except KeyError:
                     continue
-                sample = x_subset.sample(n=n_examples, replace=True)
-                for bb_s, row in sample.iterrows():
+                if cluster_centers is None:
+                    sample_index = tuple(
+                        x_subset.sample(n=n_examples, replace=False).index)  # randomly sample examples
+                    if len(sample_index) < n_examples:
+                        sample_index = sample_index + sample_index[:n_examples]
+                else:
+                    closest_points_indices = []  # list of lists, each list containing the index of a close point to one cluster
+                    if isinstance(cluster_centers, np.ndarray) and cluster_centers.ndim == 2:
+                        dist = cdist(cluster_centers[i:i + 1, ...], x_cluster.to_numpy(), 'euclidean').squeeze()
+                        for n in range(n_examples):
+                            closest_points_indices.append(int(dist.argmin()))
+                            dist[closest_points_indices[-1]] = np.inf
+                    elif len(cluster_centers) == len(self.clusters) and cluster_centers[0].ndim == 2:
+                        # case where cluster is described by multiple points (e.g. som + mc)
+                        cc = cluster_centers[i]  #
+                        dist = cdist(cc, x_cluster.to_numpy(), 'euclidean').squeeze()
+                        for n in range(n_examples):
+                            nn = n % min(n_examples, dist.shape[
+                                0])  # if there are more examples than cluster protoypes cycle through them
+                            closest_points_indices.append(int(dist[nn, ...].argmin()))
+                            dist[:, closest_points_indices[-1]] = np.inf  # make column corresponding to example nn infinite
+                    if np.unique(closest_points_indices).size != len(closest_points_indices):
+                        warnings.warn(f"Only {np.unique(closest_points_indices).size} unique examples were found for cluster '{cluster}' subset '{subset_id}'")
+                    sample_index = tuple(x_subset.iloc[closest_points_indices].index)
+                for bb_s in sample_index:
                     x, y, w, h = tuple(int(d) for d in bb_s.split('_'))
                     image = np.array(reader.read_region((x, y), 0, (w, h)))  # changed level from None to 0 !!!
                     if image.shape[2] == 4:  # assume 4 channels images are RGBA
@@ -68,7 +152,39 @@ class Clustering(Experiment):
                     examples[i][subset_id].append(image)
         return examples
 
-    def save_examples_grid(self, save_dir, examples, image_size=512):
+    def save_examples_grid(self, save_dir, examples, image_size=256):
+        r""""""
+        save_dir = Path(save_dir)
+        n_clusters = len(examples)
+        n_examples = len(examples[0])
+        print(f"n clusters: {n_clusters}")
+        grid = np.zeros((image_size * n_examples, image_size * n_clusters, 3))
+        for n in tqdm(range(n_examples)):
+            if n == 0:
+                print(f"Grid size: {grid.size}")
+            for j, cluster_examples in enumerate(examples):
+                example = np.array(cluster_examples[n])
+                max_dim = max(example.shape[:2])
+                padded = np.pad(example, (
+                    (0, max(0, max_dim - example.shape[0])),
+                    (0, max(0, max_dim - example.shape[1])),
+                    (0, 0)
+                ), 'constant')
+                resized = transform.resize(padded, output_shape=(image_size,) * 2)
+                resized = (resized * 255.0).astype(np.uint8)
+                grid[n * image_size:(n + 1) * image_size, j * image_size:(j + 1) * image_size] = resized
+                # TODO replace below with PIL utilities such as ImageFont and ImageDraw
+                cv2.putText(grid, f'{j}', (j * image_size, n * image_size), cv2.FONT_HERSHEY_SIMPLEX, 2,
+                            (255,) * 3)
+        imageio.imwrite(save_dir / f'examples_grid_{self.name}.png', grid)
+        with open(save_dir / 'details.json', 'w') as details_file:
+            json.dump({
+                'experiment_name': self.name,
+                'type': 'cluster_grid'
+            }, details_file)
+        print("Done!")
+
+    def save_subset_examples_grid(self, save_dir, examples, image_size=512):
         r""""""
         save_dir = Path(save_dir)
         n_clusters = len(examples)
@@ -92,6 +208,7 @@ class Clustering(Experiment):
                         resized = transform.resize(padded, output_shape=(image_size,)*2)
                         resized = (resized * 255.0).astype(np.uint8)
                         grid[i*image_size:(i+1)*image_size, j*image_size:(j+1)*image_size] = resized
+                        # TODO replace below with PIL utilities such as ImageFont and ImageDraw
                         cv2.putText(grid, f'{j}', (j*image_size, i*image_size), cv2.FONT_HERSHEY_SIMPLEX, 2, (255,)*3)
                     else:
                         print(f"No examples for cluster {j} in slide {subset_id}")
@@ -102,12 +219,13 @@ class Clustering(Experiment):
             if n_clusters > n_subsets * 2:
                 first_half, second_half = grid[:, :image_size*n_clusters//2], grid[:, image_size*n_clusters//2:]
                 grid = np.concatenate((first_half, second_half), axis=1)
-            imageio.imwrite(save_dir/f'grid{n}.png', grid)
-        with open(save_dir/'details.json', 'w') as details:
+            imageio.imwrite(save_dir/f'grid_{self.name}{n}.png', grid)
+        with open(save_dir/'details.json', 'w') as details_file:
             json.dump({
                 'experiment_name': self.name,
                 'files': list(examples[0].keys()),
-            }, details)
+                'type': 'cluster_subset_grid'
+            }, details_file)
         print("Done!")
 
 

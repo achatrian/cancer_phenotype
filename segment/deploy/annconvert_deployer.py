@@ -2,8 +2,8 @@ from pathlib import Path
 from numbers import Integral
 from queue import Empty
 from base.deploy.base_deployer import BaseDeployer
-from base.utils.mask_converter import MaskConverter
-from base.utils.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
+from annotation.annotation_builder import AnnotationBuilder
 from base.utils import utils
 # if __debug__:
 #     import matplotlib.pyplot as plt

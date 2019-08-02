@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
 import imageio
-from base.utils.mask_converter import MaskConverter
-from base.utils.annotation_builder import AnnotationBuilder
+from annotation.mask_converter import MaskConverter
+from annotation.annotation_builder import AnnotationBuilder
 
 converter = MaskConverter(min_contour_area=50000)
 aida_ann = AnnotationBuilder('17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi', 'test',

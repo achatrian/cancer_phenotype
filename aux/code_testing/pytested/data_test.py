@@ -1,5 +1,4 @@
 import sys
-import pytest
 import numpy as np
 import openslide
 import matplotlib.pyplot as plt
@@ -22,10 +21,10 @@ def test_is_HnE(wsi_file):
     axes[2].imshow(tile2)
     axes[3].imshow(tile3)
     plt.show()
-    is_hne0 = data.wsi_reader.is_HnE(tile0, slide.level_dimensions[0])
-    is_hne1 = data.wsi_reader.is_HnE(tile1, slide.level_dimensions[0])
-    is_hne2 = data.wsi_reader.is_HnE(tile2, slide.level_dimensions[0])
-    is_hne3 = data.wsi_reader.is_HnE(tile3, slide.level_dimensions[0])
+    is_hne0 = image.wsi_reader.is_HnE(tile0, slide.level_dimensions[0])
+    is_hne1 = image.wsi_reader.is_HnE(tile1, slide.level_dimensions[0])
+    is_hne2 = image.wsi_reader.is_HnE(tile2, slide.level_dimensions[0])
+    is_hne3 = image.wsi_reader.is_HnE(tile3, slide.level_dimensions[0])
     assert is_hne0 and is_hne1 and is_hne2 and is_hne3
 
 
@@ -34,7 +33,7 @@ def test_wsi_reader(apply_options, wsi_file):
     sys.argv.extend(['--data_dir=/home/sedm5660/Documents/Temp/Data/cancer_phenotype']),
     sys.argv.extend(['--dataset_name=wsi'])
     opt = apply_options.parse()
-    slide = data.wsi_reader.WSIReader(opt, wsi_file)
+    slide = image.wsi_reader.WSIReader(opt, wsi_file)
     slide.find_tissue_locations()
     assert len(slide) > 0
     print("{} tiles of shape {} passed quality control".format(len(slide), opt.patch_size))

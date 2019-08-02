@@ -9,13 +9,12 @@ import multiprocessing as mp
 import numpy as np
 import pandas as pd
 import tqdm
-from base.data.wsi_reader import WSIReader
+from image.wsi_reader import WSIReader
 from base.utils import utils
-from quant import read_annotations, annotations_summary, find_overlap, ContourProcessor
-from quant.features import region_properties, red_haralick, green_haralick, blue_haralick, gray_haralick, \
-    surf_points, gray_cooccurrence, orb_descriptor
-from quant.graph import HistoGraph
-
+from data.data import read_annotations, annotations_summary, find_overlap
+from data.contour_processor import ContourProcessor
+from quant.features import region_properties, gray_haralick, \
+    surf_points, gray_cooccurrence
 
 r"""Script with tasks to transform and crunch data"""
 

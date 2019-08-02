@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from base.utils.base_visualizer import BaseVisualizer, VisdomExceptionBase
-from base.utils import utils, html
+from base.utils import utils, html_
 
 
 class PhenotypeVisualizer(BaseVisualizer):
