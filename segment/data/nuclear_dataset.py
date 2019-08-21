@@ -83,7 +83,7 @@ class NuclearDataset(BaseDataset):
                 gt = cat[:, :, 3]
 
         if self.opt.patch_size > self.opt.fine_size:
-            # scale image
+            # scale images
             sizes = (self.opt.fine_size, ) * 2
             image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
             gt = cv2.resize(gt, sizes, interpolation=cv2.INTER_AREA)
@@ -101,7 +101,7 @@ class NuclearDataset(BaseDataset):
 
         # scale between 0 and 1
         image = image/255.0
-        # normalised image between -1 and 1
+        # normalised images between -1 and 1
         image = (image - 0.5)/0.5
 
         # convert to torch tensor

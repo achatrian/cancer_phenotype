@@ -73,9 +73,9 @@ class ImgDataset(Dataset):
         # scale between 0 and 1 and swap the dimension
         image = image.transpose(2, 0, 1) / 255.0
 
-        # normalised image between -1 and 1
-        # image = [np.expand_dims((img - 0.5)/0.5, axis=0) for img in image]
-        # image = np.concatenate(image, axis=0)
+        # normalised images between -1 and 1
+        # images = [np.expand_dims((img - 0.5)/0.5, axis=0) for img in images]
+        # images = np.concatenate(images, axis=0)
 
         # convert to torch tensor
         dtype = torch.FloatTensor
@@ -148,9 +148,9 @@ class ImgDatasetEval(Dataset):
         # scale between 0 and 1 and swap the dimension
         image = image.transpose(2, 0, 1) / 255.0
 
-        # normalised image between -1 and 1
-        # image = [np.expand_dims((img - 0.5)/0.5, axis=0) for img in image]
-        # image = np.concatenate(image, axis=0)
+        # normalised images between -1 and 1
+        # images = [np.expand_dims((img - 0.5)/0.5, axis=0) for img in images]
+        # images = np.concatenate(images, axis=0)
 
         # convert to torch tensor
         dtype = torch.FloatTensor
@@ -162,7 +162,7 @@ class ImgDatasetEval(Dataset):
 class Scale(object):
     """Rescales the input np.ndarray to the given 'size'.
     'size' will be the size of the smaller edge.
-    For example, if height > width, then image will be
+    For example, if height > width, then images will be
     rescaled to (size * height / width, size)
     size: size of the smaller edge
     interpolation: Default: cv.INTER_CUBIC
@@ -325,7 +325,7 @@ class RandomBlur(object):
             kernel_size = 19
             img = cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
 
-        return {'image': img, 'label': label}
+        return {'images': img, 'label': label}
 
 
 class Convert(object):

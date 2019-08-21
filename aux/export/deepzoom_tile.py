@@ -85,7 +85,7 @@ class TileWorker(Process):
 
 
 class DeepZoomImageTiler(object):
-    """Handles generation of tiles and metadata for a single image."""
+    """Handles generation of tiles and metadata for a single images."""
 
     def __init__(self, dz, basename, format, associated, queue):
         self._dz = dz
@@ -175,7 +175,7 @@ class DeepZoomStaticTiler(object):
         self._shutdown()
 
     def _run_image(self, associated=None):
-        """Run a single image from self._slide."""
+        """Run a single images from self._slide."""
         if associated is None:
             image = self._slide
             if self._with_viewer:
@@ -264,7 +264,7 @@ if __name__ == '__main__':
                 help='overlap of adjacent tiles [1]')
     parser.add_option('-f', '--format', metavar='{jpeg|png}', dest='format',
                 default='jpeg',
-                help='image format for tiles [jpeg]')
+                help='images format for tiles [jpeg]')
     parser.add_option('-j', '--jobs', metavar='COUNT', dest='workers',
                 type='int', default=4,
                 help='number of worker processes to start [4]')

@@ -75,7 +75,7 @@ class AreaTilesDataset(BaseDataset):
                 image = cat[:, :, 0:3]
                 gt = cat[:, :, 3]
                 random_cropped = True  # whether to add crop bias to offset in tile information below
-            # scale image
+            # scale images
             if self.opt.fine_size != self.opt.patch_size:
                 sizes = (self.opt.fine_size, ) * 2
                 image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
@@ -97,7 +97,7 @@ class AreaTilesDataset(BaseDataset):
             gt[np.logical_and(gt != 1, gt != 2)] = 0
         # scale between 0 and 1
         image = image/255.0
-        # normalised image between -1 and 1
+        # normalised images between -1 and 1
         image = (image - 0.5)/0.5
         # convert to torch tensor
         assert(image.shape[-1] == 3)

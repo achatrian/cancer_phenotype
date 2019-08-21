@@ -42,7 +42,7 @@ class MaskConverter:
         }
         self.label_options = label_options or {
             'epithelium': {'small_object_size': 1024*0.4},
-            'lumen': {'small_object_size': 256*0.4}
+            'lumen': {'small_object_size': 20}
         }
         assert set(self.label_value_map.keys()) == set(self.label_interval_map.keys()), 'inconsistent annotation classes'
         assert all(isinstance(t, tuple) and len(t) == 2 and t[0] <= t[1] for t in self.label_interval_map.values())
@@ -54,10 +54,10 @@ class MaskConverter:
         :param mask:
         :param x_offset:
         :param y_offset:
-        :param rescale_factor: rescale image before extracting contours - in case image was shrunk before being fed to segmenation network
+        :param rescale_factor: rescale images before extracting contours - in case images was shrunk before being fed to segmenation network
         :return:
         """
-        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label image
+        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label images
         if rescale_factor:
             mask = cv2.resize(mask.astype(np.uint8), dsize=None, fx=rescale_factor, fy=rescale_factor, interpolation=cv2.INTER_NEAREST)
         if mask.ndim < 3:
@@ -105,9 +105,9 @@ class MaskConverter:
         :param x_offset: x_offset offset
         :param y_offset: y_offset offset
         :param contour_approx_method: standard is method that yields the lowest number of points
-        :return: contours of objects in image
+        :return: contours of objects in images
         """
-        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label image
+        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label images
         if mask.ndim == 3:
             mask = mask[..., 0]
         if self.fix_ambiguity:
@@ -191,12 +191,12 @@ class MaskConverter:
         contour_shift = contour.squeeze() - np.array((x, y))  # shift so that contour is relative to (0,0)
         contour_shift = np.expand_dims(contour_shift, axis=1)
         masklet = mask[y:y + h, x:x + w]
-        # Create a mask image that contains the contour filled in
+        # Create a mask images that contains the contour filled in
         cimg = np.zeros((w, h))
         # print(contour_shift[0])
         cv2.drawContours(cimg, [contour_shift], 0, color=255,
                          thickness=-1)  # fills the whole area inside contour with colour
-        # Access the image pixels and create a 1D numpy array then add to list
+        # Access the images pixels and create a 1D numpy array then add to list
         pts = np.where(cimg == 255)
         values_within_contour = set(masklet[pts[0], pts[1]])
         mode_value = mode(masklet[pts[0], pts[1]])[0][0]
@@ -350,8 +350,8 @@ class MaskConverter:
     def remove_ambiguity(mask, dist_threshold=0.1, small_object_size=1024*0.4, final_closing_size=20,
                          final_dilation_size=2):
         r"""
-        Morphologically removes noise in the image and returns solid contours
-        :param mask: HxWx3 image with identical channels, or HxW image
+        Morphologically removes noise in the images and returns solid contours
+        :param mask: HxWx3 images with identical channels, or HxW images
         :param dist_threshold: multiplied by mode of peaks in distance transform -- e,g, 0.1 is 1/10 of the average peak
         :param small_object_size: objects smaller than this threshold will be removed from mask
         :param final_closing_size: size of kernel used for closing of holes in large glands
@@ -360,7 +360,7 @@ class MaskConverter:
         """
         mask = copy.deepcopy(mask)
         if mask.ndim == 3:
-            mask_1c = mask[..., 0]  # need to keep original mask as watershed wants 3 channels image
+            mask_1c = mask[..., 0]  # need to keep original mask as watershed wants 3 channels images
         else:
             mask_1c = mask
             mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
@@ -372,7 +372,7 @@ class MaskConverter:
         refined_bg = cv2.dilate(opening, kernel, iterations=3)
         # refine foreground area
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        # get mode of maxima in image, to use as reference for threshold (more invariant than absolute max in tile)
+        # get mode of maxima in images, to use as reference for threshold (more invariant than absolute max in tile)
         maxima = skimage.morphology.local_maxima(dist_transform, indices=True)
         maxima = np.stack(maxima, axis=0).T
         values_at_maxima = np.array(list(dist_transform[y, x] for y, x in maxima))
@@ -397,11 +397,14 @@ class MaskConverter:
         # filled holes if any in larger objects
         unambiguous = morphology.binary_fill_holes(unambiguous)
         # remove small objects
-        unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=small_object_size)
+        if small_object_size:
+            unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=small_object_size)
         # correct troughs left at gland boundaries in larger glands using closing
-        unambiguous = skimage.morphology.binary_closing(unambiguous, np.ones((final_closing_size,)*2))
+        if final_closing_size:
+            unambiguous = skimage.morphology.binary_closing(unambiguous, np.ones((final_closing_size,)*2))
         # dilate to ensure border was not chipped away by foreground selection above
-        unambiguous = skimage.morphology.binary_dilation(unambiguous, np.ones((final_dilation_size,)*2))
+        if final_dilation_size:
+            unambiguous = skimage.morphology.binary_dilation(unambiguous, np.ones((final_dilation_size,)*2))
         return unambiguous.astype(np.uint8)
 
     def value2label(self, value):

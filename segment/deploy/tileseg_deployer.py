@@ -71,7 +71,7 @@ class TileSegDeployer(BaseDeployer):
                 output_queue.put((contours, labels, boxes, (int(offset_x), int(offset_y)) + (opt.patch_size * rescale_factor,) * 2), timeout=opt.sync_timeout)
                 if opt.save_masks:
                     mask = utils.tensor2im(map_, segmap=True,
-                                           num_classes=converter.num_classes)  # transforms tensors into mask label image
+                                           num_classes=converter.num_classes)  # transforms tensors into mask label images
                     imageio.imwrite(save_path / f"{offset_x}_{offset_y}_{opt.experiment_name}.png", mask)
             num_images += data['input'].shape[0]
             if i % opt.print_freq == 0:

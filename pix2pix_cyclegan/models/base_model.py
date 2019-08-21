@@ -56,7 +56,7 @@ class BaseModel():
         with torch.no_grad():
             self.forward()
 
-    # get image paths
+    # get images paths
     def get_image_paths(self):
         return self.image_paths
 

@@ -45,7 +45,7 @@ if __name__ == '__main__':
                     tiff_store[y:y+args.tile_size, x:x+args.tile_size] = tile.astype(np.uint8)
             save_path = file_path.with_suffix('.tiff')
             imwrite(str(file_path.with_suffix('.tiff')), tiff_store, bigtiff=True)
-            print("Saved image #{} at {}".format(image_counter, str(save_path)))
+            print("Saved images #{} at {}".format(image_counter, str(save_path)))
             image_counter += 1
     ### programme ends here
     javabridge.kill_vm()

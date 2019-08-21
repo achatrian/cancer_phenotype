@@ -96,8 +96,8 @@ def __scale_width(img, target_width):
 
 def __print_size_warning(ow, oh, w, h):
     if not hasattr(__print_size_warning, 'has_printed'):
-        print("The image size needs to be a multiple of 4. "
-              "The loaded image size was (%d, %d), so it was adjusted to "
+        print("The images size needs to be a multiple of 4. "
+              "The loaded images size was (%d, %d), so it was adjusted to "
               "(%d, %d). This adjustment will be done to all images "
               "whose sizes are not multiples of 4" % (ow, oh, w, h))
         __print_size_warning.has_printed = True

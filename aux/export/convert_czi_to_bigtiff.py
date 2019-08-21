@@ -42,6 +42,6 @@ if __name__ == '__main__':
     imwrite(str(args.file_path.with_suffix('.tiff')), tiff_store, bigtiff=True)
     ### programme ends here
     javabridge.kill_vm()
-    print("Saved image at {}".format(str(save_path)))
+    print("Saved images at {}".format(str(save_path)))
 
 

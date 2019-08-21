@@ -9,7 +9,7 @@ import numpy as np
 from torchvision.transforms import ToTensor
 from .base_dataset import BaseDataset
 from utils import utils
-from image.wsi_reader import WSIReader
+from images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
 
 
@@ -31,7 +31,7 @@ class WSIDataset(BaseDataset):
         self.to_tensor = ToTensor()
         if self.opt.is_apply and self.opt.workers > 0:
             warnings.warn("WSIReader is subclassed from OpenSlide, which has ctypes objects containing pointers. Since these cannot be pickled, dataloader breaks.")
-        self.good_files = None  # used by set up to know which image files to index
+        self.good_files = None  # used by set up to know which images files to index
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
@@ -141,14 +141,14 @@ class WSIDataset(BaseDataset):
         tile = slide[tile_idx]
         tile = np.array(tile.convert('RGB'))  # if RGBA, convert to RGB
         tile = tile / 255.0  # scale between 0 and 1
-        tile = (tile - 0.5) / 0.5  # normalised image between -1 and 1
+        tile = (tile - 0.5) / 0.5  # normalised images between -1 and 1
         tile_loc = slide.tissue_locations[tile_idx]
         output = dict(input=self.to_tensor(tile).float(),
                       x_offset=tile_loc[0],
                       y_offset=tile_loc[1],
                       input_path=slide.file_name,
                       read_mpp=slide.read_mpp,
-                      base_mpp=float(slide.properties[slide.PROPERTY_NAME_MPP_X]))  # return image and relative location in slide
+                      base_mpp=float(slide.properties[slide.PROPERTY_NAME_MPP_X]))  # return images and relative location in slide
         return output
 
     def make_subset(self, selector='', selector_type='match', store_name='paths'):

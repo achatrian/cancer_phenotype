@@ -83,7 +83,7 @@ class waspIntrinsicComposer(nn.Module):
         self.img = torch.mul(self.shading, albedo)
         return self.img
 
-# warp image according to the grid
+# warp images according to the grid
 class waspWarper(nn.Module):
     def __init__(self, opt):
         super(waspWarper, self).__init__()

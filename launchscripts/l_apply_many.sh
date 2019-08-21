@@ -47,7 +47,6 @@ for SLIDEPATH in "${FILES[@]}"; do
         COUNTER=$((COUNTER+1))
     else
         # if iterating over dirs, look for images inside dirs
-        # TODO test
         for SUBPATH in SLIDEPATH/*; do
             SUBNAME=$(basename "${SLIDEPATH}") # get basename only
             if [[ $SUBNAME == *.ndpi ]]

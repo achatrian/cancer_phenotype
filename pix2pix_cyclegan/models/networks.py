@@ -232,7 +232,7 @@ class ResnetBlock(nn.Module):
 
 # Defines the Unet generator.
 # |num_downs|: number of downsamplings in UNet. For example,
-# if |num_downs| == 7, image of size 128x128 will become of size 1x1
+# if |num_downs| == 7, images of size 128x128 will become of size 1x1
 # at the bottleneck
 class UnetGenerator(nn.Module):
     def __init__(self, input_nc, output_nc, num_downs, ngf=64,

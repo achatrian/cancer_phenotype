@@ -7,7 +7,7 @@ from pandas import DataFrame
 from scipy.spatial import distance
 from skimage import color
 
-from data.data import contours_to_multilabel_masks, get_contour_image
+from data.__init__ import contours_to_multilabel_masks, get_contour_image
 
 
 class ContourProcessor:
@@ -32,7 +32,7 @@ class ContourProcessor:
         self.features = features
         self.reader = reader
         # check that features have at least one of the input types
-        sufficient_args = {'contour', 'mask', 'image', 'gray_image'}
+        sufficient_args = {'contour', 'mask', 'images', 'gray_image'}
         description = []
         for feature in features:
             if feature.type_.isdisjoint(sufficient_args):
@@ -65,12 +65,12 @@ class ContourProcessor:
             return None, None, None
         self.indices.add(index)
         gray_image = color.rgb2gray(image.astype(np.float)).astype(np.uint8)
-        # TODO compute features on resized image too ?
+        # TODO compute features on resized images too ?
         # scale between 0 and 1
-        # image = image / 255.0
+        # images = images / 255.0
         # gray_image = gray_image / 255.0
-        # normalise image between -1 and 1
-        # image = (image - 0.5) / 0.5
+        # normalise images between -1 and 1
+        # images = (images - 0.5) / 0.5
         # gray_image = (gray_image - 0.5) / 0.5
         features = []
         for feature in self.features:
@@ -79,8 +79,8 @@ class ContourProcessor:
                 kwargs['contour'] = contour
             if 'mask' in feature.type_:
                 kwargs['mask'] = mask
-            if 'image' in feature.type_:
-                kwargs['image'] = image
+            if 'images' in feature.type_:
+                kwargs['images'] = image
             if 'gray_image' in feature.type_:
                 kwargs['gray_image'] = gray_image
             if 'label' in feature.type_:

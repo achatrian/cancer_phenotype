@@ -48,7 +48,7 @@ class PhenotypeVisualizer(BaseVisualizer):
                     prediction_html += f'<tr>{prediction_html_row}</tr>'
                     target_html += f'<tr>{target_html_row}</tr>'
                     path_html_row += f'<tr>{path_html_row}</tr>'
-                # pane col = image row
+                # pane col = images row
                 assert all([images[0].shape == image.shape for image in images]), "Ensure all images have same shape"
                 try:
                     self.vis.images(images, nrow=ncols, win=self.display_id + 2,
@@ -72,8 +72,8 @@ class PhenotypeVisualizer(BaseVisualizer):
         #         webpage.add_header('epoch [%d]' % n)
         #         ims, txts, links = [], [], []
         #
-        #         for label, image in visuals.items():
-        #             # image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
+        #         for label, images in visuals.items():
+        #             # image_numpy = utils.tensor2im(images[0, ...], label.endswith("_map"))
         #             img_path =  'epoch{:.3f}_{}.png'.format(n, label)
         #             ims.append(img_path)
         #             txts.append(label)

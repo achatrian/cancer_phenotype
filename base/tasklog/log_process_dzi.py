@@ -18,7 +18,7 @@ def completion_test(image_path, tasklog):
     try:
         target_dzi = DZI_IO(str(dzi_dir/target_path))
     except FileNotFoundError:
-        return CheckResult(str(target_path.name), False, None, 'Target file is incomplete', None)
+        return CheckResult(str(source_name), False, None, 'Target file is incomplete', None)
     progress = target_dzi.level_count / (source_dzi.level_count - 1)  # high res level is discarded
     outcome = progress == 1.0
     return CheckResult(str(source_name), outcome, progress, '', None)

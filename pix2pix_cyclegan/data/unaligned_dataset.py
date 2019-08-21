@@ -50,9 +50,9 @@ class UnalignedDataset(BaseDataset):
                     shear=(-16, 16),  # shear by -16 to +16 degrees
                     order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
                     cval=(0, 255),  # if mode is constant, use a cval between 0 and 255
-                    mode="reflect"  # use any of scikit-image's warping modes (see 2nd image from the top for examples)
+                    mode="reflect"  # use any of scikit-images's warping modes (see 2nd images from the top for examples)
                 )),
-                # execute 0 to 5 of the following (less important) augmenters per image
+                # execute 0 to 5 of the following (less important) augmenters per images
                 # don't execute all of them, as that would often be way too strong
                 iaa.SomeOf((0, 5),
                            [  # convert images into their superpixel representation
@@ -61,15 +61,15 @@ class UnalignedDataset(BaseDataset):
                                                     iaa.GaussianBlur((0, 3.0)),
                                                     # blur images with a sigma between 0 and 3.0
                                                     iaa.AverageBlur(k=(2, 7)),
-                                                    # blur image using local means with kernel sizes between 2 and 7
+                                                    # blur images using local means with kernel sizes between 2 and 7
                                                     iaa.MedianBlur(k=(3, 11)),
-                                                    # blur image using local medians with kernel sizes between 2 and 7
+                                                    # blur images using local medians with kernel sizes between 2 and 7
                                                 ])),
                                iaa.WithChannels([0, 1, 2], iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5))),
                                # sharpen images
                                iaa.WithChannels([0, 1, 2], iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0))),  # emboss images
                                # search either for all edges or for directed edges,
-                               # blend the result with the original image using a blobby mask
+                               # blend the result with the original images using a blobby mask
                                iaa.WithChannels([0, 1, 2], iaa.SimplexNoiseAlpha(iaa.OneOf([
                                    iaa.EdgeDetect(alpha=(0.5, 1.0)),
                                    iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
@@ -85,7 +85,7 @@ class UnalignedDataset(BaseDataset):
                                # change brightness of images (by -10 to 10 of original value)
                                iaa.WithChannels([0, 1, 2], iaa.AddToHueAndSaturation((-20, 20))),
                                # change hue and saturation
-                               # either change the brightness of the whole image (sometimes
+                               # either change the brightness of the whole images (sometimes
                                # per channel) or change the brightness of subareas
                                iaa.WithChannels([0, 1, 2], iaa.OneOf([
                                    iaa.Multiply((0.5, 1.5), per_channel=0.5),
@@ -99,7 +99,7 @@ class UnalignedDataset(BaseDataset):
                                iaa.WithChannels([0, 1, 2], iaa.Grayscale(alpha=(0.0, 1.0))),
                                # move pixels locally around (with random strengths)
                                sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
-                               # sometimes move parts of the image around
+                               # sometimes move parts of the images around
                                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
                            ],
                            random_order=True

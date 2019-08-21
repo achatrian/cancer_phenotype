@@ -15,6 +15,8 @@ if __name__ == '__main__':
     split_counts = dict()
     for path in args.review_dir.iterdir():
         match = split_pattern.search(path.name)
+        if match is None:
+            continue
         slide_id = path.name.replace(match.group(), '')  # remove split number
         slide_ids.add(slide_id)
         if slide_id not in split_counts:

@@ -7,14 +7,14 @@ import cv2
 import numpy as np
 import imageio
 from tqdm import tqdm
-from image.wsi_reader import WSIReader
-from data.data import read_annotations, get_contour_image
+from images.wsi_reader import WSIReader
+from data.__init__ import read_annotations, get_contour_image
 from data.instance_masker import InstanceMasker
 # from dzi_io.dzi_io import DZI_IO
 
 
 class InstanceTileExporter:  # TODO test
-    r"""Extract tiles centered around image component instances"""
+    r"""Extract tiles centered around images component instances"""
     def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2, max_num_tiles=np.inf,
                  label_values = (('epithelium', 200), ('lumen', 250))):
         self.data_dir = Path(data_dir)

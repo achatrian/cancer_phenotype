@@ -292,23 +292,23 @@ def colorize(gt):
     return gt_colorimg
 
 
-# Converts a Tensor into an image array (numpy)
+# Converts a Tensor into an images array (numpy)
 # |imtype|: the desired type of the converted numpy array
 def tensor2im(input_image, segmap=False, num_classes=3, imtype=np.uint8, visual=True):
     r"""
-    Converts image to tensor for visualisation purposes
+    Converts images to tensor for visualisation purposes
     :param input_image:
     :param segmap:
     :param num_classes
     :param imtype:
     :param visual: whether output is destined for visualization or processing (3c vs 1c)
-    :return: image
+    :return: images
     """
     if isinstance(input_image, torch.Tensor):
         image_tensor = input_image.data
     else:
         return input_image
-    image_numpy = image_tensor.cpu().float().numpy()  # taking the first image only NO MORE
+    image_numpy = image_tensor.cpu().float().numpy()  # taking the first images only NO MORE
     if image_numpy.shape[0] == 1:
         image_numpy = np.tile(image_numpy, (3, 1, 1))
 
@@ -324,7 +324,7 @@ def tensor2im(input_image, segmap=False, num_classes=3, imtype=np.uint8, visual=
 
 def segmap2img(segmap, num_classes=None):
     """
-    color coding segmap into an image
+    color coding segmap into an images
     """
     if len(segmap.shape) > 2:
         # multichannel segmap, one channel per class
@@ -340,7 +340,7 @@ def segmap2img(segmap, num_classes=None):
         elif segmap.shape[2] == 2:
             image[image == 1] = 250
         else:
-            raise ValueError("Conversion of map to image not supported for shape {}".format(segmap.shape))
+            raise ValueError("Conversion of map to images not supported for shape {}".format(segmap.shape))
     elif num_classes:
         num_labels = len(np.unique(segmap))
         if num_labels > num_classes:
@@ -382,7 +382,7 @@ def img2segmap(gts, return_tensors=False, size=128):
         gts = gts.cpu().numpy()
     if gts.ndim == 3:
         gts = gts.transpose(1, 2, 0)
-        gts = [gts]  # to make function work for single image too
+        gts = [gts]  # to make function work for single images too
     else:
         gts = gts.transpose(0, 2, 3, 1)
 
@@ -699,13 +699,13 @@ from torchvision import models
 
 def convert_to_grayscale(im_as_arr):
     """
-        Converts 3d image to grayscale
+        Converts 3d images to grayscale
 
     Args:
-        im_as_arr (numpy arr): RGB image with shape (D,W,H)
+        im_as_arr (numpy arr): RGB images with shape (D,W,H)
 
     returns:
-        grayscale_im (numpy_arr): Grayscale image with shape (1,W,D)
+        grayscale_im (numpy_arr): Grayscale images with shape (1,W,D)
     """
     grayscale_im = np.sum(np.abs(im_as_arr), axis=0)
     im_max = np.percentile(grayscale_im, 99)
@@ -717,7 +717,7 @@ def convert_to_grayscale(im_as_arr):
 
 def save_gradient_images(gradient, file_path):
     """
-        Exports the original gradient image
+        Exports the original gradient images
 
     Args:
         gradient (np arr): Numpy array of the gradient with shape (3, 224, 224)
@@ -727,7 +727,7 @@ def save_gradient_images(gradient, file_path):
     # Normalize
     gradient = gradient - gradient.min()
     gradient /= gradient.max()
-    # Save image
+    # Save images
     file_path = Path(file_path).with_suffix('.png')
     mkdir(file_path.parent)
     save_image(gradient, file_path)
@@ -735,12 +735,12 @@ def save_gradient_images(gradient, file_path):
 
 def save_class_activation_images(org_img, activation_map, file_name):
     """
-        Saves cam activation map and activation map on the original image
+        Saves cam activation map and activation map on the original images
 
     Args:
-        org_img (PIL example_grid): Original image
+        org_img (PIL example_grid): Original images
         activation_map (numpy arr): Activation map (grayscale) 0-255
-        file_name (str): File name of the exported image
+        file_name (str): File name of the exported images
     """
     if not os.path.exists('../results'):
         os.makedirs('../results')
@@ -764,16 +764,16 @@ def save_class_activation_images(org_img, activation_map, file_name):
 
 def apply_colormap_on_image(org_im, activation, colormap_name):
     """
-        Apply heatmap on image
+        Apply heatmap on images
     Args:
-        org_img (PIL example_grid): Original image
+        org_img (PIL example_grid): Original images
         activation_map (numpy arr): Activation map (grayscale) 0-255
         colormap_name (str): Name of the colormap
     """
     # Get colormap
     color_map = mpl_color_map.get_cmap(colormap_name)
     no_trans_heatmap = color_map(activation)
-    # Change alpha channel in colormap to make sure original image is displayed
+    # Change alpha channel in colormap to make sure original images is displayed
     heatmap = copy.copy(no_trans_heatmap)
     heatmap[:, :, 3] = 0.4
     heatmap = Image.fromarray((heatmap*255).astype(np.uint8))
@@ -788,12 +788,12 @@ def apply_colormap_on_image(org_im, activation, colormap_name):
 
 def save_image(im, path):
     """
-        Saves a numpy matrix of shape D(1 or 3) x W x H as an image
+        Saves a numpy matrix of shape D(1 or 3) x W x H as an images
     Args:
         im_as_arr (Numpy array): Matrix of shape DxWxH
-        path (str): Path to the image
+        path (str): Path to the images
 
-    TODO: Streamline image saving, it is ugly.
+    TODO: Streamline images saving, it is ugly.
     """
     if isinstance(im, np.ndarray):
         if len(im.shape) == 2:
@@ -801,8 +801,8 @@ def save_image(im, path):
             print('A')
             print(im.shape)
         if im.shape[0] == 1:
-            # Converting an image with depth = 1 to depth = 3, repeating the same values
-            # For some reason PIL complains when I want to save channel image as jpg without
+            # Converting an images with depth = 1 to depth = 3, repeating the same values
+            # For some reason PIL complains when I want to save channel images as jpg without
             # additional format in the .save()
             print('B')
             im = np.repeat(im, 3, axis=0)
@@ -814,14 +814,14 @@ def save_image(im, path):
         elif im.shape[0] == 3 and np.max(im) > 1:
             im = im.transpose(1, 2, 0)
         else:
-            raise ValueError(f"Invalid array dimensions {im.shape} for image data")
+            raise ValueError(f"Invalid array dimensions {im.shape} for images data")
         im = Image.fromarray(im.astype(np.uint8))
     im.save(path)
 
 
 def preprocess_image(pil_im, resize_im=True):
     """
-        Processes image for CNNs
+        Processes images for CNNs
 
     Args:
         PIL_img (PIL_img): Image to process
@@ -832,7 +832,7 @@ def preprocess_image(pil_im, resize_im=True):
     # mean and std list for channels (Imagenet)
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
-    # Resize image
+    # Resize images
     if resize_im:
         pil_im.thumbnail((512, 512))
     im_as_arr = np.float32(pil_im)
@@ -857,7 +857,7 @@ def recreate_image(im_as_var):
     Args:
         im_as_var (torch variable): Image to recreate
     returns:
-        recreated_im (numpy arr): Recreated image in array
+        recreated_im (numpy arr): Recreated images in array
     """
     reverse_mean = [-0.485, -0.456, -0.406]
     reverse_std = [1/0.229, 1/0.224, 1/0.225]

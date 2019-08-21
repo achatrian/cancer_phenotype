@@ -9,9 +9,9 @@ import multiprocessing as mp
 import numpy as np
 import pandas as pd
 import tqdm
-from image.wsi_reader import WSIReader
+from images.wsi_reader import WSIReader
 from base.utils import utils
-from data.data import read_annotations, annotations_summary, find_overlap
+from data.__init__ import read_annotations, annotations_summary, find_overlap
 from data.contour_processor import ContourProcessor
 from quant.features import region_properties, gray_haralick, \
     surf_points, gray_cooccurrence
@@ -20,7 +20,7 @@ r"""Script with tasks to transform and crunch data"""
 
 
 def extract_features(annotation_path, feature_dir, contour_struct, label_values, args):
-    r"""Quantify features from one annotated image. Used in quantify()"""
+    r"""Quantify features from one annotated images. Used in quantify()"""
     logger = logging.getLogger(__name__)
     opt = WSIReader.get_reader_options(include_path=False)
     slide_id = annotation_path.name[:-5]
@@ -62,7 +62,7 @@ def extract_features(annotation_path, feature_dir, contour_struct, label_values,
 
 def quantify(args):
     r"""Task: Extract features from annotated images in data dir"""
-    print(f"Quantifying annotated image data in {str(args.data_dir)} (workers = {args.workers}) ...")
+    print(f"Quantifying annotated images data in {str(args.data_dir)} (workers = {args.workers}) ...")
     contour_struct = read_annotations(args.data_dir)
     annotations_summary(contour_struct)
     logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ def merge_features(args):
     print("Combined feature file was saved ...")
     # with open(feature_dir/'combined'/'image_data.json', 'w') as image_data_file:
     #     json.dump(image_data, image_data_file)
-    # print("Combined image data was saved ...")
+    # print("Combined images data was saved ...")
     # with open(feature_dir/'combined'/'distances.json', 'w') as distances_file:
     #     json.dump(distances, distances_file)
     # print("Combined distance data was saved ...")
@@ -145,7 +145,7 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest='task', help="Name of task to perform")
     parser_quantify = subparsers.add_parser('quantify')
     parser_quantify.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
-    parser_quantify.add_argument('--slide_format', type=str, default='.ndpi', help="Format of file to extract image data from (with openslide)")
+    parser_quantify.add_argument('--slide_format', type=str, default='.ndpi', help="Format of file to extract images data from (with openslide)")
     parser_quantify.add_argument('--workers', type=int, default=4, help="Number of processes used in parallelized tasks")
     parser_quantify.add_argument('--overwrite', action='store_true', help="Whether to overwrite existing feature files")
     parser_merge_features = subparsers.add_parser('merge_features')

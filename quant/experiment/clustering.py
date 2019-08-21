@@ -10,7 +10,7 @@ import cv2
 import imageio
 from scipy.spatial.distance import cdist
 from . import Experiment
-from image.wsi_reader import WSIReader
+from images.wsi_reader import WSIReader
 
 
 class Clustering(Experiment):
@@ -76,7 +76,7 @@ class Clustering(Experiment):
                     subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi']
                                        if (image_dir / (subset_id + sfx)).is_file())
                 except StopIteration:
-                    raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an image file")
+                    raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an images file")
                 reader = WSIReader(file_name=str(subset_path))
                 image = np.array(reader.read_region((x, y), 0, (w, h)))  # changed level from None to 0 !!!
                 if image.shape[2] == 4:  # assume 4 channels images are RGBA
@@ -90,7 +90,7 @@ class Clustering(Experiment):
     def get_examples_per_subset(self, image_dir=None, n_examples=5, mpp=0.2, cluster_centers=None):
         r"""This methods assumes that the dataframe's index corresponds to the bounding box of tissue elements
         :param image_dir
-        :param n_examples: how many image examples to extract for image per cluster
+        :param n_examples: how many images examples to extract for images per cluster
         :param mpp:
         :param cluster_centers: if not empty, examples that are closest to the cluster centers are taken
         """
@@ -109,7 +109,7 @@ class Clustering(Experiment):
                 try:
                     subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi'])
                 except StopIteration:
-                    raise ValueError(f"Data dir does not contain image for {subset_id}")
+                    raise ValueError(f"Data dir does not contain images for {subset_id}")
                 examples[i][subset_id] = []
                 opt = WSIReader.get_reader_options(include_path=False)
                 reader = WSIReader(opt, subset_path)

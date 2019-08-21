@@ -15,7 +15,7 @@ else:
     VisdomExceptionBase = ConnectionError
 
 
-# save image to the disk
+# save images to the disk
 def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
     image_dir = webpage.get_image_dir()
     short_path = ntpath.basename(image_path[0])
@@ -26,7 +26,7 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
 
     for label, im_data in visuals.items():
         if not label.endswith('label'):
-            im = utils.tensor2im(im_data[0], label.endswith("_map"))  # saving the first image
+            im = utils.tensor2im(im_data[0], label.endswith("_map"))  # saving the first images
             image_name = '%s_%s.png' % (name, label)
             save_path = os.path.join(image_dir, image_name)
             h, w, _ = im.shape

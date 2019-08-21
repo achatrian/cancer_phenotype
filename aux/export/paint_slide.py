@@ -8,7 +8,7 @@ import pandas as pd
 from skimage import transform
 from matplotlib import cm
 from tqdm import tqdm
-from image.wsi_reader import WSIReader
+from images.wsi_reader import WSIReader
 from base.data.base_dataset import CenterCrop
 
 if __name__ == '__main__':
@@ -18,7 +18,7 @@ if __name__ == '__main__':
     parser.add_argument('--export_level', type=int, default=3)
     parser.add_argument('--export_dir', type=Path, default='/well/rittscher/users/achatrian/temp')
     parser.add_argument('--blend_alpha', type=float, default=0.5)
-    parser.add_argument('--max_save_side', type=int, default=4096, help="Longest side of saved image will be equal or less than this")
+    parser.add_argument('--max_save_side', type=int, default=4096, help="Longest side of saved images will be equal or less than this")
     parser.add_argument('--fit_type', type=str, default='rescale', choices=['rescale', 'crop'])
     args = parser.parse_args()
     assert args.labels_path.suffix == '.h5'
@@ -52,7 +52,7 @@ if __name__ == '__main__':
         blend = np.array(Image.blend(
             Image.fromarray(image),
             Image.fromarray(color_mask),
-            alpha=args.blend_alpha))  # blend tissue image with color mask
+            alpha=args.blend_alpha))  # blend tissue images with color mask
         cluster_map[yd:yd+hd, xd:xd+wd] = blend
     if cluster_map.shape[0] > args.max_save_side or cluster_map.shape[1] > args.max_save_side:
         if args.fit_type == 'rescale':

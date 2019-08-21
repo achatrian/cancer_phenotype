@@ -22,7 +22,7 @@ class UNetModel(BaseModel):
                             ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             ['dice{}'.format(c) for c in range(self.opt.num_class)]
         self.visual_names = ["input", "output", "target"]
-        self.visual_types = ["image", "map", "map"]
+        self.visual_types = ["images", "map", "map"]
         if self.is_train:
             self.optimizers = [torch.optim.Adam([
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] == 'bias'],

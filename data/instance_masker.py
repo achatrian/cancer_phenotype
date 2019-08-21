@@ -3,7 +3,7 @@ from typing import Union
 
 import numpy as np
 
-from data.data import contour_to_mask, find_overlap
+from data.__init__ import contour_to_mask, find_overlap
 
 
 class InstanceMasker:

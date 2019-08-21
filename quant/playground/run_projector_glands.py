@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from skimage import color
 from quant.experiment import Experiment
-from image.wsi_reader import WSIReader
+from images.wsi_reader import WSIReader
 
 
 if __name__ == '__main__':
@@ -58,7 +58,7 @@ def make_thumbnail(img, gt, th_size, label=None):
     :param label:
     :return: thumbnail
 
-    Generate thumbnail of required size given an image, taking into account different gland sizes
+    Generate thumbnail of required size given an images, taking into account different gland sizes
     If label is given, colour the background with the label of specific classes
     """
 
@@ -101,7 +101,7 @@ def make_thumbnail_fullcut(img, gt, th_size, label=None):
     :param label:
     :return: thumbnail
 
-    Generate thumbnail of required size given an image, taking into account different gland sizes
+    Generate thumbnail of required size given an images, taking into account different gland sizes
     If label is given, colour the background with the label of specific classes
     """
 
@@ -160,7 +160,7 @@ def make_thumbnail_fullcut(img, gt, th_size, label=None):
 
 
 def create_sprite_image(images):
-    """Returns a sprite image consisting of images passed as argument. Images should be count x width x height"""
+    """Returns a sprite images consisting of images passed as argument. Images should be count x width x height"""
     if isinstance(images, list):
         images = np.array(images)
     img_h = images.shape[1]
@@ -181,7 +181,7 @@ def create_sprite_image(images):
 
 def write_metadata(filename, labels):
     """
-            Create a metadata file image consisting of sample indices and labels
+            Create a metadata file images consisting of sample indices and labels
             :param filename: name of the file to save on disk
             :param shape: tensor of labels
     """

@@ -10,7 +10,7 @@ import tqdm
 from options.process_dzi_options import ProcessDZIOptions
 from models import create_model
 from utils.utils import tensor2im
-from image.dzi_io import TileGenerator
+from images.dzi_io.tile_generator import TileGenerator
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter
 
@@ -18,7 +18,7 @@ from annotation.mask_converter import MaskConverter
 def process_image(image, input_path, model):
     # scale betwesen 0 and 1
     image = image / 255.0
-    # normalised image between -1 and 1
+    # normalised images between -1 and 1
     image = (image - 0.5) / 0.5
     # convert to torch tensor
     assert (image.shape[-1] == 3)
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     # biggest contour is used to select the area to process
     area_contour = max((contour for contour in contours), key=cv2.contourArea)  
     # read downsampled region corresponding to tumour area annotation and extract contours
-    rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original image
+    rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original images
     x, y, w, h = cv2.boundingRect(area_contour)
     # if base layer is not copied from mask, need to read at half the origin as mask dimensions will be halved
     x_read = x if mask_dzi.width == original_dzi.width else int(x / rescale_factor)

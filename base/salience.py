@@ -48,7 +48,7 @@ if __name__ == '__main__':
             class_prob = confidence_probs[target]
             if not isinstance(target, Integral) or target < 0:
                 raise ValueError(f"Targets must be positive integers (type: {type(target)})")
-            # image id is its coordinate tuple relative to slide origin (hence it is hashable)
+            # images id is its coordinate tuple relative to slide origin (hence it is hashable)
             example_id = (data['x_offset'][i].cpu().numpy().item(), data['y_offset'][i].cpu().numpy().item())
             examples_confidence[example_id] = (confidence_probs, target)
             example = data['input'][i]

@@ -3,7 +3,7 @@ import json
 import re
 import numpy as np
 import cv2
-from image.dzi_io import TileGenerator
+from images.dzi_io.tile_generator import TileGenerator
 from options.process_dzi_options import ProcessDZIOptions
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter
@@ -22,7 +22,7 @@ if __name__ == '__main__':
                                                original_dzi.properties['mpp'] - opt.mpp)))
     converted_level = int(np.argmin(np.absolute(np.power(2, np.arange(0, 6)) *
                                                 mask_dzi.properties['mpp'] - opt.mpp)))  # relative to lev
-    rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original image
+    rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original images
     slide_id = Path(source_file).name[:-4]  # remove .dzi extension
     # read tumour area annotation
     with open(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /

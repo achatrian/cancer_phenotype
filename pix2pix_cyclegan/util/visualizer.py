@@ -14,7 +14,7 @@ else:
     VisdomExceptionBase = ConnectionError
 
 
-# save image to the disk
+# save images to the disk
 def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
     image_dir = webpage.get_image_dir()
     short_path = ntpath.basename(image_path[0])
@@ -101,7 +101,7 @@ class Visualizer():
                     idx += 1
                 if label_html_row != '':
                     label_html += '<tr>%s</tr>' % label_html_row
-                # pane col = image row
+                # pane col = images row
                 assert all([images[0].shape == image.shape for image in images]); "Ensure all images have same shape"
                 try:
                     self.vis.images(images, nrow=ncols, win=self.display_id + 1,

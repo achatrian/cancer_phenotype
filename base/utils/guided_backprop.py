@@ -11,7 +11,7 @@ from utils import utils
 
 class GuidedBackprop():
     """
-       Produces gradients generated with guided back propagation from the given image
+       Produces gradients generated with guided back propagation from the given images
     """
     def __init__(self, net, first_layer_name='features'):
         self.net = net
@@ -65,7 +65,7 @@ class GuidedBackprop():
             input_image = input_image.cuda()
         if input_image.dim() == 3:
             input_image = input_image.unsqueeze(0)  # add batch channel
-        input_image.requires_grad = True  # needed for gradient propagation to continue on image
+        input_image.requires_grad = True  # needed for gradient propagation to continue on images
         input_image.retain_grad()
         # Forward pass
         net_output = self.net(input_image)

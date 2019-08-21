@@ -17,7 +17,7 @@ class ResNetModel(BaseModel):
                             # ['acc{}'.format(c) for c in range(self.opt.num_class)] + \
                             # ['dice{}'.format(c) for c in range(self.opt.num_class)]
         self.visual_names = ["input"]
-        self.visual_types = ["image"]
+        self.visual_types = ["images"]
 
         if self.is_train:
             self.optimizers = [torch.optim.Adam([

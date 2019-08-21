@@ -44,7 +44,7 @@ class SegmentVisualizer(BaseVisualizer):
                 if label_html_row != '':
                     label_html += f'<tr>{label_html_row}</tr>'
                     path_html += f'<tr>{path_html_row}</tr>'
-                # pane col = image row
+                # pane col = images row
                 assert all([images[0].shape == image.shape for image in images]);
                 "Ensure all images have same shape"
                 try:

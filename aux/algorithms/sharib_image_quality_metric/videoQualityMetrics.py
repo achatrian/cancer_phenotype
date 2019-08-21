@@ -30,8 +30,8 @@ def vifp_mscale(ref, dist):
     '''This software release consists of a MULTISCALE PIXEL DOMAIN, SCALAR GSM implementation of the algorithm described in the paper:
     H. R. Sheikh and A. C. Bovik, "Image Information and Visual Quality"., IEEE Transactions on Image Processing, (to appear).
     Download manuscript draft from http://live.ece.utexas.edu in the Publications link.
-    Input : (1) img1: The reference image as a matrix
-            (2) img2: The distorted image (order is important)
+    Input : (1) img1: The reference images as a matrix
+            (2) img2: The distorted images (order is important)
     Output: (1) VIF the visual information fidelity measure between the two images
     Default Usage:
         Given 2 test images img1 and img2, whose dynamic range is 0-255
@@ -91,7 +91,7 @@ import scipy.ndimage.filters
 
 """
 RECO: Relative Polar Edge Coherence
-An excellent reduced-reference metric (need just one number from the source image to compare with).
+An excellent reduced-reference metric (need just one number from the source images to compare with).
 This implementation follows closely the notation and terminology in the original paper, except that some of the kernels are reflected
 (probably due to y axis pointing down rather than up in images).
 Cite:
@@ -121,7 +121,7 @@ def Laguerre_Gauss_Circular_Harmonic_1_0(size, sigma):
 
 """
 Polar edge coherence map
-Same size as source image
+Same size as source images
 """
 def pec(img):
     # TODO scale parameter should depend on resolution
@@ -134,7 +134,7 @@ def pec(img):
 
 """
 Edge coherence metric
-Just one number summarizing typical edge coherence in this image.
+Just one number summarizing typical edge coherence in this images.
 """
 def eco(img):
     l10 = Laguerre_Gauss_Circular_Harmonic_1_0(17, 2)

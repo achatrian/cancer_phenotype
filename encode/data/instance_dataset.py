@@ -47,7 +47,7 @@ class InstanceDataset(BaseDataset):
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--tissue_label', type=str, default='epithelium', help="Name of subdir in tiles dir where patches are read from")
-        parser.add_argument('--mpp', type=float, default=0.5, help="loading resolution of image patches")
+        parser.add_argument('--mpp', type=float, default=0.5, help="loading resolution of images patches")
         return parser
 
     def __len__(self):
@@ -57,10 +57,10 @@ class InstanceDataset(BaseDataset):
         """
         Rescale to desired resolution, if tiles are at a different millimeter per pixel (mpp) scale
         mpp replaces fine_size to decide rescaling.
-        Also, rescaling is done before cropping/padding, to ensure that final image is of desired size and resolution
+        Also, rescaling is done before cropping/padding, to ensure that final images is of desired size and resolution
         :param image:
         :param read_mpp: mpp resolution of loaded patches
-        :param mask: optionally scale and pad / random crop ground truth as for the image
+        :param mask: optionally scale and pad / random crop ground truth as for the images
         :return:
         """
         if mask and (mask.ndim == 3 and mask.shape[2] == 3):
@@ -69,7 +69,7 @@ class InstanceDataset(BaseDataset):
             mask[mask > 0] = 255
         target_mpp, read_mpp = self.opt.mpp, read_mpp
         if not np.isclose(target_mpp, read_mpp, rtol=0.01, atol=0.1):  # total tolerance = rtol*read_mpp + atol
-            # if asymmetrical, crop image
+            # if asymmetrical, crop images
             resize_factor = target_mpp / read_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
             if mask:
@@ -106,7 +106,7 @@ class InstanceDataset(BaseDataset):
         image = imageio.imread(image_path)
         mask = imageio.imread(ground_truth_path)
         image, mask = self.rescale(image, read_mpp=tiles_info['mpp'], mask=mask)
-        # augment image and mask
+        # augment images and mask
         if self.opt.augment_level:
             cat = np.concatenate([image, mask[:, :, np.newaxis]], axis=2)
             with warnings.catch_warnings():
@@ -121,7 +121,7 @@ class InstanceDataset(BaseDataset):
         mask[np.logical_and(mask != 1, mask != 2)] = 0
         # scale between 0 and 1
         image = image / 255.0
-        # normalised image between -1 and 1
+        # normalised images between -1 and 1
         image = (image - 0.5) / 0.5
         # convert to torch tensor
         assert (image.shape[-1] == 3)

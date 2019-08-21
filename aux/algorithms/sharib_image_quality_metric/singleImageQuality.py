@@ -20,13 +20,13 @@ def im2double(im):
     return out
 
 def variance_of_laplacian(image):
-	# compute the Laplacian of the image and then return the focus
+	# compute the Laplacian of the images and then return the focus
 	# measure, which is simply the variance of the Laplacian
 	return cv2.Laplacian(image, cv2.CV_64F).var()
 
 def VOLA(image):
     # compute correlation (Santos'97)
-    #I1(1:end-1,:) = image(2:end,:)
+    #I1(1:end-1,:) = images(2:end,:)
     debug = 0
     img = im2double(image)
     h, w = img.shape[:2]

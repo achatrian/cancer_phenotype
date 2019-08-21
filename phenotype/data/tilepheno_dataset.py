@@ -47,7 +47,7 @@ class TilePhenoDataset(BaseDataset):
             warnings.warn(f"Using fixed annotation scaling factor of {self.ANNOTATION_SCALING_FACTOR}! Breaks if different.")
             tiles_path = Path(self.opt.data_dir) / 'data' / 'tiles'
             wsi_paths = [path for path in tiles_path.iterdir() if
-                         path.is_dir()]  # one per wsi image the tiles were derived from
+                         path.is_dir()]  # one per wsi images the tiles were derived from
             paths = [path for path in chain(*(wsi_path.glob(self.opt.image_glob_pattern) for wsi_path in wsi_paths))]
             assert paths, "Cannot be empty"
             with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / opt.split_file) as split_json:
@@ -168,10 +168,10 @@ class TilePhenoDataset(BaseDataset):
         """
         Rescale to desired resolution, if tiles are at a different millimeter per pixel (mpp) scale
         mpp replaces fine_size to decide rescaling.
-        Also, rescaling is done before cropping/padding, to ensure that final image is of desired size and resolution
+        Also, rescaling is done before cropping/padding, to ensure that final images is of desired size and resolution
         :param image:
         :param resolution_data:
-        :param gt: optionally scale and pad / random crop ground truth as for the image
+        :param gt: optionally scale and pad / random crop ground truth as for the images
         :return:
         """
         if gt and (gt.ndim == 3 and gt.shape[2] == 3):
@@ -180,7 +180,7 @@ class TilePhenoDataset(BaseDataset):
             gt[gt > 0] = 255
         target_mpp, read_mpp = self.opt.mpp, resolution_data['read_mpp']
         if not np.isclose(target_mpp, read_mpp, rtol=0.01, atol=0.1):  # total tolerance = rtol*read_mpp + atol
-            # if asymmetrical, crop image
+            # if asymmetrical, crop images
             resize_factor = read_mpp / target_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
             if gt:
@@ -251,7 +251,7 @@ class TilePhenoDataset(BaseDataset):
                 image = self.aug_seq.augment_image(image)
         # scale between 0 and 1
         image = image / 255.0
-        # normalise image between -1 and 1
+        # normalise images between -1 and 1
         image = (image - 0.5) / 0.5
         # convert to torch tensor
         assert (image.shape[-1] == 3)

@@ -226,7 +226,7 @@ class BaseModel:
                 visual_ret[name + "_" + kind] = getattr(self, name)
         return visual_ret
 
-    # get image paths
+    # get images paths
     def get_visual_paths(self):
         return self.visual_paths
 

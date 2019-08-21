@@ -35,7 +35,7 @@ visualize = false;
 check_names = {};
 
 
-%Extract coordinates and image info from tile name
+%Extract coordinates and images info from tile name
 none_file = fopen([tissue_unet_out_path '/' 'Nones.txt'], 'w');
 for i = 1:numel(filenames)
     name = filenames(i).name;
@@ -81,7 +81,7 @@ end
 
     
 
-%% Load tissue training image and create u-net training images
+%% Load tissue training images and create u-net training images
 Nimg = numel(tissue_trn_img);
 all_img_prefix = num2cell(zeros(1, Nimg));
 for i = 1:numel(tissue_trn_img)
@@ -103,7 +103,7 @@ for i = 1:numel(tissue_trn_img)
         img_name_parts = strsplit(tissue_trn_img{i}{7}, '_'); 
         img_prefix = [img_name_parts{1}, '_',  img_name_parts{2}];
         all_img_prefix{i} = img_prefix;
-        masks_overlap_with_img = false; %ensure that every image has masks
+        masks_overlap_with_img = false; %ensure that every images has masks
         for j = 1:numel(tissue_mask) 
             mask_name_parts = strsplit(tissue_mask{j}{7}, '_'); 
             mask_prefix = [mask_name_parts{1}, '_', mask_name_parts{2}];
@@ -111,7 +111,7 @@ for i = 1:numel(tissue_trn_img)
             
             if strcmp(img_prefix, mask_prefix)
                 masks_overlap_with_img = true;
-                % Now assign Tissue instances to this image
+                % Now assign Tissue instances to this images
                 
                 %Load mask
                 mask = imread([imgpath '/' tissue_mask{j}{7}]);
@@ -149,7 +149,7 @@ for i = 1:numel(tissue_trn_img)
                 end
                 
                 %Check if any instance is already largely overlapping with
-                %image, in which case merge instances
+                %images, in which case merge instances
                 
                 to_write = instances(y_start:size(instances,1)-y_end, x_start:size(instances,2)-x_end);
                 if ~isempty(to_write)
@@ -218,7 +218,7 @@ for i = 1:numel(tissue_trn_img)
            subtile_dir = tile_dir + "/tiles";
            mkdir(char(subtile_dir))
            
-           %Get full image
+           %Get full images
            x_tiles = floor(size(img,2) / tile_side);
            y_tiles = floor(size(img,1) / tile_side);
            for x = 1:x_tiles
@@ -242,7 +242,7 @@ for i = 1:numel(tissue_trn_img)
            
            %+ add random tiles
            clearvars x_idx y_idx
-           fill_perc = 0.7; %until 70% of the image is covered again
+           fill_perc = 0.7; %until 70% of the images is covered again
            fillup = zeros(size(img,1), size(img,2));
            filled = false;
            xlen = size(img,2); ylen = size(img,1);

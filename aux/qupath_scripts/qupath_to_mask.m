@@ -47,7 +47,7 @@ for i = 1:numel(filenames)
     end
 end
     
-%% Load nuclei training image and create instance labels
+%% Load nuclei training images and create instance labels
 if output_list(1)
     for i = 1:numel(nuclei_trn_img)
         img = imread([imgpath '/' nuclei_trn_img{i}{7}]);
@@ -63,7 +63,7 @@ if output_list(1)
                 mask_prefix = strsplit(nuclei_mask{j}{7}, '_'); mask_prefix = mask_prefix{1};
 
                 if strcmp(img_prefix, mask_prefix)
-                    % Now assign Nuclei instances to this image
+                    % Now assign Nuclei instances to this images
                     x_start = str2double(nuclei_mask{j}{2}) - str2double(nuclei_trn_img{i}{2}) + 1;
                     y_start = str2double(nuclei_mask{j}{3}) - str2double(nuclei_trn_img{i}{3}) + 1;
                     x_end = str2double(nuclei_trn_img{i}{2}) + min(str2double(nuclei_trn_img{i}{4}),nuc_output_size) - str2double(nuclei_mask{j}{2}) - str2double(nuclei_mask{j}{4});
@@ -87,7 +87,7 @@ if output_list(1)
             jj = 0;
             for j = 1:numel(nuclei_mask)
                 
-                % Now assign Nuclei instances to this image
+                % Now assign Nuclei instances to this images
                 x_start = str2double(nuclei_mask{j}{2}) - str2double(nuclei_trn_img{i}{2}) + 1;
                 y_start = str2double(nuclei_mask{j}{3}) - str2double(nuclei_trn_img{i}{3}) + 1;
                 x_end = str2double(nuclei_trn_img{i}{2}) + str2double(nuclei_trn_img{i}{4}) - str2double(nuclei_mask{j}{2}) - str2double(nuclei_mask{j}{4});
@@ -106,7 +106,7 @@ if output_list(1)
     end
 end
     
-%% Load tissue training image and create instance labels
+%% Load tissue training images and create instance labels
 if output_list(2)
     for i = 1:numel(tissue_trn_img)
         img = imread([imgpath '/' tissue_trn_img{i}{7}]);
@@ -121,7 +121,7 @@ if output_list(2)
             mask_prefix = strsplit(tissue_mask{j}{7}, '_'); mask_prefix = mask_prefix{1};
 
             if strcmp(img_prefix, mask_prefix)
-                % Now assign Tissue instances to this image
+                % Now assign Tissue instances to this images
                 x_start = str2double(tissue_mask{j}{2}) - str2double(tissue_trn_img{i}{2}) + 1;
                 y_start = str2double(tissue_mask{j}{3}) - str2double(tissue_trn_img{i}{3}) + 1;
                 x_end = str2double(tissue_trn_img{i}{2}) + str2double(tissue_trn_img{i}{4}) - str2double(tissue_mask{j}{2}) - str2double(tissue_mask{j}{4});
@@ -144,7 +144,7 @@ if output_list(2)
     end
 end
     
-%% Load tissue training image and create instance labels
+%% Load tissue training images and create instance labels
 if output_list(3)
     for i = 1:numel(tissue_trn_img)
         img = imread([imgpath '/' tissue_trn_img{i}{7}]);
@@ -154,7 +154,7 @@ if output_list(3)
         jj = 0;
         for j = 1:numel(tissue_mask)
             
-            % Now assign Tissue instances to this image
+            % Now assign Tissue instances to this images
             x_start = str2double(tissue_mask{j}{2}) - str2double(tissue_trn_img{i}{2}) + 1;
             y_start = str2double(tissue_mask{j}{3}) - str2double(tissue_trn_img{i}{3}) + 1;
             str2double(tissue_trn_img{i}{3}) + 1;
@@ -184,7 +184,7 @@ if output_list(3)
     end
 end
 
-%% Load tissue training image and create u-net training images
+%% Load tissue training images and create u-net training images
 if output_list(4)
     for i = 1:numel(tissue_trn_img)
         
@@ -202,7 +202,7 @@ if output_list(4)
                 mask_prefix = strsplit(tissue_mask{j}{7}, '_'); mask_prefix = mask_prefix{1};
 
                 if strcmp(img_prefix, mask_prefix)
-                    % Now assign Tissue instances to this image
+                    % Now assign Tissue instances to this images
                     x_start = str2double(tissue_mask{j}{2}) - str2double(tissue_trn_img{i}{2}) + 1;
                     y_start = str2double(tissue_mask{j}{3}) - str2double(tissue_trn_img{i}{3}) + 1;
                     x_end = str2double(tissue_trn_img{i}{2}) + str2double(tissue_trn_img{i}{4}) - str2double(tissue_mask{j}{2}) - str2double(tissue_mask{j}{4});

@@ -2,7 +2,7 @@ import json
 import math
 import copy
 import warnings
-from collections import defaultdict
+from collections import defaultdict, Counter
 from itertools import tee
 from pathlib import Path
 import numpy as np
@@ -12,7 +12,7 @@ import cv2
 
 class AnnotationBuilder:
     r"""
-    Use to create AIDA annotation .json files for a single image/WSI that can be read by AIDA
+    Use to create AIDA annotation .json files for a single images/WSI that can be read by AIDA
     """
     @classmethod
     def from_annotation_path(cls, path):
@@ -57,20 +57,22 @@ class AnnotationBuilder:
         self.last_added_item = None
         # point comparison
         self.keep_original_paths = keep_original_paths
-        self.merged = False  # if merge_overlapping_segments() is called and successfully completed, merged is turned to true
         for layer_name in layers:
             self.add_layer(layer_name)  # this also updates self.layer_names with references to layers names
 
-
     @classmethod
-    def concatenate(cls, annotation0, annotation1):
+    def concatenate(cls, annotation0, annotation1, concatenate_layers=True):
         r"""Add layers from another annotation object to this object"""
         annotation0 = copy.copy(annotation0)
         for layer in annotation1._obj['layers']:
-            if layer['name'] in annotation0.layer_names:
-                layer['name'] = layer['name'] + '_' + annotation0.project_name
-            annotation0._obj['layers'].append(layer)
-            annotation0.layer_names.append(layer['name'])
+            if layer['name'] in annotation0.layer_names and concatenate_layers:
+                layer0 = next(layer_ for layer_ in  annotation0._obj['layers'] if layer_['name'] == layer['name'])
+                layer0['items'].extend(layer['items'])
+            else:
+                if layer['name'] in annotation0.layer_names:
+                    layer['name'] = layer['name'] + ('_' + annotation0.project_name)
+                annotation0._obj['layers'].append(layer)
+                annotation0.layer_names.append(layer['name'])
         return annotation0
 
     @staticmethod
@@ -89,6 +91,12 @@ class AnnotationBuilder:
 
     def num_layers(self):
         return len(self._obj['layers'])
+
+    def rename_layer(self, old_name, new_name):
+        layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
+        layer = self._obj['layers'][layer_idx]
+        layer['name'] = new_name
+        self.layer_names[layer_idx] = new_name
 
     def layer_has_items(self, layer_idx):
         if type(layer_idx) is str:
@@ -186,6 +194,9 @@ class AnnotationBuilder:
         return obj, dict(self.metadata)  # defaultdict with lambda cannot be pickled
 
     def dump_to_json(self, save_dir, name='', suffix_to_remove=('.ndpi', '.svs', '.json'), rewrite_name=False):  # adding .json here so that .json is not written twice
+        for layer_name, count in Counter(tuple(layer['name'] for layer in self._obj['layers'])).items():
+            if count > 1:
+                raise ValueError(f"Duplicate layer {layer_name} in annotation {self.slide_id}")
         if name and rewrite_name:
             save_path = Path(save_dir)/name
         else:
@@ -196,7 +207,6 @@ class AnnotationBuilder:
             save_path = str(save_path)[:-5] + '_' + name + '.json'
         obj, metadata = self.export()
         obj['metadata'] = metadata
-        obj['merged'] = self.merged
         json.dump(obj, open(save_path, 'w'))
 
     def get_layer_points(self, layer_idx, contour_format=False):
@@ -389,7 +399,6 @@ class AnnotationBuilder:
             yield (x + w, y)
         else:
             raise NotImplementedError(f"Unrecognized item type '{item['type']}'")
-
 
     @staticmethod
     def check_relative_rect_positions(tile_rect0, tile_rect1, eps=0):

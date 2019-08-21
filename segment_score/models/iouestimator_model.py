@@ -17,7 +17,7 @@ class IoUEstimatorModel(BaseModel):
         self.mse = torch.nn.MSELoss()
         self.metric_names = ['mse']
         self.visual_names = ['input']
-        self.visual_types = ['image']
+        self.visual_types = ['images']
         if self.is_train:
             self.optimizers = [torch.optim.Adam([
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] == 'bias'],

@@ -75,10 +75,10 @@ class TileSegDataset(BaseDataset):
         """
         Rescale to desired resolution, if tiles are at a different millimeter per pixel (mpp) scale
         mpp replaces fine_size to decide rescaling.
-        Also, rescaling is done before cropping/padding, to ensure that final image is of desired size and resolution
+        Also, rescaling is done before cropping/padding, to ensure that final images is of desired size and resolution
         :param image:
         :param resolution_data:
-        :param gt: optionally scale and pad / random crop ground truth as for the image
+        :param gt: optionally scale and pad / random crop ground truth as for the images
         :return:
         """
         if gt and (gt.ndim == 3 and gt.shape[2] == 3):
@@ -88,7 +88,7 @@ class TileSegDataset(BaseDataset):
         if resolution_data:
             target_mpp, read_mpp = self.opt.mpp, resolution_data['read_mpp']
             if not np.isclose(target_mpp, read_mpp, rtol=0.01, atol=0.1):  # total tolerance = rtol*read_mpp + atol
-                # if asymmetrical, crop image
+                # if asymmetrical, crop images
                 resize_factor = target_mpp / read_mpp
                 image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
                 if gt:
@@ -116,7 +116,7 @@ class TileSegDataset(BaseDataset):
                     image = self.randomcrop(image)
 
         if not resolution_data:
-            # scale image using fine_size -- DEPRECATED --
+            # scale images using fine_size -- DEPRECATED --
             sizes = (self.opt.fine_size,) * 2
             image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
             if gt:
@@ -166,7 +166,7 @@ class TileSegDataset(BaseDataset):
             resolution_data = None
         image = imageio.imread(image_path)
         if self.opt.load_ground_truth:  # FIXME are all these options really needed ? Code is hard to read
-            # process image and ground truth together to keep spatial correspondence
+            # process images and ground truth together to keep spatial correspondence
             gt_path = self.gt_paths[idx]
             gt = imageio.imread(gt_path)
             image, gt = self.rescale(image, resolution_data, gt=gt)
@@ -194,7 +194,7 @@ class TileSegDataset(BaseDataset):
             image, _ = self.rescale(image, resolution_data)  # gt is none here
         # scale between 0 and 1
         image = image/255.0
-        # normalised image between -1 and 1
+        # normalised images between -1 and 1
         image = (image - 0.5)/0.5
         # convert to torch tensor
         assert(image.shape[-1] == 3)

@@ -27,12 +27,12 @@ def is_mask(arg, num_classes=0):  # specifies mask format
 
 
 #@memory.cache
-def is_image(arg):  # specifies image format (RGB mapped to [-1, 1])
+def is_image(arg):  # specifies images format (RGB mapped to [-1, 1])
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
 
 
 #@memory.cache
-def is_gray_image(arg):  # specifies gray image format (grayscale mapped to [-1, 1])
+def is_gray_image(arg):  # specifies gray images format (grayscale mapped to [-1, 1])
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 2
 
 
@@ -46,7 +46,7 @@ class Feature:
     def __init__(self, function, returns):
         self.function = function
         type_ = set(getfullargspec(function).args)
-        assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'image'} or type_ >= {'gray_image'}
+        assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'images'} or type_ >= {'gray_image'}
         self.type_ = type_
         self.returns = returns
         self.name = function.__name__
@@ -60,10 +60,10 @@ class Feature:
             raise ValueError(f"Arguments do not contain contour-type input (f: {self.name})")
         if 'mask' in self.type_ and not is_mask(kwargs['mask']):
             raise ValueError(f"Arguments does not contain mask-type input (f: {self.name})")
-        if 'image' in self.type_ and not is_image(kwargs['image']):
-            raise ValueError(f"Arguments does not contain image-type input (f: {self.name})")
+        if 'images' in self.type_ and not is_image(kwargs['images']):
+            raise ValueError(f"Arguments does not contain images-type input (f: {self.name})")
         if 'gray_image' in self.type_ and not is_gray_image(kwargs['gray_image']):
-            raise ValueError(f"Arguments does not contain grayscale image-type input (f: {self.name})")
+            raise ValueError(f"Arguments does not contain grayscale images-type input (f: {self.name})")
         start_time = time.time()
         output = self.function(**kwargs)
         self.call_time = (time.time() - start_time - self.call_time) / (self.n_calls + 1) + self.call_time
@@ -186,7 +186,7 @@ distances, angles, num_levels = [5, 20, 100], [0, np.pi/4, np.pi/2, 3*np.pi/4], 
 @MakeFeature(list(f'gray_contrast_d{d}_a{a}' for d in distances for a in angles) +
              list(f'gray_correlation_d{d}_a{a}' for d in distances for a in angles))  # d1a1 d1a2 d1a3 ...
 def gray_cooccurrence(gray_image):
-    # bin image:
+    # bin images:
     assert 256 % num_levels == 0, "Must divide number of grayscale levels perfectly"
     binned_image = np.copy(gray_image)
     for i in range(num_levels):

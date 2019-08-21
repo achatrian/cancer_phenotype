@@ -5,14 +5,14 @@ from PIL import Image
 import os
 
 
-# Converts a Tensor into an image array (numpy)
+# Converts a Tensor into an images array (numpy)
 # |imtype|: the desired type of the converted numpy array
 def tensor2im(input_image, segmap=False, imtype=np.uint8):
     if isinstance(input_image, torch.Tensor):
         image_tensor = input_image.data
     else:
         return input_image
-    image_numpy = image_tensor[0].cpu().float().numpy()  # taking the first image only
+    image_numpy = image_tensor[0].cpu().float().numpy()  # taking the first images only
     if image_numpy.shape[0] == 1:
         image_numpy = np.tile(image_numpy, (3, 1, 1))
 
