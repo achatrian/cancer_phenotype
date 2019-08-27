@@ -61,7 +61,7 @@ def multilabel_mask(contour_lib, overlap_struct, label_values):
 def reader():
     opt = WSIReader.get_reader_options()
     slide_path = Path('/home/andrea/Documents/Temp/Data/17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi')
-    return WSIReader(opt, slide_path)
+    return WSIReader(slide_path, opt)
 
 
 # tests

@@ -64,8 +64,9 @@ def find_overlap(slide_contours: dict, different_labels=True):
     """
     contours, labels = [], []
     for layer_name, layer_contours in slide_contours.items():  # merge all layers into one list of contours
-        contours.extend(layer_contours)
-        labels.extend([layer_name] * len(layer_contours))
+        indices = tuple(i for i, contour in enumerate(layer_contours) if contour.size > 2)
+        contours.extend(layer_contours[i] for i in indices)
+        labels.extend([layer_name] * len(indices))
     contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
     overlap_struct = []
     for parent_bb, parent_label in zip(contour_bbs, labels):
@@ -118,21 +119,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
         shape = mask.shape if isinstance(mask, np.ndarray) else contour_dims
     if mask is None:
         mask = np.zeros(shape)
-    contour_mask_limit = contour.max(0)  # most extreme point from top left corner of mask
-    # y_diff, x_diff = contour_dims[0] - shape[0], contour_dims[1] - shape[1]
-    y_diff, x_diff = (contour_mask_limit[1] - shape[0], contour_mask_limit[0] - shape[1])
-    cut_points = []  # find all the in  dices of points that would fall outside of mask
-    # negative values resulting from subtraction of mask origin - in case contour is larger than tile
-    cut_points.extend(np.where(contour.squeeze()[:, 0] < 0)[0])
-    cut_points.extend(np.where(contour.squeeze()[:, 1] < 0)[0])
-    if x_diff > 0:
-        cut_points.extend(np.where(contour.squeeze()[:, 0] > shape[1])[0])  # x to column
-    if y_diff > 0:
-        cut_points.extend(np.where(contour.squeeze()[:, 1] > shape[0])[0])  # y to row
-    points_to_keep = sorted(set(range(contour.shape[0])) - set(cut_points))
-    if len(points_to_keep) == 0:
-        raise ValueError(f"Contour and mask do not overlap (contour origin {contour_origin}, mask shape {shape}, mask origin {mask_origin})")
-    contour = contour[points_to_keep, :]
+    contour = np.clip(contour, (0, 0), (shape[1], shape[0]))  # project all points outside of contour to contour border
     # recompute after removing points in order to test that contour fits in mask
     contour_dims = (
         contour[:, 1].max() + 1 - contour[:, 1].min(),

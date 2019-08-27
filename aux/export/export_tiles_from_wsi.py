@@ -31,7 +31,7 @@ def main(slide_file):
         contours, labels = AnnotationBuilder.from_object(annotation).get_layer_points(0, contour_format=True)
     setattr(opt, 'overwrite_qc', True)  # force overwriting of all quality_control files
     print(f"Quality control mpp: {opt.qc_mpp}, read_mpp: {opt.mpp}")
-    slide = WSIReader(opt, slide_file)
+    slide = WSIReader(slide_file, opt)
     slide.find_tissue_locations()
     print("Exporting data ...")
     try:

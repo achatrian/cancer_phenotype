@@ -145,10 +145,10 @@ class BaseModel:
         else:
             raise ValueError(f"Attempted update of unknown measure {name} - add to loss_names or metric_names")
         if self.is_val:
-            setattr(self, prefix + name + '_val', value)
+            setattr(self, prefix + name + '_val', value.item() if isinstance(value, torch.Tensor) else value)
         else:
-            self.meters[name].update(value, n_samples)
-            setattr(self, prefix + name, self.meters[name].avg)
+            setattr(self, prefix + name, value)
+            self.meters[name].update(value.item() if isinstance(value, torch.Tensor) else value, n_samples)
 
     def u_(self, name, value, n_samples=None):
         r"""Shortcut to update measures"""
@@ -206,7 +206,10 @@ class BaseModel:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
                 name = name if not self.is_val else name + "_val"
-                errors_ret[name] = float(getattr(self, 'loss_' + name))
+                if self.is_val:
+                    errors_ret[name] = float(getattr(self, 'loss_' + name))
+                else:
+                    errors_ret[name] = float(self.meters[name].avg)
         return errors_ret
 
     def get_current_metrics(self):
@@ -215,7 +218,10 @@ class BaseModel:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
                 name = name if not self.is_val else name + "_val"
-                metric_ret[name] = float(getattr(self, 'metric_' + name))
+                if self.is_val:
+                    metric_ret[name] = float(getattr(self, 'loss_' + name))
+                else:
+                    metric_ret[name] = float(self.meters[name].avg)
         return metric_ret
 
     # return visualization images. train.py will display these images, and save the images to a html

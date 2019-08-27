@@ -11,6 +11,7 @@ import cv2
 import imageio
 from tqdm import tqdm
 from skimage.filters import gaussian
+from skimage.color import rgba2rgb
 from images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
 from data import read_annotations, contour_to_mask
@@ -42,7 +43,7 @@ class ROITileExporter:
             'mpp': mpp,
             'data_dir': str(data_dir)
         })
-        self.slide = WSIReader(slide_opt, self.slide_path)
+        self.slide = WSIReader(self.slide_path, slide_opt)
         self.slide.opt.patch_size = self.tile_size
         self.slide.find_tissue_locations()
         self.original_tissue_locations = self.slide.tissue_locations
@@ -161,6 +162,8 @@ class ROITileExporter:
             mask = np.array(mask, dtype=np.uint8)
             tile = self.slide.read_region((x, y))
             tile = np.array(tile, dtype=np.uint8)
+            if tile.shape[-1] == 4:  # assume tile is in RGBA format
+                tile = rgba2rgb(tile)
             # resize mask according to mpp difference
             mask = cv2.resize(mask, tile.shape[:2], interpolation=cv2.INTER_NEAREST)
             assert tile.shape[:2] == mask.shape, f"Tile and mask shapes don't match: {tile.shape[:2]} != {mask.shape}"
@@ -205,6 +208,8 @@ if __name__ == '__main__':
     parser.add_argument('slide_id', type=str)
     parser.add_argument('--tile_size', type=int, default=1024)
     parser.add_argument('--mpp', type=float, default=0.4)
+    parser.add_argument('--label_values', type=json.loads, default='[["epithelium", 200], ["lumen", 250]]',
+                        help='!!! NB: this would be "[[\"epithelium\", 200], [\"lumen\", 250]]" if passed externally')
     parser.add_argument('--area_label', type=str, default='Tumour area')
     parser.add_argument('--roi_dir_name', default='tumour_area_annotations')
     args = parser.parse_args()
@@ -212,6 +217,7 @@ if __name__ == '__main__':
                                args.slide_id,
                                args.tile_size,
                                args.mpp,
+                               args.label_values,
                                roi_dir_name=args.roi_dir_name)
     exporter.export_tiles(args.area_label, args.data_dir/'data'/'tiles')
 

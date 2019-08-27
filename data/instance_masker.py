@@ -1,5 +1,6 @@
 from functools import partial
 from typing import Union
+import warnings
 
 import numpy as np
 
@@ -19,6 +20,10 @@ class InstanceMasker:
         :param contour_to_mask:
         """
         self.slide_contours = slide_contours
+        self.label_values = label_values
+        self.outer_label = outer_label
+        self.shape = shape
+        self.contour_to_mask = partial(contour_to_mask, shape=shape) if shape else contour_to_mask
         if isinstance(slide_contours, dict):
             self.contours, self.labels = [], []
             for layer_name, layer_contours in slide_contours.items():
@@ -26,17 +31,15 @@ class InstanceMasker:
                 self.labels.extend([layer_name] * len(layer_contours))
         else:
             self.contours, self.labels = slide_contours
+        # remove contours that are empty or have a single point
         self.checked_contours_indices = tuple(i for i, contour in enumerate(self.contours) if contour.size > 2)
         self.contours = [contour for i, contour, in enumerate(self.contours) if i in self.checked_contours_indices]
         self.labels = [label for i, label, in enumerate(self.labels) if i in self.checked_contours_indices]
         if not set(label_values.keys()) >= set(self.labels):
-            raise ValueError(f"Pixel value for {tuple(set(self.labels) - set(label_values.keys()))} is unspecified")
-        self.label_values = label_values
-        self.outer_label = outer_label
+            warnings.warn(f"Pixel value for {tuple(set(self.labels) - set(label_values.keys()))} is unspecified, ignoring these labels.")
+        # outer label specifies the contours the interface gives access to
         self.outer_contours_indices = tuple(i for i, label in enumerate(self.labels) if label == outer_label)
         self.overlap_struct, self.contours, self.bounding_boxes, self.labels = find_overlap(slide_contours)
-        self.shape = shape
-        self.contour_to_mask = partial(contour_to_mask, shape=shape) if shape else contour_to_mask
 
     def __len__(self):
         return len(self.outer_contours_indices)
@@ -54,6 +57,8 @@ class InstanceMasker:
                       'parent_label': self.labels[outer_index],
                       'children_labels': []}
         for child_index in np.where(overlap_vect)[0]:
+            if not self.labels[child_index] in self.label_values:
+                continue  # skip all contours for whom a paint-in value is unspecified
             x_child, y_child, w_child, h_child = self.bounding_boxes[child_index]
             if h_parent * w_parent > h_child * w_child:  # if parent bigger than child write on previous mask
                 mask = contour_to_mask(self.contours[child_index], mask=mask, mask_origin=(x_parent, y_parent),

@@ -28,7 +28,7 @@ class SlidePreprocessor(mp.Process):
             if file is None:
                 self.queue.task_done()
                 break
-            slide = WSIReader(self.opt, file)
+            slide = WSIReader(file, self.opt)
             print(f"[{self.process_id}] processing {os.path.basename(file)}")
             slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold)
             if self.export_tiles:

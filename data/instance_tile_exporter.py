@@ -2,7 +2,6 @@ from typing import Union
 from pathlib import Path
 from numbers import Number
 import json
-import random
 import cv2
 import numpy as np
 import imageio
@@ -13,15 +12,13 @@ from data.instance_masker import InstanceMasker
 # from dzi_io.dzi_io import DZI_IO
 
 
-class InstanceTileExporter:  # TODO test
+class InstanceTileExporter:
     r"""Extract tiles centered around images component instances"""
-    def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2, max_num_tiles=np.inf,
-                 label_values = (('epithelium', 200), ('lumen', 250))):
+    def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2, label_values=(('epithelium', 200), ('lumen', 250))):
         self.data_dir = Path(data_dir)
         self.slide_id = slide_id
         self.tile_size = tile_size
         self.mpp = mpp
-        self.max_num_tiles = max_num_tiles
         self.label_values = dict(label_values)
         annotations_path = Path(self.data_dir)/'data'/'annotations'
         try:
@@ -34,7 +31,7 @@ class InstanceTileExporter:  # TODO test
         except StopIteration:
             raise ValueError(f"No annotation matching slide id: {slide_id}")
         slide_opt = WSIReader.get_reader_options(False, False, args=(f'--mpp={mpp}',))
-        self.slide = WSIReader(slide_opt, self.slide_path)
+        self.slide = WSIReader(self.slide_path, slide_opt)
         contour_struct = read_annotations(self.data_dir, slide_ids=(self.slide_id,))
         self.contour_lib = contour_struct[self.slide_id]
         self.tile_size = tile_size
@@ -48,25 +45,23 @@ class InstanceTileExporter:  # TODO test
         """
         save_dir = Path(save_dir)/layer
         slide_dir = save_dir/self.slide_id
-        save_dir.mkdir(exist_ok=True), slide_dir.mkdir(exist_ok=True)
-        (slide_dir/'images').mkdir(exist_ok=True), (slide_dir/'masks').mkdir(exist_ok=True)
+        save_dir.mkdir(exist_ok=True, parents=True)
+        slide_dir.mkdir(exist_ok=True)
         masker = InstanceMasker(self.contour_lib,
                                   layer,  # new instance with selected outer layer
                                   label_values=self.label_values)
-        if self.max_num_tiles < len(masker):  # default always returns false
-            masker.outer_contours_indices = random.sample(population=masker.outer_contours_indices,
-                                                          k=self.max_num_tiles)
         for i, contour in enumerate(tqdm(masker.outer_contours)):
             image = get_contour_image(contour, self.slide, min_size=(self.tile_size,)*2 if self.tile_size else ())
             mask, components = masker.get_shaped_mask(i, shape=image.shape)
+            mask = cv2.dilate(mask, np.ones((3, 3)))  # pre-dilate to remove jagged boundary from low-res contour extraction
             x, y, w, h = cv2.boundingRect(components['parent_contour'])
             assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
             if self.tile_size is not None:
                 images, masks = self.fit_to_size(image, mask)
                 for j, (image, mask) in enumerate(zip(images, masks)):
-                    name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + ('' if len(images) == 1 else str(j)) + '.png'
-                    imageio.imwrite(slide_dir/'images'/name, image.astype(np.uint8))
-                    imageio.imwrite(slide_dir/'masks'/name, mask.astype(np.uint8))
+                    name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + ('' if len(images) == 1 else str(j))
+                    imageio.imwrite(slide_dir/(name + '_image.png'), image.astype(np.uint8))
+                    imageio.imwrite(slide_dir/(name + '_mask.png'), mask.astype(np.uint8))
         (save_dir/'logs').mkdir(exist_ok=True)
         with open(save_dir/'logs'/f'{self.slide_id}_tiles.json', 'w') as tiles_file:
             json.dump({
@@ -127,11 +122,13 @@ class CenterCrop(object):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=Path, required=True)
+    parser.add_argument('data_dir', type=Path, required=True)
     parser.add_argument('--slide_id', type=str, required=True)
     parser.add_argument('--mpp', type=float, default=1.0)
     parser.add_argument('--tile_size', type=int, default=512)
-    parser.add_argument('--max_num_tiles', type=int, default=200)
+    parser.add_argument('--outer_label', type=str, default='epithelium', help="Layer whose instances are returned, one per tiles")
+    parser.add_argument('--label_values', type=json.loads, default='[["epithelium", 200], ["lumen", 250]]',
+                        help='!!! NB: this would be "[[\"epithelium\", 200], [\"lumen\", 250]]" if passed externally')
     args = parser.parse_args()
-    tiler = InstanceTileExporter(args.data_dir, args.slide_id, args.tile_size, args.mpp, args.max_num_tiles)
-    tiler.export_tiles('epithelium', args.data_dir/'data'/'tiles')
+    tiler = InstanceTileExporter(args.data_dir, args.slide_id, args.tile_size, args.mpp, args.label_values)
+    tiler.export_tiles(args.outer_label, args.data_dir/'data'/'tiles')

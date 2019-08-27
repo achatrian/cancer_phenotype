@@ -25,6 +25,7 @@ from __future__ import print_function
 import json
 from multiprocessing import Process, JoinableQueue
 from queue import Empty, Full
+import warnings
 import openslide
 from openslide import open_slide, ImageSlide
 from openslide.deepzoom import DeepZoomGenerator
@@ -102,7 +103,10 @@ class DeepZoomImageTiler(object):
         print("Dzi file was written")
         # Saves the property as a .json
         properties = dict(self._dz._osr.properties)
-        properties['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
+        try:
+            properties['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
+        except KeyError:
+            warnings.warn("No available metadata")
         json.dump(properties, open(os.path.join("{}_files".format(self._basename), "properties.json"), 'w'))
         print("Properties json was written")
 

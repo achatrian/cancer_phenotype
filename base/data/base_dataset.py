@@ -58,6 +58,28 @@ class BaseDataset(data.Dataset):
 
 # Transforms
 
+
+class AugSeq:
+
+    def __init__(self, seq_geom: iaa.Sequential, seq_content: iaa.Sequential):
+        self.seq_geom = seq_geom
+        self.seq_full = seq_content
+
+    def augment_image(self, image, ground_truth=False):
+        if ground_truth:
+            return self.seq_geom.augment_image(image)
+        else:
+            return self.seq_geom.augment_image(
+                self.seq_full.augment_image(image)
+            )
+
+    def to_deterministic(self):
+        return AugSeq(
+            self.seq_geom.to_deterministic(),
+            self.seq_full.to_deterministic()
+        )
+
+
 def get_augment_seq(augment_level):
     r"""
     Generates an imgaug augmentation sequence. The strength of the augment
@@ -72,7 +94,7 @@ def get_augment_seq(augment_level):
         return iaa.Sometimes(0.5, aug)
 
     if augment_level == 1:
-        aug_seq = iaa.Sequential(
+        seq = iaa.Sequential(
             [
                 # apply the following augmenters to most images
                 iaa.Fliplr(0.5),  # horizontally flip 50% of all images
@@ -94,33 +116,36 @@ def get_augment_seq(augment_level):
                     # use any of scikit-images's warping modes (see 2nd images from the top for examples)
                 ))]
         )
-
+        aug_seq = AugSeq(seq, seq)
     elif augment_level == 2:
         # was missing WithChannels
         # no superpixels in level 2 nor hue inversion
-        aug_seq = iaa.Sequential(
+        aug_seq = AugSeq(
+            iaa.Sequential(
+                [
+                    # apply the following augmenters to most images
+                    iaa.Fliplr(0.5),  # horizontally flip 50% of all images
+                    iaa.Flipud(0.2),  # vertically flip 20% of all images
+                    # crop images by -5% to 10% of their height/width
+                    sometimes(iaa.CropAndPad(
+                        percent=(-0.05, 0.05),
+                        pad_mode=["reflect", "symmetric"],
+                    )),
+                    sometimes(iaa.Affine(
+                        scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
+                        # scale images to 80-120% of their size, individually per axis
+                        translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                        # translate by -20 to +20 percent (per axis)
+                        rotate=(-45, 45),  # rotate by -45 to +45 degrees
+                        shear=(-5, 5),  # shear by -16 to +16 degrees
+                        order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                        mode=["reflect", "symmetric"]
+                        # use any of scikit-images's warping modes (see 2nd images from the top for examples)
+                    ))
+                ]),
+            iaa.Sequential(
             [
-                # apply the following augmenters to most images
-                iaa.Fliplr(0.5),  # horizontally flip 50% of all images
-                iaa.Flipud(0.2),  # vertically flip 20% of all images
-                # crop images by -5% to 10% of their height/width
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.05),
-                    pad_mode=["reflect", "symmetric"],
-                )),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
-                    # scale images to 80-120% of their size, individually per axis
-                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                    # translate by -20 to +20 percent (per axis)
-                    rotate=(-45, 45),  # rotate by -45 to +45 degrees
-                    shear=(-5, 5),  # shear by -16 to +16 degrees
-                    order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
-                    mode=["reflect", "symmetric"]
-                    # use any of scikit-images's warping modes (see 2nd images from the top for examples)
-                )),
-                # execute 0 to 5 of the following (less important) augmenters per images
-                # don't execute all of them, as that would often be way too strong
+
                 iaa.WithChannels([0, 1, 2],
                                  iaa.SomeOf((0, 2),
                                             [
@@ -151,31 +176,34 @@ def get_augment_seq(augment_level):
                                  )
             ]
         )
+        )
 
     elif augment_level == 3:
-        aug_seq = iaa.Sequential(
+        aug_seq = AugSeq(
+            iaa.Sequential(
+                [
+                    # apply the following augmenters to most images
+                    iaa.Fliplr(0.5),  # horizontally flip 50% of all images
+                    iaa.Flipud(0.2),  # vertically flip 20% of all images
+                    # crop images by -5% to 10% of their height/width
+                    sometimes(iaa.CropAndPad(
+                        percent=(-0.05, 0.1),
+                        pad_mode=["reflect", "symmetric"],
+                    )),
+                    sometimes(iaa.Affine(
+                        scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                        # scale images to 80-120% of their size, individually per axis
+                        translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                        # translate by -20 to +20 percent (per axis)
+                        rotate=(-45, 45),  # rotate by -45 to +45 degrees
+                        shear=(-16, 16),  # shear by -16 to +16 degrees
+                        order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                        mode=["reflect", "symmetric"]
+                        # use any of scikit-images's warping modes (see 2nd images from the top for examples)
+                    ))
+                ]),
+            iaa.Sequential(
             [
-                # apply the following augmenters to most images
-                iaa.Fliplr(0.5),  # horizontally flip 50% of all images
-                iaa.Flipud(0.2),  # vertically flip 20% of all images
-                # crop images by -5% to 10% of their height/width
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=["reflect", "symmetric"],
-                )),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
-                    # scale images to 80-120% of their size, individually per axis
-                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                    # translate by -20 to +20 percent (per axis)
-                    rotate=(-45, 45),  # rotate by -45 to +45 degrees
-                    shear=(-16, 16),  # shear by -16 to +16 degrees
-                    order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
-                    mode=["reflect", "symmetric"]
-                    # use any of scikit-images's warping modes (see 2nd images from the top for examples)
-                )),
-                # execute 0 to 5 of the following (less important) augmenters per images
-                # don't execute all of them, as that would often be way too strong
                 iaa.WithChannels([0, 1, 2],
                                  iaa.SomeOf((0, 5),
                                             [
@@ -223,90 +251,93 @@ def get_augment_seq(augment_level):
                                                 sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
                                             ]))
             ])
-
-    elif augment_level == 4:
-        aug_seq = iaa.Sequential(
-            [
-                # apply the following augmenters to most images
-                iaa.Fliplr(0.5),  # horizontally flip 50% of all images
-                iaa.Flipud(0.2),  # vertically flip 20% of all images
-                # crop images by -5% to 10% of their height/width
-                sometimes(iaa.CropAndPad(
-                    percent=(-0.05, 0.1),
-                    pad_mode=["reflect", "symmetric"],
-                )),
-                sometimes(iaa.Affine(
-                    scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
-                    # scale images to 80-120% of their size, individually per axis
-                    translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                    # translate by -20 to +20 percent (per axis)
-                    rotate=(-45, 45),  # rotate by -45 to +45 degrees
-                    shear=(-16, 16),  # shear by -16 to +16 degrees
-                    order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
-                    mode=["reflect", "symmetric"]
-                    # use any of scikit-images's warping modes (see 2nd images from the top for examples)
-                )),
-                # execute 0 to 5 of the following (less important) augmenters per images
-                # don't execute all of them, as that would often be way too strong
-                iaa.WithChannels([0, 1, 2],
-                                 iaa.SomeOf((0, 7),
-                                            [
-                                                sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
-                                                # convert images into their superpixel representation
-                                                iaa.OneOf([
-                                                    iaa.GaussianBlur((0, 3.0)),
-                                                    # blur images with a sigma between 0 and 3.0
-                                                    iaa.AverageBlur(k=(2, 7)),
-                                                    # blur images using local means with kernel sizes between 2 and 7
-                                                    iaa.MedianBlur(k=(3, 11)),
-                                                    # blur images using local medians with kernel sizes between 2 and 7
-                                                ]),
-                                                # iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),  # sharpen images  # { REMOVED AS NOT WORKING ON MULTIPROCESSING https://github.com/aleju/imgaug/issues/147
-                                                # iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),  # emboss images
-                                                # search either for all edges or for directed edges,
-                                                # blend the result with the original images using a blobby mask
-                                                # iaa.SimplexNoiseAlpha(iaa.OneOf([
-                                                #     iaa.EdgeDetect(alpha=(0.5, 1.0)),
-                                                #     iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
-                                                # ])),                                                                  # }
-                                                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
-                                                                          per_channel=0.5),
-                                                # add gaussian noise to images
-                                                iaa.OneOf([
-                                                    iaa.Dropout((0.01, 0.1), per_channel=0.5),
-                                                    # randomly remove up to 10% of the pixels
-                                                    iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
-                                                                      per_channel=0.2),
-                                                ]),
-                                                iaa.Invert(0.05, per_channel=True),  # invert color channels
-                                                iaa.Add((-10, 10), per_channel=0.5),
-                                                # change brightness of images (by -10 to 10 of original value)
-                                                iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
-                                                # either change the brightness of the whole images (sometimes
-                                                # per channel) or change the brightness of subareas
-                                                iaa.OneOf([
-                                                    iaa.Multiply((0.5, 1.5), per_channel=0.5),
-                                                    iaa.FrequencyNoiseAlpha(
-                                                        exponent=(-4, 0),
-                                                        first=iaa.Multiply((0.5, 1.5), per_channel=True),
-                                                        second=iaa.ContrastNormalization((0.5, 2.0))
-                                                    )
-                                                ]),
-                                                iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
-                                                # improve or worsen the contrast
-                                                # iaa.Grayscale(alpha=(0.0, 1.0)),
-                                                sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
-                                                # move pixels locally around (with random strengths)
-                                                sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
-                                                # sometimes move parts of the images around
-                                                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
-                                            ],
-                                            random_order=True
-                                            ))
-            ],
-            random_order=True
         )
 
+    elif augment_level == 4:
+        aug_seq = AugSeq(
+            iaa.Sequential(
+                [
+                    # apply the following augmenters to most images
+                    iaa.Fliplr(0.5),  # horizontally flip 50% of all images
+                    iaa.Flipud(0.2),  # vertically flip 20% of all images
+                    # crop images by -5% to 10% of their height/width
+                    sometimes(iaa.CropAndPad(
+                        percent=(-0.05, 0.1),
+                        pad_mode=["reflect", "symmetric"],
+                    )),
+                    sometimes(iaa.Affine(
+                        scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                        # scale images to 80-120% of their size, individually per axis
+                        translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                        # translate by -20 to +20 percent (per axis)
+                        rotate=(-45, 45),  # rotate by -45 to +45 degrees
+                        shear=(-16, 16),  # shear by -16 to +16 degrees
+                        order=[0, 1],  # use nearest neighbour or bilinear interpolation (fast)
+                        mode=["reflect", "symmetric"]
+                        # use any of scikit-images's warping modes (see 2nd images from the top for examples)
+                    ))
+                ]),
+            iaa.Sequential(
+                [
+                    iaa.WithChannels([0, 1, 2],
+                                     iaa.SomeOf((0, 7),
+                                                [
+                                                    sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
+                                                    # convert images into their superpixel representation
+                                                    iaa.OneOf([
+                                                        iaa.GaussianBlur((0, 3.0)),
+                                                        # blur images with a sigma between 0 and 3.0
+                                                        iaa.AverageBlur(k=(2, 7)),
+                                                        # blur images using local means with kernel sizes between 2 and 7
+                                                        iaa.MedianBlur(k=(3, 11)),
+                                                        # blur images using local medians with kernel sizes between 2 and 7
+                                                    ]),
+                                                    # iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),  # sharpen images  # { REMOVED AS NOT WORKING ON MULTIPROCESSING https://github.com/aleju/imgaug/issues/147
+                                                    # iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),  # emboss images
+                                                    # search either for all edges or for directed edges,
+                                                    # blend the result with the original images using a blobby mask
+                                                    # iaa.SimplexNoiseAlpha(iaa.OneOf([
+                                                    #     iaa.EdgeDetect(alpha=(0.5, 1.0)),
+                                                    #     iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
+                                                    # ])),                                                                  # }
+                                                    iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
+                                                                              per_channel=0.5),
+                                                    # add gaussian noise to images
+                                                    iaa.OneOf([
+                                                        iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                                                        # randomly remove up to 10% of the pixels
+                                                        iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
+                                                                          per_channel=0.2),
+                                                    ]),
+                                                    iaa.Invert(0.05, per_channel=True),  # invert color channels
+                                                    iaa.Add((-10, 10), per_channel=0.5),
+                                                    # change brightness of images (by -10 to 10 of original value)
+                                                    iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
+                                                    # either change the brightness of the whole images (sometimes
+                                                    # per channel) or change the brightness of subareas
+                                                    iaa.OneOf([
+                                                        iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                                                        iaa.FrequencyNoiseAlpha(
+                                                            exponent=(-4, 0),
+                                                            first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                                                            second=iaa.ContrastNormalization((0.5, 2.0))
+                                                        )
+                                                    ]),
+                                                    iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                                                    # improve or worsen the contrast
+                                                    # iaa.Grayscale(alpha=(0.0, 1.0)),
+                                                    sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
+                                                    # move pixels locally around (with random strengths)
+                                                    sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                                                    # sometimes move parts of the images around
+                                                    sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
+                                                ],
+                                                random_order=True
+                                                ))
+                ],
+                random_order=True
+            )
+        )
     return aug_seq
 
 

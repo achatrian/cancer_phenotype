@@ -11,7 +11,7 @@ r"Creates deepzoom images for all the WSIs in a folder"
 if __name__ == '__main__':
     parser = OptionParser(usage='Usage: %prog [options] <folder>')
     parser.add_option('-B', '--ignore-bounds', dest='limit_bounds',
-                default=True, action='store_false',
+                default =True, action='store_false',
                 help='display entire scan area')
     parser.add_option('-e', '--overlap', metavar='PIXELS', dest='overlap',
                 type='int', default=1,
@@ -43,6 +43,8 @@ if __name__ == '__main__':
     slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*/*.svs')))
     slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*.ndpi')))
     slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*/*.ndpi')))
+    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*.tiff')))
+    slide_paths += list(glob.glob(os.path.join(slide_dir_path, '*/*.tiff')))
     if not opts.overwrite:
         remove_counter = 0
         for path in slide_paths.copy():

@@ -112,7 +112,7 @@ class Clustering(Experiment):
                     raise ValueError(f"Data dir does not contain images for {subset_id}")
                 examples[i][subset_id] = []
                 opt = WSIReader.get_reader_options(include_path=False)
-                reader = WSIReader(opt, subset_path)
+                reader = WSIReader(subset_path, opt)
                 try:
                     x_subset = x_cluster.loc[subset_id]
                 except KeyError:

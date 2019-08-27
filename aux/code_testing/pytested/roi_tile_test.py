@@ -70,9 +70,7 @@ def test_roi_tile_extract():
     slide_id = 'EU_37106_15_2K_HandE+-+2017-11-28+11.43.55'
     exporter = ROITileExporter(data_dir, slide_id, 1024, 0.2,
                                roi_dir_name=roi_dir_name)
-    gen = export_tiles_debug(exporter, 'Tumour area', '~/Documents/Temp')
-                             # ((28672, 28672),
-                             #  (24576, 14336))
-                             # )
+    gen = export_tiles_debug(exporter, 'Tumour area', '~/Documents/Temp',
+                             ((67584, 18432),))
     for mask, tile, coords in gen:
         pass

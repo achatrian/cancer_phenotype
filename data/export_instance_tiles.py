@@ -2,8 +2,7 @@ from pathlib import Path
 import argparse
 import json
 import multiprocessing as mp
-import numpy as np
-from roi_tile_exporter import ROITileExporter
+from instance_tile_exporter import InstanceTileExporter
 
 
 if __name__ == '__main__':
@@ -11,8 +10,7 @@ if __name__ == '__main__':
     parser.add_argument('data_dir', type=Path)
     parser.add_argument('--tile_size', type=int, default=1024)
     parser.add_argument('--mpp', type=float, default=0.4)
-    parser.add_argument('--max_num_tiles', default=np.int)
-    parser.add_argument('--area_label', type=str, default='Tumour area')
+    parser.add_argument('--outer_label', type=str, default='epithelium')
     parser.add_argument('--label_values', type=json.loads, default='[["epithelium", 200], ["lumen", 250]]',
                         help='!!! NB: this would be "[[\"epithelium\", 200], [\"lumen\", 250]]" if passed externally')
     parser.add_argument('--roi_dir_name', default='tumour_area_annotations')
@@ -24,11 +22,11 @@ if __name__ == '__main__':
     def run_exporter(slide_id):
         if args.stop_overwrite and slide_id not in dir_names:
             return
-        exporter = ROITileExporter(args.data_dir,
-                                   slide_id,
-                                   args.tile_size,
-                                   args.mpp,
-                                   roi_dir_name=args.roi_dir_name)
+        exporter = InstanceTileExporter(args.data_dir,
+                                        slide_id,
+                                        args.tile_size,
+                                        args.mpp,
+                                        args.label_values)
         exporter.export_tiles(args.area_label, args.data_dir / 'data' / 'tiles')
         print(f"ROI tiles exported from {slide_id}")
 

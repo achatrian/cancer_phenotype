@@ -217,7 +217,7 @@ class AnnotationBuilder:
         if contour_format:
             layer_points = list(
                 np.array(list(self.item_points(item))).astype(np.int32)[:, np.newaxis, :]  # contour functions only work on int32
-                if item['segments'] else np.array([]) for item in layer['items']
+                if 'segments' in item and item['segments'] else np.array([]) for item in layer['items']
             )
         else:
             layer_points = list(list(self.item_points(item)) for item in layer['items'])

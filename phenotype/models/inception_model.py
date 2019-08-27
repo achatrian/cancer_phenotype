@@ -18,7 +18,7 @@ class InceptionModel(BaseModel):
         self.bce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.metric_names = ['acc', 'dice'] + (['auc'] if self.opt.is_train else ['pos_prob'])
         self.visual_names = ["input", 'prediction', 'target']
-        self.visual_types = ["images", 'label', 'label']
+        self.visual_types = ["image", 'label', 'label']
         if self.is_train:
             self.optimizers = [torch.optim.Adam([
                 {'params': [param for name, param in self.net.named_parameters() if name[-4:] == 'bias'],

@@ -29,7 +29,7 @@ def extract_features(annotation_path, feature_dir, contour_struct, label_values,
     slide_path = args.data_dir / (slide_id + args.slide_format)
     if not slide_path.is_file():
         raise FileNotFoundError(f"No slide file at {str(slide_path)}")
-    reader = WSIReader(opt, slide_path)
+    reader = WSIReader(slide_path, opt)
     start_processing_time = time.time()
     processor = ContourProcessor((contours, labels), overlap_struct, contour_bbs, label_values, reader,
                                  features=[

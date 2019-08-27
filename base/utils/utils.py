@@ -813,6 +813,9 @@ def save_image(im, path):
             im = im.transpose(1, 2, 0) * 255
         elif im.shape[0] == 3 and np.max(im) > 1:
             im = im.transpose(1, 2, 0)
+        elif im.shape[2] == 3:
+            if np.max(im) == 1:
+                im = im * 255
         else:
             raise ValueError(f"Invalid array dimensions {im.shape} for images data")
         im = Image.fromarray(im.astype(np.uint8))

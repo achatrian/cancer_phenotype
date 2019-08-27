@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import argparse
 import multiprocessing as mp
 import torch
@@ -44,7 +44,6 @@ class BaseOptions:
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--do_not_spawn', action='store_false', dest='spawn_processes', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
         parser.add_argument('--augment_level', type=int, default=0, help='level of augmentation applied to input when training (my_opt)')
-        #parser.add_argument('--generated_only', action="store_true") # replace by making dataset
 
         self.parser = parser
         self.is_train = None
@@ -98,9 +97,9 @@ class BaseOptions:
 
         # save to the disk - only when training or will overwrite training information
         if self.is_train:
-            expr_dir = os.path.join(opt.checkpoints_dir, opt.experiment_name)
-            utils.mkdirs(expr_dir)
-            file_name = os.path.join(expr_dir, 'opt.txt')
+            expr_dir = Path(opt.checkpoints_dir)/opt.experiment_name
+            expr_dir.mkdir(exist_ok=True, parents=True)
+            file_name = Path(expr_dir)/'opt.txt'
             with open(file_name, 'wt') as opt_file:
                 opt_file.write(message)
                 opt_file.write('\n')

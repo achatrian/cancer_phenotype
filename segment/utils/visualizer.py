@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import cv2
 from base.utils.base_visualizer import BaseVisualizer, VisdomExceptionBase
 from base.utils import utils, html_
 
@@ -26,6 +27,12 @@ class SegmentVisualizer(BaseVisualizer):
                 for label, image in visuals.items():
                     path = os.path.basename(visuals_paths[label.split('_')[0]][0])
                     image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
+                    # rescale if image is too big for visualization
+                    max_dim = np.max(image_numpy.shape)
+                    if max_dim > 256:
+                        rescale_factor = 256 / max_dim
+                        image_numpy = cv2.resize(image_numpy, (int(image_numpy.shape[0] * rescale_factor),
+                                                               int(image_numpy.shape[1] * rescale_factor)))
                     label_html_row += f'<td>{label}</td>'
                     path_html_row += f'<td>{path}</td>'
                     images.append(image_numpy.transpose([2, 0, 1]))

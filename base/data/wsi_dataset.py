@@ -89,7 +89,7 @@ class WSIDataset(BaseDataset):
                 if not name.startswith(good_files[-1]):  # start is used
                     continue  # keep only strings matching good_files
                 good_files.pop()
-            slide = WSIReader(self.opt, file)
+            slide = WSIReader(file, self.opt)
             slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold, qc_store)
             # restrict location by tumour annotation area only
             try:  # try to read annotation i
