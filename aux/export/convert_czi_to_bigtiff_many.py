@@ -18,10 +18,20 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data_dir', type=Path, required=True)
     parser.add_argument('--tile_size', type=int, default=256)
     parser.add_argument('--overwrite', action='store_true')
+    parser.add_argument('--image_list', type=Path, default=None)
     args = parser.parse_args()
     image_counter = 0
+    if args.image_list is not None:
+        with args.image_list.open('r') as list_file:
+            selected_image_ids = []
+            for line in list_file:
+                line = line.replace('\n', '')
+                selected_image_ids.append(line)
     for file_path in args.data_dir.iterdir():
         if file_path.suffix == '.czi' and (args.overwrite or not file_path.with_suffix('.tiff').is_file()):
+            if args.image_list is not None:
+                if not any(file_path.name.startswith(image_id) for image_id in selected_image_ids):
+                    continue
             print("Converting {} ...".format(file_path.name))
             md_seq = bioformats.get_omexml_metadata(path=str(file_path))
             md_dir = file_path.parent / 'metadata'

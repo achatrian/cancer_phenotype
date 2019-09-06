@@ -3,7 +3,7 @@ import resource
 import torch.multiprocessing as mp
 from options.apply_options import ApplyOptions
 from models import create_model
-from data import create_dataset, create_dataloader
+from datasets import create_dataset, create_dataloader
 from deploy import create_deployer
 
 

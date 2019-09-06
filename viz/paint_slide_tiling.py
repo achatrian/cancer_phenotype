@@ -10,7 +10,7 @@ import pandas as pd
 from skimage import color, transform
 from matplotlib import cm
 from tqdm import tqdm
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

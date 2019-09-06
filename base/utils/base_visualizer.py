@@ -1,6 +1,8 @@
 import os
+from pathlib import Path
 import sys
 import ntpath
+import csv
 import time
 from collections import OrderedDict
 import numpy as np
@@ -75,6 +77,13 @@ class BaseVisualizer:
     def throw_visdom_connection_error(self):
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
+    def log_losses_metrics_to_file(self, losses_and_metrics):
+        write_path = Path(self.opt.checkpoints_dir/self.opt.experiment_name/'results')
+        columns = list(losses_and_metrics.keys())
+        with write_path.open('w') as write_file:
+            csv_log = csv.DictWriter(write_file, fieldnames=columns, delimiter='\t')
+            csv_log.writerow(losses_and_metrics)
+
     def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):
         if type(epoch) is str and epoch.isdigit():
             epoch = int(epoch)
@@ -85,12 +94,13 @@ class BaseVisualizer:
         for i, (k, v) in enumerate((OrderedDict(losses, **metrics)).items()):  # not displayed in correct order in python <3.6
             if not iters:
                 k = '_'.join(k.split('_')[0:-1])
-            if len(k) > 10:  # don't print very long strings
-                continue
+            if len(k) > 10:
+                k = k[:10]  # shorten very long strings
             message += '{}: {:.3f} '.format(k, v)
         print(message)
         with open(self.log_name, "a") as log_file:
             log_file.write(f'{message}\n')
+        self.log_losses_metrics_to_file(OrderedDict(losses, **metrics))
         return message
 
     # |visuals|: dictionary of images to display or save

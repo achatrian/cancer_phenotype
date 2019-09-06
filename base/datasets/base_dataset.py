@@ -73,10 +73,10 @@ class AugSeq:
                 self.seq_full.augment_image(image)
             )
 
-    def to_deterministic(self):
+    def to_deterministic(self, geom=True, full=False):
         return AugSeq(
-            self.seq_geom.to_deterministic(),
-            self.seq_full.to_deterministic()
+            self.seq_geom.to_deterministic() if geom else self.seq_geom,
+            self.seq_full if full else self.seq_full
         )
 
 
@@ -146,34 +146,33 @@ def get_augment_seq(augment_level):
             iaa.Sequential(
             [
 
-                iaa.WithChannels([0, 1, 2],
-                                 iaa.SomeOf((0, 2),
-                                            [
-                                                # sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
-                                                iaa.OneOf([
-                                                   iaa.Dropout((0.01, 0.1), per_channel=0.5),
-                                                   # randomly remove up to 10% of the pixels
-                                                   iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2),
-                                                ]),
-                                                # convert images into their superpixel representation
-                                                iaa.OneOf([
-                                                   iaa.GaussianBlur((0, 3.0)),  # blur images with a sigma between 0 and 3.0
-                                                   iaa.AverageBlur(k=(2, 7)),
-                                                   # blur images using local means with kernel sizes between 2 and 7
-                                                   iaa.MedianBlur(k=(3, 11)),
-                                                   # blur images using local medians with kernel sizes between 2 and 7
-                                                ]),
-                                                iaa.ContrastNormalization(alpha=(0.5, 1.0), per_channel=0.5),
-                                                # improve or worsen the contrast
-                                                iaa.Grayscale(alpha=(0.0, 1.0)),
-                                                sometimes(iaa.ElasticTransformation(alpha=(0.1, 0.3), sigma=0.2)),
-                                                # move pixels locally around (with random strengths)
-                                                sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.03))),
-                                                # sometimes move parts of the images around
-                                                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.03)))
-                                           ]
-                                           )
-                                 )
+             iaa.SomeOf((0, 2),
+                        [
+                            # sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
+                            iaa.OneOf([
+                               iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                               # randomly remove up to 10% of the pixels
+                               iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2),
+                            ]),
+                            # convert images into their superpixel representation
+                            iaa.OneOf([
+                               iaa.GaussianBlur((0, 3.0)),  # blur images with a sigma between 0 and 3.0
+                               iaa.AverageBlur(k=(2, 7)),
+                               # blur images using local means with kernel sizes between 2 and 7
+                               iaa.MedianBlur(k=(3, 11)),
+                               # blur images using local medians with kernel sizes between 2 and 7
+                            ]),
+                            iaa.ContrastNormalization(alpha=(0.5, 1.0), per_channel=0.5),
+                            # improve or worsen the contrast
+                            iaa.Grayscale(alpha=(0.0, 1.0)),
+                            sometimes(iaa.ElasticTransformation(alpha=(0.1, 0.3), sigma=0.2)),
+                            # move pixels locally around (with random strengths)
+                            sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.03))),
+                            # sometimes move parts of the images around
+                            sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.03)))
+                       ]
+                       )
+
             ]
         )
         )
@@ -204,52 +203,51 @@ def get_augment_seq(augment_level):
                 ]),
             iaa.Sequential(
             [
-                iaa.WithChannels([0, 1, 2],
-                                 iaa.SomeOf((0, 5),
-                                            [
-                                                sometimes(iaa.Superpixels(p_replace=(0, 0.2), n_segments=(5, 50))),
-                                                # convert images into their superpixel representation
-                                                iaa.OneOf([
-                                                    iaa.GaussianBlur((0, 3.0)),
-                                                    # blur images with a sigma between 0 and 3.0
-                                                    iaa.AverageBlur(k=(2, 7)),
-                                                    # blur images using local means with kernel sizes between 2 and 7
-                                                    iaa.MedianBlur(k=(3, 11)),
-                                                    # blur images using local medians with kernel sizes between 2 and 7
-                                                ]),
-                                                # THESE DON'T WORK IN SUBPROCESSES
-                                                # iaa.Sharpen(alpha=(0, alpha), lightness=(0.75, 1.5)),  # sharpen images
-                                                # iaa.Emboss(alpha=(0, alpha), strength=(0, 2.0)),  # emboss images
-                                                # # search either for all edges or for directed edges,
-                                                # # blend the result with the original images using a blobby mask
-                                                # iaa.SimplexNoiseAlpha(iaa.OneOf([
-                                                #     iaa.EdgeDetect(alpha=(0.2, alpha)),
-                                                #     iaa.DirectedEdgeDetect(alpha=(0.2, alpha), direction=(0.0, 1.0)),
-                                                # ])),
-                                                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
-                                                                          per_channel=0.5),
-                                                # add gaussian noise to images
-                                                iaa.OneOf([
-                                                    iaa.Dropout((0.01, 0.1), per_channel=0.5),
-                                                    # randomly remove up to 10% of the pixels
-                                                    iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
-                                                                      per_channel=0.2),
-                                                ]),
-                                                iaa.Invert(0.1, per_channel=True),  # invert color channels
-                                                iaa.Add((-30, 30), per_channel=0.5),
-                                                # change brightness of images (by -10 to 10 of original value)
-                                                iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
-                                                # either change the brightness of the whole images (sometimes
-                                                # per channel) or change the brightness of subareas
-                                                iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
-                                                # improve or worsen the contrast
-                                                # iaa.Grayscale(alpha=(0.0, 1.0)),
-                                                sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
-                                                # move pixels locally around (with random strengths)
-                                                sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
-                                                # sometimes move parts of the images around
-                                                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
-                                            ]))
+             iaa.SomeOf((0, 5),
+                        [
+                            sometimes(iaa.Superpixels(p_replace=(0, 0.2), n_segments=(5, 50))),
+                            # convert images into their superpixel representation
+                            iaa.OneOf([
+                                iaa.GaussianBlur((0, 3.0)),
+                                # blur images with a sigma between 0 and 3.0
+                                iaa.AverageBlur(k=(2, 7)),
+                                # blur images using local means with kernel sizes between 2 and 7
+                                iaa.MedianBlur(k=(3, 11)),
+                                # blur images using local medians with kernel sizes between 2 and 7
+                            ]),
+                            # THESE DON'T WORK IN SUBPROCESSES
+                            # iaa.Sharpen(alpha=(0, alpha), lightness=(0.75, 1.5)),  # sharpen images
+                            # iaa.Emboss(alpha=(0, alpha), strength=(0, 2.0)),  # emboss images
+                            # # search either for all edges or for directed edges,
+                            # # blend the result with the original images using a blobby mask
+                            # iaa.SimplexNoiseAlpha(iaa.OneOf([
+                            #     iaa.EdgeDetect(alpha=(0.2, alpha)),
+                            #     iaa.DirectedEdgeDetect(alpha=(0.2, alpha), direction=(0.0, 1.0)),
+                            # ])),
+                            iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
+                                                      per_channel=0.5),
+                            # add gaussian noise to images
+                            iaa.OneOf([
+                                iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                                # randomly remove up to 10% of the pixels
+                                iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
+                                                  per_channel=0.2),
+                            ]),
+                            iaa.Invert(0.1, per_channel=True),  # invert color channels
+                            iaa.Add((-30, 30), per_channel=0.5),
+                            # change brightness of images (by -10 to 10 of original value)
+                            iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
+                            # either change the brightness of the whole images (sometimes
+                            # per channel) or change the brightness of subareas
+                            iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                            # improve or worsen the contrast
+                            # iaa.Grayscale(alpha=(0.0, 1.0)),
+                            sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
+                            # move pixels locally around (with random strengths)
+                            sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                            # sometimes move parts of the images around
+                            sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
+                        ])
             ])
         )
 
@@ -279,61 +277,60 @@ def get_augment_seq(augment_level):
                 ]),
             iaa.Sequential(
                 [
-                    iaa.WithChannels([0, 1, 2],
-                                     iaa.SomeOf((0, 7),
-                                                [
-                                                    sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
-                                                    # convert images into their superpixel representation
-                                                    iaa.OneOf([
-                                                        iaa.GaussianBlur((0, 3.0)),
-                                                        # blur images with a sigma between 0 and 3.0
-                                                        iaa.AverageBlur(k=(2, 7)),
-                                                        # blur images using local means with kernel sizes between 2 and 7
-                                                        iaa.MedianBlur(k=(3, 11)),
-                                                        # blur images using local medians with kernel sizes between 2 and 7
-                                                    ]),
-                                                    # iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),  # sharpen images  # { REMOVED AS NOT WORKING ON MULTIPROCESSING https://github.com/aleju/imgaug/issues/147
-                                                    # iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),  # emboss images
-                                                    # search either for all edges or for directed edges,
-                                                    # blend the result with the original images using a blobby mask
-                                                    # iaa.SimplexNoiseAlpha(iaa.OneOf([
-                                                    #     iaa.EdgeDetect(alpha=(0.5, 1.0)),
-                                                    #     iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
-                                                    # ])),                                                                  # }
-                                                    iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
-                                                                              per_channel=0.5),
-                                                    # add gaussian noise to images
-                                                    iaa.OneOf([
-                                                        iaa.Dropout((0.01, 0.1), per_channel=0.5),
-                                                        # randomly remove up to 10% of the pixels
-                                                        iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
-                                                                          per_channel=0.2),
-                                                    ]),
-                                                    iaa.Invert(0.05, per_channel=True),  # invert color channels
-                                                    iaa.Add((-10, 10), per_channel=0.5),
-                                                    # change brightness of images (by -10 to 10 of original value)
-                                                    iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
-                                                    # either change the brightness of the whole images (sometimes
-                                                    # per channel) or change the brightness of subareas
-                                                    iaa.OneOf([
-                                                        iaa.Multiply((0.5, 1.5), per_channel=0.5),
-                                                        iaa.FrequencyNoiseAlpha(
-                                                            exponent=(-4, 0),
-                                                            first=iaa.Multiply((0.5, 1.5), per_channel=True),
-                                                            second=iaa.ContrastNormalization((0.5, 2.0))
-                                                        )
-                                                    ]),
-                                                    iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
-                                                    # improve or worsen the contrast
-                                                    # iaa.Grayscale(alpha=(0.0, 1.0)),
-                                                    sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
-                                                    # move pixels locally around (with random strengths)
-                                                    sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
-                                                    # sometimes move parts of the images around
-                                                    sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
-                                                ],
-                                                random_order=True
-                                                ))
+                 iaa.SomeOf((0, 7),
+                            [
+                                sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))),
+                                # convert images into their superpixel representation
+                                iaa.OneOf([
+                                    iaa.GaussianBlur((0, 3.0)),
+                                    # blur images with a sigma between 0 and 3.0
+                                    iaa.AverageBlur(k=(2, 7)),
+                                    # blur images using local means with kernel sizes between 2 and 7
+                                    iaa.MedianBlur(k=(3, 11)),
+                                    # blur images using local medians with kernel sizes between 2 and 7
+                                ]),
+                                # iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),  # sharpen images  # { REMOVED AS NOT WORKING ON MULTIPROCESSING https://github.com/aleju/imgaug/issues/147
+                                # iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),  # emboss images
+                                # search either for all edges or for directed edges,
+                                # blend the result with the original images using a blobby mask
+                                # iaa.SimplexNoiseAlpha(iaa.OneOf([
+                                #     iaa.EdgeDetect(alpha=(0.5, 1.0)),
+                                #     iaa.DirectedEdgeDetect(alpha=(0.5, 1.0), direction=(0.0, 1.0)),
+                                # ])),                                                                  # }
+                                iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255),
+                                                          per_channel=0.5),
+                                # add gaussian noise to images
+                                iaa.OneOf([
+                                    iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                                    # randomly remove up to 10% of the pixels
+                                    iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05),
+                                                      per_channel=0.2),
+                                ]),
+                                iaa.Invert(0.05, per_channel=True),  # invert color channels
+                                iaa.Add((-10, 10), per_channel=0.5),
+                                # change brightness of images (by -10 to 10 of original value)
+                                iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
+                                # either change the brightness of the whole images (sometimes
+                                # per channel) or change the brightness of subareas
+                                iaa.OneOf([
+                                    iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                                    iaa.FrequencyNoiseAlpha(
+                                        exponent=(-4, 0),
+                                        first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                                        second=iaa.ContrastNormalization((0.5, 2.0))
+                                    )
+                                ]),
+                                iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                                # improve or worsen the contrast
+                                # iaa.Grayscale(alpha=(0.0, 1.0)),
+                                sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
+                                # move pixels locally around (with random strengths)
+                                sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))),
+                                # sometimes move parts of the images around
+                                sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))
+                            ],
+                            random_order=True
+                            )
                 ],
                 random_order=True
             )

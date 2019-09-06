@@ -9,7 +9,7 @@ from base.utils import utils
 #     import matplotlib.pyplot as plt
 #     import numpy as np
 #     import cv2
-#     #from base.data.wsi_reader import WSIReader
+#     #from base.datasets.wsi_reader import WSIReader
 
 
 class AnnConvertDeployer(BaseDeployer):

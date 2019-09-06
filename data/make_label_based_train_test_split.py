@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import datetime
 from sklearn.model_selection import StratifiedKFold
-from base.data.table_reader import TableReader
+from base.datasets.table_reader import TableReader
 from base.options.train_options import TrainOptions
 from base.utils import utils
 
@@ -14,7 +14,7 @@ def main():
     for i, arg in enumerate(sys.argv):
         if arg.startswith('--dataset_name') or arg.startswith('--task'):
             sys.argv.pop(i)
-    sys.argv.append('--task=phenotype')
+    sys.argv.append('--task=phenotype')  # FIXME no need for this, as parser.parse_args can take partial string input
     sys.argv.append('--dataset_name=tcga')
     train_options = TrainOptions()
     train_options.parser.add_argument('--num_splits', default=3, type=int, help="Determine num of splits")

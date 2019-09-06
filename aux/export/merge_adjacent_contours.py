@@ -3,7 +3,7 @@ sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
                  '/well/rittscher/users/achatrian/cancer_phenotype'])
 import argparse
 from pathlib import Path
-from annotation.annotation_builder import main as merge_annotation
+from annotation.annotation_path_merger import main as merge_annotation
 
 
 if __name__ == '__main__':

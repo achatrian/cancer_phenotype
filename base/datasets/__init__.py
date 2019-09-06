@@ -10,19 +10,19 @@ def find_dataset_using_name(dataset_name, task_name):
     # will be imported.
     try:
         task_module = importlib.import_module(task_name)
-        dataset_filename = task_name + ".data." + dataset_name + "_dataset"
+        dataset_filename = task_name + ".datasets." + dataset_name + "_dataset"
         datasetlib = importlib.import_module(dataset_filename, package=task_module)
     except ModuleNotFoundError as err1:
             try:
                 # if module not found, attempt to load from base
                 task_name = 'base'
                 task_module = importlib.import_module(task_name)
-                dataset_filename = task_name + ".data." + dataset_name + "_dataset"
+                dataset_filename = task_name + ".datasets." + dataset_name + "_dataset"
                 datasetlib = importlib.import_module(dataset_filename, package=task_module)
             except ModuleNotFoundError:
                 if not err1.args:
                     err1.args = ('',)
-                err1.args = err1.args + (f"{task_name}.data contains no file '{dataset_name}.py'",)
+                err1.args = err1.args + (f"{task_name}.datasets contains no file '{dataset_name}.py'",)
                 raise err1
     except ImportError as importerr:
         if not importerr.args:

@@ -4,7 +4,7 @@ import json
 import numpy as np
 import cv2
 import tqdm
-from images.dzi_io import TileGenerator
+from data.images.dzi_io.tile_generator import TileGenerator
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter
 

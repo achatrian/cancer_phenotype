@@ -1,4 +1,4 @@
-from base.data.base_dataset import BaseDataset
+from base.datasets.base_dataset import BaseDataset
 from torchvision import datasets, transforms
 
 

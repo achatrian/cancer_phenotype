@@ -10,7 +10,7 @@ import torch
 import numpy as np
 import imgaug as ia
 import warnings
-from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
+from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 ia.seed(1)
 
 
@@ -173,13 +173,11 @@ class TileSegDataset(BaseDataset):
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
-            cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
             if self.opt.augment_level:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")  # but future extensions could be causing problems
-                    cat = self.aug_seq.augment_image(cat)
-            image = cat[:, :, 0:3]
-            gt = cat[:, :, 3]
+                seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
+                image = seq_det.augment_image(image)
+                gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
+                gt = gt[..., 0]
             if not self.opt.segment_lumen:
                 gt[gt < 255] = 0
                 gt[gt != 0] = 1

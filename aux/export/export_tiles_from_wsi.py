@@ -7,7 +7,7 @@ sys.path.extend([
     '/well/rittscher/users/achatrian/cancer_phenotype/',
     '/well/rittscher/users/achatrian/cancer_phenotype/base'
 ])
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
 from base.options.base_options import BaseOptions
 

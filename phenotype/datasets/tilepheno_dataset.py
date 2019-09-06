@@ -11,8 +11,8 @@ import torch
 import numpy as np
 import imgaug as ia
 from tqdm import tqdm
-from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
-from base.data.table_reader import TableReader
+from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
+from base.datasets.table_reader import TableReader
 from annotation.annotation_builder import AnnotationBuilder
 ia.seed(1)
 

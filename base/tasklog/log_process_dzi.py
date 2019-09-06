@@ -2,7 +2,7 @@ from pathlib import Path
 import argparse
 import re
 from tasklog import CheckResult, TaskLog
-from dzi_io import DZI_IO
+from data.images.dzi_io import DZI_IO
 
 
 def completion_test(image_path, tasklog):

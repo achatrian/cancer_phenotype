@@ -10,7 +10,7 @@ import tqdm
 from options.process_dzi_options import ProcessDZIOptions
 from models import create_model
 from utils.utils import tensor2im
-from images.dzi_io.tile_generator import TileGenerator
+from data.images.dzi_io.tile_generator import TileGenerator
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter
 
@@ -106,6 +106,8 @@ if __name__ == '__main__':
         contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
         annotation.add_segments_to_last_item(contour)
     annotation.shrink_paths(0.1)
+    annotation_dir = Path(opt.data_dir) / 'data' / 'annotations'
+    annotation_dir.mkdir(exist_ok=True, parents=True)
     annotation.dump_to_json(Path(opt.data_dir) / 'data' / 'annotations')
     print(f"Annotation saved in {str(Path(opt.data_dir) / 'data' / 'annotations')}")
     print("Done !")

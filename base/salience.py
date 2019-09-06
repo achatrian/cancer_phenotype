@@ -10,7 +10,7 @@ from torchvision.utils import make_grid
 import imageio
 from utils.guided_backprop import GuidedBackprop
 from options.salience_options import SalienceOptions
-from data import create_dataset, create_dataloader
+from datasets import create_dataset, create_dataloader
 from models import create_model
 from utils import utils
 

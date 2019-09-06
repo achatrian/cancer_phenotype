@@ -28,7 +28,7 @@ LOGDIR=/well/rittscher/users/achatrian/jobs_logs/test_many
 
 if [[ -z $2 ]]
 then
-    FILES=(/well/rittscher/projects/TCGA_prostate/TCGA/*/*)
+    FILES=(/well/rittscher/projects/TCGA_prostate/TCGA/*)
 else
     FILES=($2/*)  # expand to all files / dirs in given data directory
 fi
@@ -41,17 +41,29 @@ for SLIDEPATH in "${FILES[@]}"; do
     if [[ $SLIDENAME == *.ndpi ]]
     then
         SLIDEID="${SLIDENAME%%.ndpi*}"
-        COUNTER=$((COUNTER+1))
     elif [[ $SLIDENAME == *.svs ]]
     then
         SLIDEID="${SLIDENAME%%.svs*}"
-        COUNTER=$((COUNTER+1))
     else
-        continue
+        # if iterating over dirs, look for images inside dirs
+        for SUBPATH in ${SLIDEPATH}/*; do
+            SUBNAME=$(basename "${SUBPATH}") # get basename only
+            if [[ $SUBNAME == *.ndpi ]]
+            then
+                SLIDEID="${SUBNAME%%.ndpi*}"
+            elif [[ $SUBNAME == *.svs ]]
+            then
+                SLIDEID="${SUBNAME%%.svs*}"
+            else
+                continue
+            fi
+        done  # NB: JOB IS LAUNCHED ONLY OR LAST IMAGE IN SUBDIR
     fi
-    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
-    # echo "Applying UNET for ${SLIDEID}"
-    qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/o${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
-    COUNTER=$((COUNTER+1))
+    if [[ ! -z "$SLIDEID" ]]; then
+        echo ${SLIDEID}
+        SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
+        qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/o${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
+        COUNTER=$((COUNTER+1))
+    fi
 done
-echo "Applying network to ${COUNTER} slides ..."
+echo "Testing network on ${COUNTER} slides ..."

@@ -9,7 +9,7 @@ import numpy as np
 from torchvision.transforms import ToTensor
 from .base_dataset import BaseDataset
 from utils import utils
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
 
 

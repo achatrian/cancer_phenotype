@@ -8,8 +8,8 @@ import pandas as pd
 from skimage import transform
 from matplotlib import cm
 from tqdm import tqdm
-from images.wsi_reader import WSIReader
-from base.data.base_dataset import CenterCrop
+from data.images.wsi_reader import WSIReader
+from base.datasets.base_dataset import CenterCrop
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

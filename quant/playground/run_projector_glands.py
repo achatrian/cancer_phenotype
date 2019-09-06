@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from skimage import color
 from quant.experiment import Experiment
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 
 
 if __name__ == '__main__':

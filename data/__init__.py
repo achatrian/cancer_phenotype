@@ -6,9 +6,8 @@ import numpy as np
 import cv2
 from skimage import color
 from annotation.annotation_builder import AnnotationBuilder
-from images.wsi_reader import WSIReader
-from images.dzi_io.dzi_io import DZI_IO
-from base.utils import debug
+from data.images.wsi_reader import WSIReader
+from data.images.dzi_io import DZI_IO
 
 r"""Functions to extract and order images and annotation data, for computing features and clustering"""
 

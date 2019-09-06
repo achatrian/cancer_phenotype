@@ -1,8 +1,8 @@
 import os
 import re
-from base.data.base_dataset import BaseDataset
-from base.data import find_dataset_using_name
-from base.data.table_reader import TableReader
+from base.datasets.base_dataset import BaseDataset
+from base.datasets import find_dataset_using_name
+from base.datasets.table_reader import TableReader
 
 
 class TCGADataset(BaseDataset):

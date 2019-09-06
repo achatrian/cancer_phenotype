@@ -10,7 +10,7 @@ import cv2
 import imageio
 from scipy.spatial.distance import cdist
 from . import Experiment
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 
 
 class Clustering(Experiment):

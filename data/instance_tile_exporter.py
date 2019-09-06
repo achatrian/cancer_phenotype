@@ -6,14 +6,17 @@ import cv2
 import numpy as np
 import imageio
 from tqdm import tqdm
-from images.wsi_reader import WSIReader
-from data.__init__ import read_annotations, get_contour_image
+from data.images.wsi_reader import WSIReader
+from data import read_annotations, get_contour_image
 from data.instance_masker import InstanceMasker
-# from dzi_io.dzi_io import DZI_IO
+
+
+# from data.images.dzi_io.dzi_io import DZI_IO
 
 
 class InstanceTileExporter:
-    r"""Extract tiles centered around images component instances"""
+    r"""Extract tiles centered around images component instances.
+    If an instance is larger than the given tile size, multiple tiles per instance are extracted"""
     def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2, label_values=(('epithelium', 200), ('lumen', 250))):
         self.data_dir = Path(data_dir)
         self.slide_id = slide_id
@@ -23,9 +26,9 @@ class InstanceTileExporter:
         annotations_path = Path(self.data_dir)/'data'/'annotations'
         try:
             self.slide_path = next(path for path in self.data_dir.iterdir() if slide_id in path.name
-                                   and path.name.endswith(('.svs', 'ndpi', 'tiff')))
+                                   and path.name.endswith(('.svs', '.ndpi', '.tiff')))
         except StopIteration:
-            raise ValueError(f"No annotation matching slide id: {slide_id}")
+            raise ValueError(f"No image file matching id: {slide_id}")
         try:
             self.annotation_path = next(path for path in annotations_path.iterdir() if slide_id in path.name)
         except StopIteration:
@@ -56,12 +59,13 @@ class InstanceTileExporter:
             mask = cv2.dilate(mask, np.ones((3, 3)))  # pre-dilate to remove jagged boundary from low-res contour extraction
             x, y, w, h = cv2.boundingRect(components['parent_contour'])
             assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
-            if self.tile_size is not None:
-                images, masks = self.fit_to_size(image, mask)
-                for j, (image, mask) in enumerate(zip(images, masks)):
-                    name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + ('' if len(images) == 1 else str(j))
-                    imageio.imwrite(slide_dir/(name + '_image.png'), image.astype(np.uint8))
-                    imageio.imwrite(slide_dir/(name + '_mask.png'), mask.astype(np.uint8))
+            images, masks = self.fit_to_size(image, mask)
+            for j, (image, mask) in enumerate(zip(images, masks)):
+                name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + '_' + ('' if len(images) == 1 else str(j))
+                imageio.imwrite(slide_dir/(name + '_image.png'), image.astype(np.uint8))
+                if mask.shape[2] == 3:
+                    mask = mask[..., 0]  # cv2.dilate is adding channels?
+                imageio.imwrite(slide_dir/(name + '_mask.png'), mask.astype(np.uint8))
         (save_dir/'logs').mkdir(exist_ok=True)
         with open(save_dir/'logs'/f'{self.slide_id}_tiles.json', 'w') as tiles_file:
             json.dump({
@@ -71,7 +75,15 @@ class InstanceTileExporter:
                 'layer': layer
             }, tiles_file)
 
-    def fit_to_size(self, image, mask, multitile_threshold=2):
+    def fit_to_size(self, image, mask, multitile_threshold=2, mask_fill_threshold=0.3):
+        r"""
+        Divides up image and corresponding mask into tiles of equal size
+        :param image:
+        :param mask:
+        :param multitile_threshold: smallest
+        :param mask_fill_threshold:
+        :return:
+        """
         too_narrow = image.shape[1] < self.tile_size
         too_short = image.shape[0] < self.tile_size
         if too_narrow or too_short:
@@ -88,14 +100,20 @@ class InstanceTileExporter:
                 images, masks = [], []
                 for i in range(0, image.shape[0], self.tile_size):
                     for j in range(0, image.shape[1], self.tile_size):
-                        images.append(image[i:i+self.tile_size, j:j+self.tile_size])
-                        masks.append(mask[i:i+self.tile_size, j:j+self.tile_size])
+                        r = i if i + self.tile_size < image.shape[0] else image.shape[0] - self.tile_size
+                        c = j if j + self.tile_size < image.shape[1] else image.shape[1] - self.tile_size
+                        submask = mask[r:r+self.tile_size, c:c+self.tile_size]
+                        if (submask > 0).sum()/submask.size < mask_fill_threshold:
+                            continue
+                        images.append(image[r:r+self.tile_size, c:c+self.tile_size])
+                        masks.append(submask)
             else:
                 images = [self.center_crop(image)]
                 masks = [self.center_crop(mask)]
         else:
             images = [image]
             masks = [mask]
+        assert all(image.shape[:2] == (self.tile_size, self.tile_size) for image in images), "images must be of specified shape"
         return images, masks
 
 
@@ -122,8 +140,8 @@ class CenterCrop(object):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('data_dir', type=Path, required=True)
-    parser.add_argument('--slide_id', type=str, required=True)
+    parser.add_argument('data_dir', type=Path)
+    parser.add_argument('slide_id', type=str)
     parser.add_argument('--mpp', type=float, default=1.0)
     parser.add_argument('--tile_size', type=int, default=512)
     parser.add_argument('--outer_label', type=str, default='epithelium', help="Layer whose instances are returned, one per tiles")

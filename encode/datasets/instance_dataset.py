@@ -6,9 +6,10 @@ import imageio
 import cv2
 import torch
 from torchvision.transforms import ToTensor
-from base.data.base_dataset import BaseDataset, RandomCrop, get_augment_seq
+from base.datasets.base_dataset import BaseDataset, RandomCrop, get_augment_seq
 
 
+# TODO replace with instancetiles dataset in segment
 class InstanceDataset(BaseDataset):
     r"""Dataset to lod component instance tiles and associated ground truth masks"""
 

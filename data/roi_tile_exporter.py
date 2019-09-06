@@ -12,11 +12,10 @@ import imageio
 from tqdm import tqdm
 from skimage.filters import gaussian
 from skimage.color import rgba2rgb
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
 from data import read_annotations, contour_to_mask
 from annotation.mask_converter import MaskConverter
-from base.utils import debug
 
 
 class ROITileExporter:

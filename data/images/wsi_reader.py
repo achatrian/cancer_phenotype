@@ -87,7 +87,7 @@ class WSIReader(OpenSlide):
             self.no_resolution = False
         except KeyError:
             warnings.warn("No resolution information available")
-            self.no_resolution = True
+            self.no_resolution = True  # TODO disable all resolution dependent commands
         self.tissue_threshold = None
         self.tissue_percentage = None
         self.saturation_threshold = None

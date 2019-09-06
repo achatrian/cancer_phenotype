@@ -1,9 +1,10 @@
 from pathlib import Path
 import argparse
 import multiprocessing as mp
+import json
 import torch
 from base import models
-from base import data
+from base import datasets
 from base import deploy
 from base.utils import utils
 from options.task_options import get_task_options
@@ -44,7 +45,6 @@ class BaseOptions:
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--do_not_spawn', action='store_false', dest='spawn_processes', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
         parser.add_argument('--augment_level', type=int, default=0, help='level of augmentation applied to input when training (my_opt)')
-
         self.parser = parser
         self.is_train = None
         self.is_apply = None
@@ -70,7 +70,7 @@ class BaseOptions:
         # modify dataset-related parser options
         dataset_name = opt.dataset_name
         if dataset_name and dataset_name != 'none':
-            dataset_option_setter = data.get_option_setter(dataset_name, task_name)
+            dataset_option_setter = datasets.get_option_setter(dataset_name, task_name)
             parser = dataset_option_setter(parser, self.is_train)
 
         if self.is_apply:
@@ -93,7 +93,8 @@ class BaseOptions:
                 comment = '\t[default: %s]' % str(default)
             message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
         message += '----------------- End -------------------'
-        print(message)
+        if not return_only:
+            print(message)
 
         # save to the disk - only when training or will overwrite training information
         if self.is_train:
@@ -132,4 +133,12 @@ class BaseOptions:
             mp.set_start_method('spawn', force=True)
 
         self.opt = opt
+
+        if self.is_train:
+            # save opt namespace to json
+            expr_dir = Path(opt.checkpoints_dir) / opt.experiment_name
+            expr_dir.mkdir(exist_ok=True, parents=True)
+            options_path = Path(expr_dir) / 'opt.json'
+            with open(options_path, 'w') as options_file:
+                json.dump(vars(self.opt), options_file)
         return self.opt

@@ -3,7 +3,7 @@ import json
 import re
 import numpy as np
 import cv2
-from images.dzi_io.tile_generator import TileGenerator
+from data.images.dzi_io.tile_generator import TileGenerator
 from options.process_dzi_options import ProcessDZIOptions
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter

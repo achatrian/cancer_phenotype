@@ -9,7 +9,7 @@ import multiprocessing as mp
 import numpy as np
 import pandas as pd
 import tqdm
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 from base.utils import utils
 from data.__init__ import read_annotations, annotations_summary, find_overlap
 from data.contour_processor import ContourProcessor

@@ -7,7 +7,7 @@ from quant import read_annotations, contour_to_mask, find_overlap, contours_to_m
     ContourProcessor, quantify
 from quant.features import region_properties, red_haralick, green_haralick, blue_haralick, gray_haralick, \
     surf_points, gray_cooccurrence
-from images.wsi_reader import WSIReader
+from data.images.wsi_reader import WSIReader
 
 # fixtures
 

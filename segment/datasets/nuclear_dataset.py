@@ -5,7 +5,7 @@ import cv2
 import torch
 import numpy as np
 import imgaug as ia
-from base.data.base_dataset import BaseDataset, get_augment_seq, RandomCrop
+from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 
 ia.seed(1)
 

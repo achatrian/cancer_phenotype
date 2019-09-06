@@ -205,8 +205,8 @@ class BaseModel:
         for name in self.loss_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
-                name = name if not self.is_val else name + "_val"
                 if self.is_val:
+                    name = name + '_val'
                     errors_ret[name] = float(getattr(self, 'loss_' + name))
                 else:
                     errors_ret[name] = float(self.meters[name].avg)
@@ -217,9 +217,9 @@ class BaseModel:
         for name in self.metric_names:
             if isinstance(name, str):
                 # float(...) works for both scalar tensor and float number
-                name = name if not self.is_val else name + "_val"
                 if self.is_val:
-                    metric_ret[name] = float(getattr(self, 'loss_' + name))
+                    name = name + '_val'
+                    metric_ret[name] = float(getattr(self, 'metric_' + name))
                 else:
                     metric_ret[name] = float(self.meters[name].avg)
         return metric_ret

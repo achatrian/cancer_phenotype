@@ -5,11 +5,12 @@ from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import roc_auc_score
 from options.test_options import TestOptions
-from data import create_dataset, create_dataloader
+from datasets import create_dataset, create_dataloader
 from models import create_model
 from utils.base_visualizer import save_images
 from utils import html_, create_visualizer, utils
 r"Test script for network, aggregates results over whole validation dataset"
+
 
 if __name__ == '__main__':
     opt = TestOptions().parse()
@@ -71,6 +72,7 @@ if __name__ == '__main__':
     }
     json.dump(results, open((save_results_dir/model.model_tag/results_name).with_suffix('.json'), 'w'))
     # gather results for all slides
+    # this is updated every time a test.py for one particular slide finishes processing
     model_results = dict(options=results['options'])
     model_results['slides'] = slides_results = dict()
     counter = 0
@@ -100,8 +102,9 @@ if __name__ == '__main__':
     }
     # compute ROC AUC score over all slides
     results = sorted(slides_results.values(), key=lambda result: result['id'])  # ensure order is same for arrays below
-    slide_level_labels = np.fromiter((result['slide_level_label'] for result in results), float)
-    slide_pos_probs = np.fromiter((result['metrics']['pos_prob_val'] for result in results), float)
-    model_results['statistics']['roc_auc_score'] = roc_auc_score(slide_level_labels, slide_pos_probs)
-    json.dump(model_results, open((save_results_dir / model.model_tag).with_suffix('.json'), 'w'))
-    print(f"Done! Model results for {model.model_tag} on {model_results['num_cases']} slides are available")
+    if len(results) > 1:  # if many other slides have been processed already
+        slide_level_labels = np.fromiter((result['slide_level_label'] for result in results), float)
+        slide_pos_probs = np.fromiter((result['metrics']['pos_prob_val'] for result in results), float)
+        model_results['statistics']['roc_auc_score'] = roc_auc_score(slide_level_labels, slide_pos_probs)
+        json.dump(model_results, open((save_results_dir / model.model_tag).with_suffix('.json'), 'w'))
+        print(f"Done! Model results for {model.model_tag} on {model_results['num_cases']} slides are available")
