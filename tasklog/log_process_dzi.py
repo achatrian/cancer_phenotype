@@ -1,7 +1,7 @@
 from pathlib import Path
 import argparse
 import re
-from tasklog import CheckResult, TaskLog
+from .tasklog import CheckResult, TaskLog
 from data.images.dzi_io import DZI_IO
 
 

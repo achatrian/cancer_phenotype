@@ -5,11 +5,8 @@ import ntpath
 import csv
 import time
 from collections import OrderedDict
-import numpy as np
 from scipy.misc import imresize
-from skimage import transform
 from . import utils
-from . import html_
 
 if sys.version_info[0] == 2:
     VisdomExceptionBase = Exception
@@ -77,8 +74,12 @@ class BaseVisualizer:
     def throw_visdom_connection_error(self):
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
-    def log_losses_metrics_to_file(self, losses_and_metrics):
+    def log_losses_metrics_to_file(self, losses_and_metrics, epoch, iters):
         write_path = Path(self.opt.checkpoints_dir/self.opt.experiment_name/'results')
+        losses_and_metrics['epoch'] = epoch
+        losses_and_metrics['iters'] = iters
+        losses_and_metrics.move_to_end('iters', last=False)
+        losses_and_metrics.move_to_end('epoch', last=False)
         columns = list(losses_and_metrics.keys())
         with write_path.open('w') as write_file:
             csv_log = csv.DictWriter(write_file, fieldnames=columns, delimiter='\t')
@@ -100,7 +101,8 @@ class BaseVisualizer:
         print(message)
         with open(self.log_name, "a") as log_file:
             log_file.write(f'{message}\n')
-        self.log_losses_metrics_to_file(OrderedDict(losses, **metrics))
+        if iters:
+            self.log_losses_metrics_to_file(OrderedDict(losses, **metrics), epoch, iters)
         return message
 
     # |visuals|: dictionary of images to display or save

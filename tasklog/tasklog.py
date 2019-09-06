@@ -6,7 +6,7 @@ import re
 import pandas as pd
 from tqdm import tqdm
 
-r"""Class for testing extent of task success on given dataset and returns compact dataviz representation of progress"""
+r"""Class for testing extent of task success on given dataset and return compact dataviz representation of progress"""
 
 
 CheckResult = namedtuple('CheckResult', ['name', 'outcome', 'progress', 'log', 'time'])

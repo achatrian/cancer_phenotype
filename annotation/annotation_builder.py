@@ -49,7 +49,8 @@ class AnnotationBuilder:
         self.project_name = project_name if project_name else slide_id
         self._obj = {
             'name': self.project_name,
-            'layers': []
+            'layers': [],
+            'data': {}  # additional data, e.g. network that produced annotation
         }  # to be dumped to .json
         self.layer_names = []
         # store additional info on segments for processing
@@ -458,6 +459,9 @@ class AnnotationBuilder:
             origin_rect = None
         rect_areas = ((x_w0 - x0) * (y_h0 - y0), (x_w1 - x1) * (y_h1 - y1))
         return positions, origin_rect, rect_areas
+
+    def add_data(self, key, value):
+        self._obj['data'][key] = value
 
 
 def pairwise(iterable):
