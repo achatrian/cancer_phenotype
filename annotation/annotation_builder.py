@@ -44,7 +44,7 @@ class AnnotationBuilder:
                 warnings.warn(f"No available metadata for {instance.slide_id}")
         return instance
 
-    def __init__(self, slide_id, project_name='', layers=(), keep_original_paths=False):
+    def __init__(self, slide_id, project_name='', layers=()):
         self.slide_id = slide_id  # AIDA uses filename before extension to determine which annotation to load
         self.project_name = project_name if project_name else slide_id
         self._obj = {
@@ -57,7 +57,6 @@ class AnnotationBuilder:
         self.metadata = defaultdict(lambda: {'tile_dict': [], 'dist': []})  # layer_idx -> (metadata_name -> (item_idx -> value)))
         self.last_added_item = None
         # point comparison
-        self.keep_original_paths = keep_original_paths
         for layer_name in layers:
             self.add_layer(layer_name)  # this also updates self.layer_names with references to layers names
 

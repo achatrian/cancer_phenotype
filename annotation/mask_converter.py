@@ -41,7 +41,7 @@ class MaskConverter:
                 'small_object_size': 1024*0.4,
                 'dist_threshold': 0.05,
                 'final_closing_size': 20,
-                'final_dilation_size': 1
+                'final_dilation_size': 2
             },
             'lumen': {
                 'small_object_size': 400,

@@ -44,6 +44,7 @@ class ContourProcessor:
         self.discarded = []
 
     def __iter__(self, skip_label='lumen'):
+        r"""Returns an iterator to go through all the contours in a slide"""
         if skip_label:
             self.indices = [i for i in range(len(self.labels)) if self.labels[i] != skip_label]
         self.gen = contours_to_multilabel_masks((self.contours, self.labels), self.overlap_struct,
@@ -79,8 +80,8 @@ class ContourProcessor:
                 kwargs['contour'] = contour
             if 'mask' in feature.type_:
                 kwargs['mask'] = mask
-            if 'images' in feature.type_:
-                kwargs['images'] = image
+            if 'image' in feature.type_:
+                kwargs['image'] = image
             if 'gray_image' in feature.type_:
                 kwargs['gray_image'] = gray_image
             if 'label' in feature.type_:

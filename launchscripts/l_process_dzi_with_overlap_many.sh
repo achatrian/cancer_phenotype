@@ -24,7 +24,7 @@ DATE=`date`
 JOBID=$(tr ' ' '_' <<< ${DATE})  # replace spaces with underscores
 JOBID=$(tr ':' '_' <<< ${JOBID})  # replace columns with underscores (or it breaks)
 JOBID="${JOBID}_${JOB_ID}"  # in case multiple jobs are run in the same second, add counter id to differentiate between them
-LOGDIR=/well/rittscher/users/achatrian/jobs_logs/process_dzi_many
+LOGDIR=/well/rittscher/users/achatrian/jobs_logs/process_dzi_with_overlap_many
 cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts
 
 if [[ -z $2 ]]

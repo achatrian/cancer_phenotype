@@ -37,7 +37,6 @@ def process_image(image, input_path, model):
     model.set_input(data)
     model.test()
     output_logits = model.get_current_visuals()['output_map'][0]  # 'logits' as they are not bounded and we want to take softmax on them
-    # TODO test
     if output_logits.shape[0] > 3:
         raise ValueError(f"Since segmentation has {output_logits.shape[0]} > 3 classes, unintelligible dzi images would be produced from combination.")
     output = torch.nn.functional.softmax(output_logits, dim=0)
@@ -47,13 +46,12 @@ def process_image(image, input_path, model):
 
 
 def merge_tiles(mask0, mask1, overlap=0.5):
-    # TODO weight pixels by distance from tile edge
-    x, y = np.meshgrid(np.arange(mask0.shape[0]), np.arange(mask0.shape[1]))
+    x, y = np.meshgrid(np.arange(mask0.shape[1]), np.arange(mask0.shape[0]))
 
     def w(x, y):
         r"""Line increase from 0 to 1 at overlap end, plateau at 1 in center,
         and decay from overlap start to end of image"""
-        lx, ly, r = (mask0.shape[0]-1), (mask0.shape[1]-1), overlap
+        lx, ly, r = (mask0.shape[1]-1), (mask0.shape[0]-1), overlap
         if 0 <= x < lx*r:
             wx = x/(lx*r)
         elif lx*r <= x < lx*(1-r):
@@ -106,7 +104,7 @@ if __name__ == '__main__':
     print("Processing origin-aligned dzi ...")
     for x, y in tqdm.tqdm(product(xs, ys), total=len(xs)*len(ys)):
         x_mask, y_mask = dzi.slide_to_mask((x, y))
-        if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > 0.4:
+        if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > opt.tissue_content_threshold:
             dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), process_image_with_model, border=0)
         else:
             dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), np.zeros_like, border=0)

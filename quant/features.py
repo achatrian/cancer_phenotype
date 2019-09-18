@@ -39,31 +39,35 @@ def is_gray_image(arg):  # specifies gray images format (grayscale mapped to [-1
 class Feature:
     r"""Feature callable
     """
-    __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls',
+    __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls', 'enable_checks',
                  'is_contour', 'is_mask', 'is_image', 'is_gray_image']
     # how-to-python: docstring and __slots__ defined this way are class attributes
 
-    def __init__(self, function, returns):
+    def __init__(self, function, returns, enable_checks=True):
         self.function = function
         type_ = set(getfullargspec(function).args)
-        assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'images'} or type_ >= {'gray_image'}
+        assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'image'} or type_ >= {'gray_image'}
         self.type_ = type_
         self.returns = returns
         self.name = function.__name__
         self.call_time = 0.0
         self.n_calls = 0
+        self.enable_checks = enable_checks
         # TODO test memoized function attributes
 
     def __call__(self, **kwargs):
         # NB: only keyword arguments work with Features
-        if 'contour' in self.type_ and not is_contour(kwargs['contour']):
-            raise ValueError(f"Arguments do not contain contour-type input (f: {self.name})")
-        if 'mask' in self.type_ and not is_mask(kwargs['mask']):
-            raise ValueError(f"Arguments does not contain mask-type input (f: {self.name})")
-        if 'images' in self.type_ and not is_image(kwargs['images']):
-            raise ValueError(f"Arguments does not contain images-type input (f: {self.name})")
-        if 'gray_image' in self.type_ and not is_gray_image(kwargs['gray_image']):
-            raise ValueError(f"Arguments does not contain grayscale images-type input (f: {self.name})")
+        if set(kwargs) < self.type_:
+            raise ValueError(f"Missing arguments {self.type_ - set(kwargs)} for feature '{self.name}'")
+        if self.enable_checks:
+            if 'contour' in self.type_ and not is_contour(kwargs['contour']):
+                raise ValueError(f"Arguments do not contain contour-type input (f: {self.name})")
+            if 'mask' in self.type_ and not is_mask(kwargs['mask']):
+                raise ValueError(f"Arguments does not contain mask-type input (f: {self.name})")
+            if 'image' in self.type_ and not is_image(kwargs['image']):
+                raise ValueError(f"Arguments does not contain image-type input (f: {self.name})")
+            if 'gray_image' in self.type_ and not is_gray_image(kwargs['gray_image']):
+                raise ValueError(f"Arguments does not contain grayscale images-type input (f: {self.name})")
         start_time = time.time()
         output = self.function(**kwargs)
         self.call_time = (time.time() - start_time - self.call_time) / (self.n_calls + 1) + self.call_time

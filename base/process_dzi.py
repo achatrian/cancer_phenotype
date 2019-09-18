@@ -60,7 +60,7 @@ if __name__ == '__main__':
     print("Processing dzi ...")
     for x, y in tqdm.tqdm(product(xs, ys), total=len(xs)*len(ys)):
         x_mask, y_mask = dzi.slide_to_mask((x, y))
-        if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > 0.3:
+        if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > opt.tissue_content_threshold:
             dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), process_image_with_model, border=0)
         else:
             dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), np.zeros_like, border=0)

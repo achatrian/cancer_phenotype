@@ -19,18 +19,15 @@ from quant.features import region_properties, gray_haralick, \
 r"""Script with tasks to transform and crunch data"""
 
 
-def extract_features(annotation_path, feature_dir, label_values, args):
+def extract_features(annotation_path, slide_path, feature_dir, label_values, args):
     r"""Quantify features from one annotated images. Used in quantify()"""
     logger = logging.getLogger(__name__)
     opt = WSIReader.get_reader_options(include_path=False)
     slide_id = annotation_path.with_suffix('').name
     contour_struct = read_annotations(args.data_dir, slide_ids=(slide_id,), experiment_name=args.experiment_name)
-    slide_id = annotation_path.name[:-5]
+    annotations_summary(contour_struct)
     print(f"Processing {slide_id} ...")
     overlap_struct, contours, contour_bbs, labels = find_overlap(contour_struct[slide_id])
-    slide_path = args.data_dir / (slide_id + args.slide_format)
-    if not slide_path.is_file():
-        raise FileNotFoundError(f"No slide file at {str(slide_path)}")
     reader = WSIReader(slide_path, opt)
     start_processing_time = time.time()
     processor = ContourProcessor((contours, labels), overlap_struct, contour_bbs, label_values, reader,
@@ -49,9 +46,11 @@ def extract_features(annotation_path, feature_dir, label_values, args):
         # below: 'index' yields larger files than 'split', but then the dict with extra custom fields can be loaded
         with open(feature_dir / (slide_id + '.json'), 'w') as feature_file:
             x.to_json(feature_file, orient='split')
-        with open(feature_dir / 'data' / ('data_' + slide_id + '.json'), 'w') as data_file:
+        (feature_dir/'data'/args.experiment_name).mkdir(exist_ok=True, parent=True)
+        with open(feature_dir/'data'/args.experiment_name/('data_' + slide_id + '.json'), 'w') as data_file:
             json.dump(data, data_file)
-        with open(feature_dir / 'relational' / ('dist_' + slide_id + '.txt'), 'w') as dist_file:
+        (feature_dir/'relational'/args.experiment_name).mkdir(exist_ok=True, parent=True)
+        with open(feature_dir/'relational'/args.experiment_name/('dist_' + slide_id + '.txt'), 'w') as dist_file:
             np.savetxt(dist_file, dist)
             processing_time = time.time() - start_processing_time
             logger.info(f"{slide_id} was processed. Processing time: {processing_time:.2f}s")
@@ -65,8 +64,6 @@ def extract_features(annotation_path, feature_dir, label_values, args):
 def quantify(args):
     r"""Task: Extract features from annotated images in data dir"""
     print(f"Quantifying annotated images data in {str(args.data_dir)} (workers = {args.workers}) ...")
-    contour_struct = read_annotations(args.data_dir, experiment_name=args.experiment_name)
-    annotations_summary(contour_struct)
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
     (args.data_dir/'logs').mkdir(exist_ok=True)
@@ -83,21 +80,37 @@ def quantify(args):
     (feature_dir/'data').mkdir(exist_ok=True)  # for other data
     (feature_dir/'relational').mkdir(exist_ok=True)  # for relational data between instances
     # skip path if feature file already exists, unless overwrite is passed
-    paths = list(path for path in (Path(args.data_dir)/'data'/'annotations').iterdir()
+    annotation_paths = sorted((path for path in (Path(args.data_dir)/'data'/'annotations'/args.experiment_name).iterdir()
                  if (args.overwrite or not (feature_dir/path.name).is_file()) and
-                 not path.is_dir() and path.suffix == '.json')
-    logger.info(f"Processing {len(paths)} annotations (overwrite = {args.overwrite}) ...")
-    if paths:
+                 not path.is_dir() and path.suffix == '.json'), key=lambda path: path.with_suffix('').name)
+    slide_paths_ = list(path for path in Path(args.data_dir).iterdir()
+                       if path.suffix == '.svs' or path.suffix == '.ndpi')
+    slide_paths_ += list(path for path in Path(args.data_dir).glob('*/*.ndpi'))
+    slide_paths_ += list(path for path in Path(args.data_dir).glob('*/*.svs'))
+    slide_paths_ = sorted(slide_paths_, key=lambda path: path.with_suffix('').name)
+    slide_paths = []
+    # match a slide path to every annotation path. Account for missing annotations by ignoring the corresponding slides
+    # assume slides and annotations are in the same order
+    i, j = 0, 0
+    while len(slide_paths) != len(annotation_paths):
+        annotation_path, slide_path = annotation_paths[i], slide_paths_[j]
+        if slide_path.with_suffix('').name.startswith(annotation_path.with_suffix('').name):
+            slide_paths.append(slide_path)
+            i += 1
+        j += 1
+    logger.info(f"Processing {len(annotation_paths)} annotations (overwrite = {args.overwrite}) ...")
+    if annotation_paths:
         if args.workers > 0:
             with mp.pool.Pool(processes=args.workers) as pool:
                 processing_times = pool.starmap(
                     extract_features,
-                    [(path, feature_dir, contour_struct, label_values, args) for path in paths]
+                    [(annotation_path, slide_path, feature_dir, label_values, args)
+                     for annotation_path, slide_path in zip(annotation_paths, slide_paths)]
                 )
         else:  # run sequentially
             processing_times = []
-            for path in paths:
-                processing_times.append(extract_features(path, feature_dir, contour_struct, label_values, args))
+            for annotation_path, slide_path in zip(annotation_paths, slide_paths):
+                processing_times.append(extract_features(annotation_path, slide_path, feature_dir, label_values, args))
         logger.info(f"Quantified {len(processing_times)} in {sum(processing_times)/len(processing_times):.2f}s")
     else:
         logger.info(f"No annotations to process (overwrite = {args.overwrite}).")
