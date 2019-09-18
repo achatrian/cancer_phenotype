@@ -77,11 +77,12 @@ if __name__ == '__main__':
                     model.test()
                     model.evaluate_parameters()
                     update_validation_meters()
-            visualizer.reset()
-            visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, True)
-            losses_val = model.get_current_losses()
-            metrics_val = model.get_current_metrics()
-            visualizer.print_current_losses_metrics(epoch, None, losses_val, metrics_val, None, None)
+                # metrics and visuals obtained when is_val flag is on
+                visualizer.reset()
+                visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, True)
+                losses_val = model.get_current_losses()
+                metrics_val = model.get_current_metrics()
+                visualizer.print_current_losses_metrics(epoch, None, losses_val, metrics_val, None, None)
             if opt.display_id > 0:
                 visualizer.plot_current_losses_metrics(epoch, epoch_progress + 0.001, losses_val, metrics_val)
             print("Validated parameters at epoch {:d} \t Time Taken: {:d} sec".format(epoch, int(time.time() - val_start_time)))

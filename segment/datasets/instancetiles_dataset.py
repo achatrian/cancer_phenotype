@@ -145,6 +145,7 @@ class InstanceTilesDataset(BaseDataset):
                 image = seq_det.augment_image(image)
                 gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
                 gt = gt[..., 0]
+            # paint labels in
             for i, (label, interval) in enumerate(self.label_interval_map.items()):
                 gt[np.logical_and(gt >= interval[0], gt <= interval[1])] = i
             gt[np.logical_and(gt < 0, gt > i)] = 0

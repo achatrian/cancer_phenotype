@@ -47,7 +47,7 @@ class BaseVisualizer:
         :param opt:
         """
         self.display_id = opt.display_id
-        self.use_html = opt.is_train and not opt.no_html
+        self.use_html = opt.is_train and opt.html
         self.win_size = opt.display_winsize
         self.name = opt.experiment_name
         self.opt = opt
@@ -61,7 +61,7 @@ class BaseVisualizer:
             self.web_dir = os.path.join(opt.checkpoints_dir, self.opt.experiment_name, 'web')
             self.img_dir = os.path.join(self.web_dir, 'images')
             print('create web directory %s...' % self.web_dir)
-            utils.mkdirs([self.web_dir, self.img_dir])
+            Path(self.web_dir).mkdir(exist_ok=True), Path(self.img_dir).mkdir(exist_ok=True)
         self.log_name = os.path.join(opt.checkpoints_dir, self.opt.experiment_name, 'loss_log.txt')
         self.image_size = 256
         with open(self.log_name, "a") as log_file:
@@ -75,7 +75,7 @@ class BaseVisualizer:
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
     def log_losses_metrics_to_file(self, losses_and_metrics, epoch, iters):
-        write_path = Path(self.opt.checkpoints_dir/self.opt.experiment_name/'results')
+        write_path = Path(self.opt.checkpoints_dir)/self.opt.experiment_name/'results'
         losses_and_metrics['epoch'] = epoch
         losses_and_metrics['iters'] = iters
         losses_and_metrics.move_to_end('iters', last=False)

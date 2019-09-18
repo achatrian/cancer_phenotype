@@ -53,7 +53,7 @@ if __name__ == '__main__':
         y_read = y if mask_dzi.height == original_dzi.height else int(y / rescale_factor)
         w_read, h_read = int(w / rescale_factor), int(h / rescale_factor)
         mask = mask_dzi.read_region((x_read, y_read), converted_level, (w_read, h_read))
-        converter = MaskConverter(dist_threshold=opt.distance_threshold)
+        converter = MaskConverter()
         tqdm.tqdm.write("Extracting contours from mask ...")
         contours, labels, boxes = converter.mask_to_contour(mask, x_read, y_read, rescale_factor=None)  # don't rescale map inside
         # rescale contours

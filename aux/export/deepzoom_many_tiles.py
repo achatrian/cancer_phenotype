@@ -62,7 +62,7 @@ if __name__ == '__main__':
 
     # Change the behavior of SIGALRM
     signal.signal(signal.SIGALRM, timeout_handler)
-    timeout = 15*60
+    timeout = 20*60
     for slide_path in slide_paths:
         signal.alarm(timeout)
         # This try/except loop ensures that

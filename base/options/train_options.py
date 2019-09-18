@@ -26,7 +26,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--nepoch_decay', type=int, default=100, help='# of epochs to linearly decay learning rate to zero')
         parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
         parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
-        parser.add_argument('--no_html', action='store_true', help='do not save intermediate training results to [opt.checkpoints_dir]/[opt.name]/web/')
+        parser.add_argument('--html', action='store_true', help='save intermediate training results to [opt.checkpoints_dir]/[opt.name]/web/')
         parser.add_argument('--lr_policy', type=str, default='lambda', help='learning rate policy: lambda|step|plateau|cosine')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
         parser.add_argument('--message', type=str, default='', help="Text saved to experiment dir as a file")
@@ -37,9 +37,8 @@ class TrainOptions(BaseOptions):
         super().parse()
         if self.opt.message:
             expr_dir = Path(self.opt.checkpoints_dir) / self.opt.experiment_name
-            with (expr_dir/'message.txt').open('w') as message_file:
+            with (expr_dir/'experiment_readme.txt').open('w') as message_file:
                 message_file.write(self.opt.message)
-            self.opt.message = '[written to file]'
         return self.opt
 
 

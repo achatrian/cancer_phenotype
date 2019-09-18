@@ -11,7 +11,7 @@ import pandas as pd
 import tqdm
 from data.images.wsi_reader import WSIReader
 from base.utils import utils
-from data.__init__ import read_annotations, annotations_summary, find_overlap
+from data import read_annotations, annotations_summary, find_overlap
 from data.contour_processor import ContourProcessor
 from quant.features import region_properties, gray_haralick, \
     surf_points, gray_cooccurrence
@@ -19,10 +19,12 @@ from quant.features import region_properties, gray_haralick, \
 r"""Script with tasks to transform and crunch data"""
 
 
-def extract_features(annotation_path, feature_dir, contour_struct, label_values, args):
+def extract_features(annotation_path, feature_dir, label_values, args):
     r"""Quantify features from one annotated images. Used in quantify()"""
     logger = logging.getLogger(__name__)
     opt = WSIReader.get_reader_options(include_path=False)
+    slide_id = annotation_path.with_suffix('').name
+    contour_struct = read_annotations(args.data_dir, slide_ids=(slide_id,), experiment_name=args.experiment_name)
     slide_id = annotation_path.name[:-5]
     print(f"Processing {slide_id} ...")
     overlap_struct, contours, contour_bbs, labels = find_overlap(contour_struct[slide_id])
@@ -63,7 +65,7 @@ def extract_features(annotation_path, feature_dir, contour_struct, label_values,
 def quantify(args):
     r"""Task: Extract features from annotated images in data dir"""
     print(f"Quantifying annotated images data in {str(args.data_dir)} (workers = {args.workers}) ...")
-    contour_struct = read_annotations(args.data_dir)
+    contour_struct = read_annotations(args.data_dir, experiment_name=args.experiment_name)
     annotations_summary(contour_struct)
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
@@ -77,9 +79,9 @@ def quantify(args):
     logger.addHandler(ch)
     label_values = {'epithelium': 200, 'lumen': 250}
     feature_dir = args.data_dir/'data'/'features'
-    utils.mkdir(feature_dir)  # for features
-    utils.mkdir(feature_dir/'data')  # for other data
-    utils.mkdir(feature_dir/'relational')  # for relational data between instances
+    feature_dir.mkdir(exist_ok=True)  # for features
+    (feature_dir/'data').mkdir(exist_ok=True)  # for other data
+    (feature_dir/'relational').mkdir(exist_ok=True)  # for relational data between instances
     # skip path if feature file already exists, unless overwrite is passed
     paths = list(path for path in (Path(args.data_dir)/'data'/'annotations').iterdir()
                  if (args.overwrite or not (feature_dir/path.name).is_file()) and
@@ -119,7 +121,7 @@ def merge_features(args):
             # image_data[slide_ids[-1]] = data
             # distances[slide_ids[-1]] = dist.tolist()
             frames.append(x)
-    utils.mkdir(feature_dir/'combined')
+    (feature_dir/'combined').mkdir(exist_ok=True)
     combined_x = pd.concat(frames, keys=slide_ids)  # creates multi-index with keys as highest level
     with open(feature_dir/'combined'/'features.json', 'w') as features_file:
         combined_x.to_json(features_file, orient='split')  # in 'split' no strings are replicated, thus saving space
@@ -145,6 +147,7 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest='task', help="Name of task to perform")
     parser_quantify = subparsers.add_parser('quantify')
     parser_quantify.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
+    parser_quantify.add_argument('--experiment_name', type=str, help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
     parser_quantify.add_argument('--slide_format', type=str, default='.ndpi', help="Format of file to extract images data from (with openslide)")
     parser_quantify.add_argument('--workers', type=int, default=4, help="Number of processes used in parallelized tasks")
     parser_quantify.add_argument('--overwrite', action='store_true', help="Whether to overwrite existing feature files")

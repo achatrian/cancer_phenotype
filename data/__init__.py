@@ -28,8 +28,9 @@ def annotations_summary(contour_struct, print_file=''):
             print(message, file=print_file)
 
 
-def read_annotations(data_dir, slide_ids=(), full_path=False):
+def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False):
     r"""Read annotations for one / many slides
+    :param experiment_name:
     :param data_dir: folder containing the annotation files
     :param slide_ids: ids of the annotations to be read
     :param full_path: if true, the function does not look for the /data/annotations subdir
@@ -38,7 +39,12 @@ def read_annotations(data_dir, slide_ids=(), full_path=False):
     """
     assert type(slide_ids) in (tuple, list, set)
     slide_ids = set(slide_ids)
-    annotation_dir = Path(data_dir)/'data'/'annotations' if not full_path else Path(data_dir)
+    if full_path:
+        annotation_dir = Path(data_dir)
+    else:
+        annotation_dir = Path(data_dir)/'data'/'annotations'
+        if experiment_name:
+            annotation_dir = annotation_dir/experiment_name
     if slide_ids:
         annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
                             if any(slide_id in str(annotation_path.name) for slide_id in slide_ids)]

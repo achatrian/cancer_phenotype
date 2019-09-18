@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 from itertools import product
 import json
+import warnings
 import numpy as np
 import cv2
 import torch
@@ -46,6 +47,7 @@ if __name__ == '__main__':
                        if path.name.endswith('.svs') or path.name.endswith('.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.svs'))
+    failure_log = []
     for image_path in image_paths:
         slide_id = re.sub('\.(ndpi|svs)', '', image_path.name)
         print(f"Processing slide: {slide_id}")
@@ -71,11 +73,11 @@ if __name__ == '__main__':
         print("Processing dzi ...")
         for x, y in tqdm.tqdm(product(xs, ys), total=len(xs)*len(ys)):
             x_mask, y_mask = dzi.slide_to_mask((x, y))
-            if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > 0.4:
+            if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > 0.3:
                 dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), process_image_with_model, border=0)
             else:
                 dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), np.zeros_like, border=0)
-        dzi.update_pyramid(read_level)  # create downsampled levels
+        dzi.downsample_pyramid(read_level)  # create downsampled levels
         dzi.close()
         print("Processed dzi, now saving annotation ...")
         original_dzi = TileGenerator(str(dzi_dir/source_file))  # NB target is used as source !!
@@ -94,7 +96,9 @@ if __name__ == '__main__':
             contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
                 get_layer_points('Tumour area', contour_format=True)
         # biggest contour is used to select the area to process
-        area_contour = max((contour for contour in contours), key=cv2.contourArea)
+        area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3), key=cv2.contourArea)
+        if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
+            area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
         # read downsampled region corresponding to tumour area annotation and extract contours
         rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original images
         x, y, w, h = cv2.boundingRect(area_contour)
@@ -103,7 +107,7 @@ if __name__ == '__main__':
         y_read = y if mask_dzi.height == original_dzi.height else int(y / rescale_factor)
         w_read, h_read = int(w / rescale_factor), int(h / rescale_factor)
         mask = mask_dzi.read_region((x_read, y_read), converted_level, (w_read, h_read))
-        converter = MaskConverter(dist_threshold=opt.distance_threshold)
+        converter = MaskConverter()
         print("Extracting contours from mask ...")
         contours, labels, boxes = converter.mask_to_contour(mask, x_read, y_read, rescale_factor=None)  # don't rescale map inside
         # rescale contours
@@ -117,14 +121,16 @@ if __name__ == '__main__':
             annotation.add_item(label, 'path')
             contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
             annotation.add_segments_to_last_item(contour)
+        if annotation.is_empty():
+            warnings.warn(f"No contours were extracted for slide: {slide_id}")
         annotation.shrink_paths(0.1)
         # add model details to annotation
         annotation.add_data('experiment', opt.experiment_name)
         annotation.add_data('load_epoch', opt.load_epoch)
         annotation_dir = Path(opt.data_dir) / 'data' / 'annotations' / opt.experiment_name
         annotation_dir.mkdir(exist_ok=True, parents=True)
-        annotation.dump_to_json(Path(opt.data_dir) / 'data' / 'annotations')
-        print(f"Annotation saved in {str(Path(opt.data_dir) / 'data' / 'annotations')}")
+        annotation.dump_to_json(annotation_dir)
+        print(f"Annotation saved in {str(annotation_dir)}")
         print("Done !")
 
 

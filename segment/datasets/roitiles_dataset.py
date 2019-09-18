@@ -138,11 +138,12 @@ class ROITilesDataset(BaseDataset):
                 seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
                 image = seq_det.augment_image(image)
                 gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-            gt = gt[..., 0]
-            bg_thresh, lumen_thresh = self.label_interval_map['background'][1], self.label_interval_map['lumen'][1]
-            gt[np.logical_and(gt < lumen_thresh, gt > bg_thresh)] = 1
-            gt[gt >= bg_thresh] = 2
-            gt[np.logical_and(gt != 1, gt != 2)] = 0
+                gt = gt[..., 0]
+            # TODO test below !!!
+            # paint labels in
+            for i, (label, interval) in enumerate(self.label_interval_map.items()):
+                gt[np.logical_and(gt >= interval[0], gt <= interval[1])] = i
+            gt[np.logical_and(gt < 0, gt > i)] = 0
             assert (len(gt.shape) == 2)
             gt = torch.from_numpy(gt.copy()).long()  # change to FloatTensor for BCE
         else:

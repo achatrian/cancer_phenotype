@@ -16,7 +16,7 @@ def mask(iters):
 
 
 def test_mask_to_contour(mask, iters):
-    converter = MaskConverter(dist_threshold=0.1, fix_ambiguity=True)
+    converter = MaskConverter(fix_ambiguity=True)
     contours, labels, boxes = converter.mask_to_contour(mask)
     painted_mask = np.zeros_like(mask)
     print(painted_mask.shape)

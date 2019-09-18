@@ -27,4 +27,3 @@ def save_image(image, path=Path('/well/rittscher/users/achatrian/debug'), name=N
         imageio.imsave(path, image)
 
 
-

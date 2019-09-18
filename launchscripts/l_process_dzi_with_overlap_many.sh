@@ -24,7 +24,7 @@ DATE=`date`
 JOBID=$(tr ' ' '_' <<< ${DATE})  # replace spaces with underscores
 JOBID=$(tr ':' '_' <<< ${JOBID})  # replace columns with underscores (or it breaks)
 JOBID="${JOBID}_${JOB_ID}"  # in case multiple jobs are run in the same second, add counter id to differentiate between them
-LOGDIR=/well/rittscher/users/achatrian/jobs_logs/extract_contours_mask_dzi_many
+LOGDIR=/well/rittscher/users/achatrian/jobs_logs/process_dzi_many
 cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts
 
 if [[ -z $2 ]]
@@ -36,35 +36,37 @@ fi
 
 COUNTER=0
 for SLIDEPATH in "${FILES[@]}"; do
-    NAME=$(basename "${SLIDEPATH}") # get basename only
+    SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
     # check if file has .ndpi or .svs format. If not, skip iteration
-    if [[ $NAME == *.ndpi ]]
+    if [[ $SLIDENAME == *.ndpi ]]
     then
-        SLIDEID="${NAME%%.ndpi*}"
-        COUNTER=$((COUNTER+1))
-    elif [[ $NAME == *.svs ]]
+        SLIDEID="${SLIDENAME%%.ndpi*}"
+    elif [[ $SLIDENAME == *.svs ]]
     then
-        SLIDEID="${NAME%%.svs*}"
-        COUNTER=$((COUNTER+1))
-    elses
+        SLIDEID="${SLIDENAME%%.svs*}"
+    else
         # if iterating over dirs, look for images inside dirs
-        # TODO test
-        for SUBPATH in SLIDEPATH/*; do
-            SUBNAME=$(basename "${SLIDEPATH}") # get basename only
+        for SUBPATH in ${SLIDEPATH}/*; do
+            SUBNAME=$(basename "${SUBPATH}") # get basename only
             if [[ $SUBNAME == *.ndpi ]]
             then
                 SLIDEID="${SUBNAME%%.ndpi*}"
-                COUNTER=$((COUNTER+1))
             elif [[ $SUBNAME == *.svs ]]
             then
                 SLIDEID="${SUBNAME%%.svs*}"
-                COUNTER=$((COUNTER+1))
             else
                 continue
             fi
         done  # NB: JOB IS LAUNCHED ONLY OR LAST IMAGE IN SUBDIR
     fi
-    SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
-    qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -P rittscher.prjc -q long.qc -pe shmem 2 ./l_extract_contours_mask_dzi.sh ${SLIDECOMMANDS}
+    if [[ ! -z "$SLIDEID" ]]; then
+        echo ${SLIDEID}
+        COUNTER=$((COUNTER+1))
+        SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
+        qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_process_dzi_with_overlap.sh ${SLIDECOMMANDS}
+    fi
 done
-echo "Extracting annotation from ${COUNTER} dzi's ..."
+echo "Processing ${COUNTER} dzi's ..."
+if (($COUNTER == 0)); then
+ echo "No slides found in $2"
+fi

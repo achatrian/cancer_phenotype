@@ -1,8 +1,8 @@
 from pathlib import Path
 import argparse
 import re
-from .tasklog import CheckResult, TaskLog
-from data.images.dzi_io import DZI_IO
+from tasklog import CheckResult, TaskLog
+from data.images.dzi_io import DZIIO
 
 
 def completion_test(image_path, tasklog):
@@ -12,11 +12,11 @@ def completion_test(image_path, tasklog):
     source_name = source_name if source_name.endswith('.dzi') else source_name + '.dzi'
     target_path = Path('masks')/('mask_' + Path(source_name).name)
     try:
-        source_dzi = DZI_IO(str(dzi_dir/source_name))
+        source_dzi = DZIIO(str(dzi_dir/source_name))
     except FileNotFoundError:
         return CheckResult(str(source_name), False, None, 'Source file is incomplete', None)
     try:
-        target_dzi = DZI_IO(str(dzi_dir/target_path))
+        target_dzi = DZIIO(str(dzi_dir/target_path))
     except FileNotFoundError:
         return CheckResult(str(source_name), False, None, 'Target file is incomplete', None)
     progress = target_dzi.level_count / (source_dzi.level_count - 1)  # high res level is discarded

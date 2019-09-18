@@ -1,6 +1,7 @@
 from pathlib import Path
 import argparse
 import multiprocessing as mp
+import copy
 import json
 import torch
 from base import models
@@ -139,6 +140,10 @@ class BaseOptions:
             expr_dir = Path(opt.checkpoints_dir) / opt.experiment_name
             expr_dir.mkdir(exist_ok=True, parents=True)
             options_path = Path(expr_dir) / 'opt.json'
+            opt_to_save = vars(copy.deepcopy(self.opt))
+            for opt_name in opt_to_save:  # cannot json serialize paths
+                if isinstance(opt_to_save[opt_name], Path):
+                    opt_to_save[opt_name] = str(opt_to_save[opt_name])
             with open(options_path, 'w') as options_file:
-                json.dump(vars(self.opt), options_file)
+                json.dump(opt_to_save, options_file)
         return self.opt

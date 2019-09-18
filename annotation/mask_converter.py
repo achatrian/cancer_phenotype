@@ -4,7 +4,6 @@ Supports:
 AIDA format
 """
 
-from itertools import cycle
 import copy
 import numpy as np
 from scipy.stats import mode
@@ -19,15 +18,12 @@ class MaskConverter:
     Class used to convert ground truth annotation to paths / contours in different
     """
 
-    def __init__(self, dist_threshold=0.1, value_hier=(0, (160, 200), 250), min_contour_area=3000,
-                 label_value_map=None, label_interval_map=None, label_options=None, fix_ambiguity=True):
+    def __init__(self, value_hier=(0, (160, 200), 250), label_value_map=None,
+                 label_interval_map=None, label_options=None, fix_ambiguity=True):
         """
-        :param dist_threshold:
         :param value_hier:
         """
-        self.dist_threshold = dist_threshold
         self.value_hier = value_hier
-        self.min_contour_area = min_contour_area  # use to determine whether to use child contour and to keep contour in the end
         self.fix_ambiguity = fix_ambiguity
         self.by_overlap = False  # option to use bounding boxes to deal with overlapping contours - for deprecated mask_to_contours_all_classes
         self.label_value_map = label_value_map or {
@@ -41,8 +37,18 @@ class MaskConverter:
             'background': (0, 80)
         }
         self.label_options = label_options or {
-            'epithelium': {'small_object_size': 1024*0.4},
-            'lumen': {'small_object_size': 20}
+            'epithelium': {
+                'small_object_size': 1024*0.4,
+                'dist_threshold': 0.05,
+                'final_closing_size': 20,
+                'final_dilation_size': 1
+            },
+            'lumen': {
+                'small_object_size': 400,
+                'dist_threshold': 0.001,
+                'final_closing_size': 15,
+                'final_dilation_size': 5
+            }
         }
         assert set(self.label_value_map.keys()) == set(self.label_interval_map.keys()), 'inconsistent annotation classes'
         assert all(isinstance(t, tuple) and len(t) == 2 and t[0] <= t[1] for t in self.label_interval_map.values())
@@ -68,9 +74,7 @@ class MaskConverter:
                 continue  # don't extract contours for background
             value_binary_mask = self.threshold_by_value(value, mask)
             if self.fix_ambiguity:
-                value_binary_mask = self.remove_ambiguity(value_binary_mask,
-                                                          self.dist_threshold,
-                                                          **self.label_options[label])  # makes small glands very small
+                value_binary_mask = self.remove_ambiguity(value_binary_mask, **self.label_options[label])
             else:
                 value_binary_mask = value_binary_mask[..., 0]  # 1 channel mask for contour finding
             if int(cv2.__version__.split('.')[0]) == 3:
@@ -85,52 +89,13 @@ class MaskConverter:
         good_contours, good_labels, bounding_boxes = [], [], []
         for i, contour in enumerate(contours):
             # filter contours
-            is_good = labels[i] is not None and contour.shape[0] > 2 and \
-                      cv2.contourArea(contour) > self.min_contour_area
+            is_good = labels[i] is not None and contour.shape[0] > 2
             if is_good:
                 x_offset, y_offset = int(x_offset), int(y_offset)
                 bounding_box = list(cv2.boundingRect(contour))
                 bounding_box[0] += x_offset
                 bounding_box[1] += y_offset
                 bounding_boxes.append(tuple(bounding_box))
-                good_contours.append(contour + np.array((x_offset, y_offset)))  # add offset
-                good_labels.append(self.value2label(labels[i]))
-        return good_contours, good_labels, bounding_boxes
-
-    def mask_to_contour_all_classes(self, mask, x_offset=0, y_offset=0,
-                                    contour_approx_method=cv2.CHAIN_APPROX_TC89_KCOS):
-        r"""
-        Extracts the contours once only
-        :param mask:
-        :param x_offset: x_offset offset
-        :param y_offset: y_offset offset
-        :param contour_approx_method: standard is method that yields the lowest number of points
-        :return: contours of objects in images
-        """
-        mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label images
-        if mask.ndim == 3:
-            mask = mask[..., 0]
-        if self.fix_ambiguity:
-            mask = self.remove_ambiguity(mask, self.dist_threshold)  # makes small glands very small
-        binary_mask = self.binarize(mask)
-        # find contours
-        if int(cv2.__version__.split('.')[0]) == 3:
-            _, contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE, contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
-        else:
-            contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE,
-                                                   contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
-        labels = self.get_contour_labels_by_overlap(mask, contours) if self.by_overlap \
-            else self.get_contours_labels(mask, contours, hierarchy)
-        assert len(contours) == len(labels)
-        # remove short contours and contours that are too small,
-        # then add offset - NB: coordinates are in form (y,x)
-        good_contours, good_labels, bounding_boxes = [], [], []
-        for i, contour in enumerate(contours):
-            # filter contours
-            is_good = labels[i] is not None and contour.shape[0] > 2 and \
-                             cv2.contourArea(contour) > self.min_contour_area
-            if is_good:
-                bounding_boxes.append(cv2.boundingRect(contour))
                 good_contours.append(contour + np.array((x_offset, y_offset)))  # add offset
                 good_labels.append(self.value2label(labels[i]))
         return good_contours, good_labels, bounding_boxes
@@ -155,199 +120,8 @@ class MaskConverter:
         mask[mask != 1] = 0
         return mask
 
-    def binarize(self, mask):
-        r"""
-        Uses self.value_hier to determine which label should be inside which other label.
-        The last level is the innermost one
-        If different label values are on the same level, this should be passed as a tuple.
-        First label should be background and is assigned a value of 0
-        :param mask:
-        :return:
-        """
-        mask = mask.copy()
-        if mask.ndim == 3:
-            mask = mask[..., 0]
-        # turn different labels (rgb value * [1,1,1]) into alternating black and white regions for hierarchy extraction
-        for label, alter in zip(self.value_hier, cycle([0, 1])):
-            if isinstance(label, tuple):  # account for different labels on the same level
-                for l_label in label:
-                    mask[mask == l_label] = alter
-            else:
-                mask[mask == label] = alter
-        return mask
-
     @staticmethod
-    def get_inner_values(mask, contour):
-        r"""
-        :param mask:
-        :param contour:
-        :return: mask values within contour
-        """
-        assert type(contour) is np.ndarray, "Must be an Nx1x2    numpy array "
-        assert contour.shape[0] >= 3, f"Don't do small contours (shape[0] = {contour.shape[0]})"
-        assert contour.ndim > 2, f"Don't do ill-defined contours (ndim = {contour.ndim})"
-        x, y, w, h = cv2.boundingRect(contour)
-        # use bounding box so that label mask must be created only for size of contour and not for whole tile / area
-        contour_shift = contour.squeeze() - np.array((x, y))  # shift so that contour is relative to (0,0)
-        contour_shift = np.expand_dims(contour_shift, axis=1)
-        masklet = mask[y:y + h, x:x + w]
-        # Create a mask images that contains the contour filled in
-        cimg = np.zeros((w, h))
-        # print(contour_shift[0])
-        cv2.drawContours(cimg, [contour_shift], 0, color=255,
-                         thickness=-1)  # fills the whole area inside contour with colour
-        # Access the images pixels and create a 1D numpy array then add to list
-        pts = np.where(cimg == 255)
-        values_within_contour = set(masklet[pts[0], pts[1]])
-        mode_value = mode(masklet[pts[0], pts[1]])[0][0]
-        return values_within_contour, mode_value
-
-    def get_contours_labels(self, mask, contours, hierarchy):
-        r"""
-        Baseline - uses cv2 hierarchy
-        :param mask:
-        :param contours:
-        :param hierarchy:
-        :return: label for each contour | =None if contour is too small / it's only 2 points
-        """
-        contours_labels = []
-        for i, contour in enumerate(contours):
-            if contour.shape[0] < 3 or cv2.contourArea(contour) < self.min_contour_area:
-                contours_labels.append(None)
-                continue
-            values_within_contour, parent_mode = self.get_inner_values(mask, contour)
-            next_, previous, first_child, parent = hierarchy[0][i]
-            child = first_child
-            if len(values_within_contour) != 1:
-                inner_contour_values = set()
-                while child != -1:
-                    # removes label values of 1 level deep children
-                    if contours[child].size > 0 and contours[child].shape[0] > 1 \
-                            and cv2.contourArea(contour[child]) > self.min_contour_area:
-                        child_values, child_mode = self.get_inner_values(mask, contours[child])
-                        inner_contour_values |= child_values
-                    child, _, __, ___ = hierarchy[0][child]
-                if len(inner_contour_values) >= len(values_within_contour) \
-                        and inner_contour_values != values_within_contour:
-                    # get the lowest in the hierarchy (e.g. lumen)
-                    for value in reversed(self.value_hier):
-                        if value in inner_contour_values:
-                            inner_contour_values = {value}
-                            break
-                values_within_contour -= inner_contour_values
-            if len(values_within_contour) != 1:
-                if first_child != -1:
-                    try:
-                        if parent_mode not in self.value_hier[-1]:  # if not in last value (deals with multiple values on same level)
-                            values_within_contour = {parent_mode}
-                        else:
-                            try:
-                                values_within_contour = {self.value_hier[-2][-1]}
-                            except TypeError:
-                                values_within_contour = {self.value_hier[-2]}
-                    except TypeError:
-                        if parent_mode != self.value_hier[-1]:
-                            values_within_contour = {parent_mode}
-                        else:
-                            try:
-                                values_within_contour = {self.value_hier[-2][-1]}
-                            except TypeError:
-                                values_within_contour = {self.value_hier[-2]}
-                else:
-                    # in case contour has no children
-                    try:
-                        values_within_contour = {self.value_hier[-1][-1]}
-                    except TypeError:
-                        values_within_contour = {self.value_hier[-1]}
-
-            assert len(values_within_contour) == 1, "only one value per contour must remain"
-            contours_labels.append(int(next(iter(values_within_contour))))
-        return contours_labels
-
-    def get_contour_labels_by_overlap(self, mask, contours):
-        r"""
-        Check what bounding contours are contained within each other
-        :param mask:
-        :param contours:
-        :return:
-        """
-        contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
-        overlap_struct = []
-        for parent_bb in contour_bbs:
-            # Find out each contour's children (overlapping)
-            overlap_vector = []
-            for child_bb in contour_bbs:
-                contained = self.check_bounding_boxes_overlap(parent_bb, child_bb)
-                if parent_bb == child_bb:  # don't do anything for same box
-                    overlap_vector.append(False)
-                elif contained:
-                    overlap_vector.append(True)
-                else:
-                    overlap_vector.append(False)
-            overlap_struct.append(overlap_vector)
-        contours_labels = []
-        for contour, overlap_vector in zip(contours, overlap_struct):
-            if contour.shape[0] < 3 or cv2.contourArea(contour) < self.min_contour_area:
-                contours_labels.append(None)
-                continue
-            values_within_contour, parent_mode = self.get_inner_values(mask, contour)
-            if len(values_within_contour) > 1:
-                # pick value that is different from inner values of inner contours
-                inner_contour_values = set()
-                for i, contained in enumerate(overlap_vector):
-                    if contained and contours[i].shape[0] >= 3 and cv2.contourArea(contour) >= self.min_contour_area :
-                        contained_values, child_mode = self.get_inner_values(mask, contours[i])
-                        inner_contour_values |= contained_values  # union and update
-                if len(inner_contour_values) >= len(values_within_contour) \
-                        and inner_contour_values != values_within_contour:
-                    # get the lowest in the hierarchy (e.g. lumen)
-                    for value in reversed(self.value_hier):
-                        if value in inner_contour_values:
-                            inner_contour_values = {value}
-                            break
-                values_within_contour -= inner_contour_values
-            if len(values_within_contour) != 1:
-                # in case above doesn't yield only one value (could leave 0 or >1)
-                if any(overlap_vector):
-                    # check whether contour has inner contours - if so, assign higher value
-                    try:
-                        if parent_mode not in self.value_hier[-1]:  # if not in last value (deals with multiple values on same level)
-                            values_within_contour = {parent_mode}
-                        else:
-                            try:
-                                values_within_contour = {self.value_hier[-2][-1]}
-                            except TypeError:
-                                values_within_contour = {self.value_hier[-2]}
-                    except TypeError:
-                        if parent_mode != self.value_hier[-1]:
-                            values_within_contour = {parent_mode}
-                        else:
-                            try:
-                                values_within_contour = {self.value_hier[-2][-1]}
-                            except TypeError:
-                                values_within_contour = {self.value_hier[-2]}
-                else:
-                    # in case contour mode is lowest level in hier or contour has no children
-                    try:
-                        values_within_contour = {self.value_hier[-1][-1]}
-                    except TypeError:
-                        values_within_contour = {self.value_hier[-1]}
-            assert len(values_within_contour) == 1, "Only one value per contour must remain"
-            contours_labels.append(int(next(iter(values_within_contour))))
-        return contours_labels
-
-    @staticmethod
-    def check_bounding_boxes_overlap(parent_bb, child_bb):
-        x0, y0, w0, h0 = parent_bb
-        x1, y1, w1, h1 = child_bb
-        x_w0, y_h0, x_w1, y_h1 = x0 + w0, y0 + h0, x1 + w1, y1 + h1
-        return (x0 <= x1 <= x_w0 and
-                x0 <= x_w1 <= x_w0 and
-                y0 <= y1 <= y_h0 and
-                y0 <= y_h1 <= y_h0)
-
-    @staticmethod
-    def remove_ambiguity(mask, dist_threshold=0.1, small_object_size=1024*0.4, final_closing_size=20,
+    def remove_ambiguity(mask, dist_threshold=0.01, small_object_size=1024*0.4, final_closing_size=20,
                          final_dilation_size=2):
         r"""
         Morphologically removes noise in the images and returns solid contours
@@ -380,7 +154,11 @@ class MaskConverter:
         mode_of_maxima = mode_of_maxima.item(0) if mode_of_maxima.size > 0 else 255
         # threshold using distance transform
         ret, refined_fg = cv2.threshold(dist_transform,
-                                        min(dist_threshold * mode_of_maxima, 0.1 * dist_transform.max()), 255, 0)
+                                        min(
+                                            dist_threshold * mode_of_maxima,
+                                            dist_threshold * dist_transform.max()
+                                        ),  # threshold
+                                        255, cv2.THRESH_BINARY)
         refined_fg = np.uint8(refined_fg)
         # finding unknown region
         unknown = cv2.subtract(refined_bg, refined_fg)
@@ -415,10 +193,244 @@ class MaskConverter:
                     label = l
                     bounds = (b1, b2)
                 else:
-                    raise ValueError(f"Overlapping interval bounds ({b1}, {b2}) and {bounds}, for {l} and {label}")
+                    raise ValueError(f"Overlapping interval bounds ({b1}, {b2}) for {l} and {label}")
         if not label:
             raise ValueError(f'Value {value} is not withing any interval')
         return label
 
     def label2value(self, label):
         return self.label_value_map[label]
+
+    @staticmethod
+    def check_bounding_boxes_overlap(parent_bb, child_bb):
+        x0, y0, w0, h0 = parent_bb
+        x1, y1, w1, h1 = child_bb
+        x_w0, y_h0, x_w1, y_h1 = x0 + w0, y0 + h0, x1 + w1, y1 + h1
+        return (x0 <= x1 <= x_w0 and
+                x0 <= x_w1 <= x_w0 and
+                y0 <= y1 <= y_h0 and
+                y0 <= y_h1 <= y_h0)
+
+    # LEGACY METHODS
+    # from itertools import cycle
+    # def mask_to_contour_all_classes(self, mask, x_offset=0, y_offset=0,
+    #                                 contour_approx_method=cv2.CHAIN_APPROX_TC89_KCOS):
+    #     r"""
+    #     Extracts the contours once only
+    #     :param mask:
+    #     :param x_offset: x_offset offset
+    #     :param y_offset: y_offset offset
+    #     :param contour_approx_method: standard is method that yields the lowest number of points
+    #     :return: contours of objects in images
+    #     """
+    #     mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label images
+    #     if mask.ndim == 3:
+    #         mask = mask[..., 0]
+    #     if self.fix_ambiguity:
+    #         mask = self.remove_ambiguity(mask)  # makes small glands very small
+    #     binary_mask = self.binarize(mask)
+    #     # find contours
+    #     if int(cv2.__version__.split('.')[0]) == 3:
+    #         _, contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE, contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
+    #     else:
+    #         contours, hierarchy = cv2.findContours(binary_mask, cv2.RETR_TREE,
+    #                                                contour_approx_method)  # use RETR_TREE to get full hierarchy (needed for labels)
+    #     labels = self.get_contour_labels_by_overlap(mask, contours) if self.by_overlap \
+    #         else self.get_contours_labels(mask, contours, hierarchy)
+    #     assert len(contours) == len(labels)
+    #     # remove short contours and contours that are too small,
+    #     # then add offset - NB: coordinates are in form (y,x)
+    #     good_contours, good_labels, bounding_boxes = [], [], []
+    #     for i, contour in enumerate(contours):
+    #         # filter contours
+    #         is_good = labels[i] is not None and contour.shape[0] > 2 and \
+    #                          cv2.contourArea(contour) > self.min_contour_area
+    #         if is_good:
+    #             bounding_boxes.append(cv2.boundingRect(contour))
+    #             good_contours.append(contour + np.array((x_offset, y_offset)))  # add offset
+    #             good_labels.append(self.value2label(labels[i]))
+    #     return good_contours, good_labels, bounding_boxes
+    #
+    # def binarize(self, mask):
+    #     r"""
+    #     Uses self.value_hier to determine which label should be inside which other label.
+    #     The last level is the innermost one
+    #     If different label values are on the same level, this should be passed as a tuple.
+    #     First label should be background and is assigned a value of 0
+    #     :param mask:
+    #     :return:
+    #     """
+    #     mask = mask.copy()
+    #     if mask.ndim == 3:
+    #         mask = mask[..., 0]
+    #     # turn different labels (rgb value * [1,1,1]) into alternating black and white regions for hierarchy extraction
+    #     for label, alter in zip(self.value_hier, cycle([0, 1])):
+    #         if isinstance(label, tuple):  # account for different labels on the same level
+    #             for l_label in label:
+    #                 mask[mask == l_label] = alter
+    #         else:
+    #             mask[mask == label] = alter
+    #     return mask
+    #
+    # @staticmethod
+    # def get_inner_values(mask, contour):
+    #     r"""
+    #     :param mask:
+    #     :param contour:
+    #     :return: mask values within contour
+    #     """
+    #     assert type(contour) is np.ndarray, "Must be an Nx1x2    numpy array "
+    #     assert contour.shape[0] >= 3, f"Don't do small contours (shape[0] = {contour.shape[0]})"
+    #     assert contour.ndim > 2, f"Don't do ill-defined contours (ndim = {contour.ndim})"
+    #     x, y, w, h = cv2.boundingRect(contour)
+    #     # use bounding box so that label mask must be created only for size of contour and not for whole tile / area
+    #     contour_shift = contour.squeeze() - np.array((x, y))  # shift so that contour is relative to (0,0)
+    #     contour_shift = np.expand_dims(contour_shift, axis=1)
+    #     masklet = mask[y:y + h, x:x + w]
+    #     # Create a mask images that contains the contour filled in
+    #     cimg = np.zeros((w, h))
+    #     # print(contour_shift[0])
+    #     cv2.drawContours(cimg, [contour_shift], 0, color=255,
+    #                      thickness=-1)  # fills the whole area inside contour with colour
+    #     # Access the images pixels and create a 1D numpy array then add to list
+    #     pts = np.where(cimg == 255)
+    #     values_within_contour = set(masklet[pts[0], pts[1]])
+    #     mode_value = mode(masklet[pts[0], pts[1]])[0][0]
+    #     return values_within_contour, mode_value
+    #
+    # def get_contours_labels(self, mask, contours, hierarchy):
+    #     r"""
+    #     Baseline - uses cv2 hierarchy
+    #     :param mask:
+    #     :param contours:
+    #     :param hierarchy:
+    #     :return: label for each contour | =None if contour is too small / it's only 2 points
+    #     """
+    #     contours_labels = []
+    #     for i, contour in enumerate(contours):
+    #         if contour.shape[0] < 3 or cv2.contourArea(contour) < self.min_contour_area:
+    #             contours_labels.append(None)
+    #             continue
+    #         values_within_contour, parent_mode = self.get_inner_values(mask, contour)
+    #         next_, previous, first_child, parent = hierarchy[0][i]
+    #         child = first_child
+    #         if len(values_within_contour) != 1:
+    #             inner_contour_values = set()
+    #             while child != -1:
+    #                 # removes label values of 1 level deep children
+    #                 if contours[child].size > 0 and contours[child].shape[0] > 1 \
+    #                         and cv2.contourArea(contour[child]) > self.min_contour_area:
+    #                     child_values, child_mode = self.get_inner_values(mask, contours[child])
+    #                     inner_contour_values |= child_values
+    #                 child, _, __, ___ = hierarchy[0][child]
+    #             if len(inner_contour_values) >= len(values_within_contour) \
+    #                     and inner_contour_values != values_within_contour:
+    #                 # get the lowest in the hierarchy (e.g. lumen)
+    #                 for value in reversed(self.value_hier):
+    #                     if value in inner_contour_values:
+    #                         inner_contour_values = {value}
+    #                         break
+    #             values_within_contour -= inner_contour_values
+    #         if len(values_within_contour) != 1:
+    #             if first_child != -1:
+    #                 try:
+    #                     if parent_mode not in self.value_hier[-1]:  # if not in last value (deals with multiple values on same level)
+    #                         values_within_contour = {parent_mode}
+    #                     else:
+    #                         try:
+    #                             values_within_contour = {self.value_hier[-2][-1]}
+    #                         except TypeError:
+    #                             values_within_contour = {self.value_hier[-2]}
+    #                 except TypeError:
+    #                     if parent_mode != self.value_hier[-1]:
+    #                         values_within_contour = {parent_mode}
+    #                     else:
+    #                         try:
+    #                             values_within_contour = {self.value_hier[-2][-1]}
+    #                         except TypeError:
+    #                             values_within_contour = {self.value_hier[-2]}
+    #             else:
+    #                 # in case contour has no children
+    #                 try:
+    #                     values_within_contour = {self.value_hier[-1][-1]}
+    #                 except TypeError:
+    #                     values_within_contour = {self.value_hier[-1]}
+    #
+    #         assert len(values_within_contour) == 1, "only one value per contour must remain"
+    #         contours_labels.append(int(next(iter(values_within_contour))))
+    #     return contours_labels
+
+    # def get_contour_labels_by_overlap(self, mask, contours):
+    #     r"""
+    #     Check what bounding contours are contained within each other
+    #     :param mask:
+    #     :param contours:
+    #     :return:
+    #     """
+    #     contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
+    #     overlap_struct = []
+    #     for parent_bb in contour_bbs:
+    #         # Find out each contour's children (overlapping)
+    #         overlap_vector = []
+    #         for child_bb in contour_bbs:
+    #             contained = self.check_bounding_boxes_overlap(parent_bb, child_bb)
+    #             if parent_bb == child_bb:  # don't do anything for same box
+    #                 overlap_vector.append(False)
+    #             elif contained:
+    #                 overlap_vector.append(True)
+    #             else:
+    #                 overlap_vector.append(False)
+    #         overlap_struct.append(overlap_vector)
+    #     contours_labels = []
+    #     for contour, overlap_vector in zip(contours, overlap_struct):
+    #         if contour.shape[0] < 3 or cv2.contourArea(contour) < self.min_contour_area:
+    #             contours_labels.append(None)
+    #             continue
+    #         values_within_contour, parent_mode = self.get_inner_values(mask, contour)
+    #         if len(values_within_contour) > 1:
+    #             # pick value that is different from inner values of inner contours
+    #             inner_contour_values = set()
+    #             for i, contained in enumerate(overlap_vector):
+    #                 if contained and contours[i].shape[0] >= 3 and cv2.contourArea(contour) >= self.min_contour_area :
+    #                     contained_values, child_mode = self.get_inner_values(mask, contours[i])
+    #                     inner_contour_values |= contained_values  # union and update
+    #             if len(inner_contour_values) >= len(values_within_contour) \
+    #                     and inner_contour_values != values_within_contour:
+    #                 # get the lowest in the hierarchy (e.g. lumen)
+    #                 for value in reversed(self.value_hier):
+    #                     if value in inner_contour_values:
+    #                         inner_contour_values = {value}
+    #                         break
+    #             values_within_contour -= inner_contour_values
+    #         if len(values_within_contour) != 1:
+    #             # in case above doesn't yield only one value (could leave 0 or >1)
+    #             if any(overlap_vector):
+    #                 # check whether contour has inner contours - if so, assign higher value
+    #                 try:
+    #                     if parent_mode not in self.value_hier[-1]:  # if not in last value (deals with multiple values on same level)
+    #                         values_within_contour = {parent_mode}
+    #                     else:
+    #                         try:
+    #                             values_within_contour = {self.value_hier[-2][-1]}
+    #                         except TypeError:
+    #                             values_within_contour = {self.value_hier[-2]}
+    #                 except TypeError:
+    #                     if parent_mode != self.value_hier[-1]:
+    #                         values_within_contour = {parent_mode}
+    #                     else:
+    #                         try:
+    #                             values_within_contour = {self.value_hier[-2][-1]}
+    #                         except TypeError:
+    #                             values_within_contour = {self.value_hier[-2]}
+    #             else:
+    #                 # in case contour mode is lowest level in hier or contour has no children
+    #                 try:
+    #                     values_within_contour = {self.value_hier[-1][-1]}
+    #                 except TypeError:
+    #                     values_within_contour = {self.value_hier[-1]}
+    #         assert len(values_within_contour) == 1, "Only one value per contour must remain"
+    #         contours_labels.append(int(next(iter(values_within_contour))))
+    #     return contours_labels
+
+
+

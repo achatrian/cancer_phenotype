@@ -18,14 +18,11 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-"""An example program to encode a Deep Zoom directory tree from a slide.
-Requires Pillow version <3.0 e.g. 2.1"""
+"""An example program to generate a Deep Zoom directory tree from a slide."""
 
 from __future__ import print_function
 import json
 from multiprocessing import Process, JoinableQueue
-from queue import Empty, Full
-import warnings
 import openslide
 from openslide import open_slide, ImageSlide
 from openslide.deepzoom import DeepZoomGenerator
@@ -35,11 +32,9 @@ import re
 import shutil
 import sys
 from unicodedata import normalize
-import signal
+import utils
 
 VIEWER_SLIDE_NAME = 'slide'
-TIMEOUT = 120
-
 
 class TileWorker(Process):
     """A child process that generates and writes tiles."""
@@ -61,11 +56,7 @@ class TileWorker(Process):
         last_associated = None
         dz = self._get_dz()
         while True:
-            try:
-                data = self._queue.get(timeout=TIMEOUT)
-            except Empty:
-                print("Empty queue, breaking out ...")
-                break
+            data = self._queue.get()
             if data is None:
                 self._queue.task_done()
                 break
@@ -73,8 +64,11 @@ class TileWorker(Process):
             if last_associated != associated:
                 dz = self._get_dz(associated)
                 last_associated = associated
-            tile = dz.get_tile(level, address)
-            tile.save(outfile, quality=self._quality)
+            try:
+                tile = dz.get_tile(level, address)
+                tile.save(outfile, quality=self._quality)
+            except Exception as e:
+                print(e)
             self._queue.task_done()
 
     def _get_dz(self, associated=None):
@@ -87,7 +81,7 @@ class TileWorker(Process):
 
 
 class DeepZoomImageTiler(object):
-    """Handles generation of tiles and metadata for a single images."""
+    """Handles generation of tiles and metadata for a single image."""
 
     def __init__(self, dz, basename, format, associated, queue):
         self._dz = dz
@@ -99,17 +93,7 @@ class DeepZoomImageTiler(object):
 
     def run(self):
         self._write_tiles()
-        print("Finished writing tiles")
         self._write_dzi()
-        print("Dzi file was written")
-        # Saves the property as a .json
-        properties = dict(self._dz._osr.properties)
-        try:
-            properties['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
-        except KeyError:
-            warnings.warn("No available metadata")
-        json.dump(properties, open(os.path.join("{}_files".format(self._basename), "properties.json"), 'w'))
-        print("Properties json was written")
 
     def _write_tiles(self):
         for level in range(self._dz.level_count):
@@ -122,13 +106,14 @@ class DeepZoomImageTiler(object):
                     tilename = os.path.join(tiledir, '%d_%d.%s' % (
                                     col, row, self._format))
                     if not os.path.exists(tilename):
-                        try:
-                            self._queue.put((self._associated, level, (col, row),
-                                    tilename), timeout=TIMEOUT)
-                        except Full:
-                            print("Full queue, breaking out ...")
-                            break
+                        self._queue.put((self._associated, level, (col, row),
+                                    tilename))
                     self._tile_done()
+
+        # Saves the property as a .json
+        properties_dict = dict(self._dz._osr.properties)
+        properties_dict['mpp'] = self._dz._osr.properties[openslide.PROPERTY_NAME_MPP_X]
+        utils.json_io(os.path.join("{}_files".format(self._basename), "properties.json"), properties_dict)
 
     def _tile_done(self):
         self._processed += 1
@@ -180,7 +165,7 @@ class DeepZoomStaticTiler(object):
         self._shutdown()
 
     def _run_image(self, associated=None):
-        """Run a single images from self._slide."""
+        """Run a single image from self._slide."""
         if associated is None:
             image = self._slide
             if self._with_viewer:
@@ -253,10 +238,6 @@ class DeepZoomStaticTiler(object):
         for _i in range(self._workers):
             self._queue.put(None)
         self._queue.join()
-        # timeout = 10
-        # stop = time() + timeout
-        # while self._queue._unfinished_tasks and time() < stop:
-        #     sleep(1)
 
 
 if __name__ == '__main__':
@@ -269,7 +250,7 @@ if __name__ == '__main__':
                 help='overlap of adjacent tiles [1]')
     parser.add_option('-f', '--format', metavar='{jpeg|png}', dest='format',
                 default='jpeg',
-                help='images format for tiles [jpeg]')
+                help='image format for tiles [jpeg]')
     parser.add_option('-j', '--jobs', metavar='COUNT', dest='workers',
                 type='int', default=4,
                 help='number of worker processes to start [4]')
@@ -280,18 +261,12 @@ if __name__ == '__main__':
                 help='JPEG compression quality [90]')
     parser.add_option('-r', '--viewer', dest='with_viewer',
                 action='store_true',
-                help='encode directory tree with HTML viewer')
+                help='generate directory tree with HTML viewer')
     parser.add_option('-s', '--size', metavar='PIXELS', dest='tile_size',
                 type='int', default=254,
                 help='tile size [254]')
 
     (opts, args) = parser.parse_args()
-    class TimeoutException(Exception):  # Custom exception class
-        pass
-
-    def timeout_handler(signum, frame):  # Custom signal handler
-        raise TimeoutException
-
     try:
         slidepath = args[0]
     except IndexError:
@@ -299,12 +274,6 @@ if __name__ == '__main__':
     if opts.basename is None:
         opts.basename = os.path.splitext(os.path.basename(slidepath))[0]
 
-    # Change the behavior of SIGALRM
-    signal.signal(signal.SIGALRM, timeout_handler)
-    timeout = 20*60
-    try:
-        DeepZoomStaticTiler(slidepath, opts.basename, opts.format,
-                    opts.tile_size, opts.overlap, opts.limit_bounds, opts.quality,
-                    opts.workers, opts.with_viewer).run()
-    except TimeoutException:
-        sys.exit("Killed - Timeout exceeded")
+    DeepZoomStaticTiler(slidepath, opts.basename, opts.format,
+                opts.tile_size, opts.overlap, opts.limit_bounds, opts.quality,
+                opts.workers, opts.with_viewer).run()

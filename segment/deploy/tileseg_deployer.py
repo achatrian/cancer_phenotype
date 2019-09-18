@@ -50,12 +50,13 @@ class TileSegDeployer(BaseDeployer):
             model.setup()  # hence must do setuphere
             model.is_setup = True
             logger.info("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
-        converter = MaskConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
+        converter = MaskConverter(
+            min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
         # end patch
         i, num_images = 0, 0
         if opt.save_masks:
             save_path = Path(opt.data_dir) / 'data' / 'network_outputs' / opt.slide_id
-            utils.mkdir(str(save_path))
+            save_path.mkdir(exist_ok=True)
         while True:
             data = input_queue.get(timeout=opt.sync_timeout)
             if data is None:

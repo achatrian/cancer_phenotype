@@ -44,7 +44,7 @@ def main():
     skf = StratifiedKFold(n_splits=opt.num_splits)
     splits = skf.split(cna.data.index.values, (cna.data.loc[:, target_gene] < 0).values)
     save_path = Path(opt.data_dir)/'CVsplits'
-    utils.mkdirs(save_path)
+    save_path.mkdir(exist_ok=True)
     for i, (train_idx, test_idx) in enumerate(splits):
         train_ids = cna.data.index[train_idx].values  # get slide ids using indices
         test_ids = cna.data.index[test_idx].values

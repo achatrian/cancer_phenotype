@@ -45,9 +45,10 @@ if __name__ == '__main__':
         with model.start_validation() as update_validation_meters:
             with tqdm(total=len(dataset)) as progress_bar:
                 for i, data in enumerate(dataloader):
-                    slide_level_label.add(int(data['target'][0]))
-                    if len(slide_level_label) > 1:
-                        raise ValueError(f"Inconsistent slide-level label for {opt.slide_id}; labels = {slide_level_label}")
+                    if opt.task == 'phenotype':
+                        slide_level_label.add(int(data['target'][0]))
+                        if len(slide_level_label) > 1:
+                            raise ValueError(f"Inconsistent slide-level label for {opt.slide_id}; labels = {slide_level_label}")
                     model.set_input(data)
                     model.test()
                     model.evaluate_parameters()
@@ -61,9 +62,13 @@ if __name__ == '__main__':
         webpage.save()
         # write results
         message = create_visualizer(opt).print_current_losses_metrics(opt.load_epoch, None, losses, metrics)
+        if opt.task == 'segment':  # only one split file for segmentation is used (different splits are in that file)
+            opt.split_file = str(Path(opt.data_dir) / 'data' / 'CVsplits' / 'tile_split.json')
         save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'/Path(opt.split_file).with_suffix('').name
-        utils.mkdirs(save_results_dir/model.model_tag)
+        (save_results_dir/model.model_tag).mkdir(exist_ok=True, parents=True)
         split_name = Path(opt.split_file).with_suffix('').name
+        if opt.task == 'segment':
+            split_name += str(opt.split_num)
         results_name = f'{opt.slide_id}' if opt.slide_id else split_name
         # save results for individual slide
         results = {
@@ -76,7 +81,7 @@ if __name__ == '__main__':
             'message': message,
             'losses': losses,
             'metrics': metrics,
-            'slide_level_label': slide_level_label.pop()
+            'slide_level_label': slide_level_label.pop() if opt.task == 'phenotype' else ''
         }
         json.dump(results, open((save_results_dir/model.model_tag/results_name).with_suffix('.json'), 'w'))
         # gather results for all slides
@@ -111,10 +116,11 @@ if __name__ == '__main__':
         # compute ROC AUC score over all slides
         results = sorted(slides_results.values(), key=lambda result: result['id'])  # ensure order is same for arrays below
         if len(results) > 1:  # if many other slides have been processed already
-            slide_level_labels = np.fromiter((result['slide_level_label'] for result in results), float)
-            if np.unique(slide_level_labels).size <= 1:
-                continue  # cannot compute auc if all labels are the same
-            slide_pos_probs = np.fromiter((result['metrics']['pos_prob_val'] for result in results), float)
-            model_results['statistics']['roc_auc_score'] = roc_auc_score(slide_level_labels, slide_pos_probs)
+            if opt.task == 'phenotype':  # classification AUC
+                slide_level_labels = np.fromiter((result['slide_level_label'] for result in results), float)
+                if np.unique(slide_level_labels).size <= 1:
+                    continue  # cannot compute auc if all labels are the same
+                slide_pos_probs = np.fromiter((result['metrics']['pos_prob_val'] for result in results), float)
+                model_results['statistics']['roc_auc_score'] = roc_auc_score(slide_level_labels, slide_pos_probs)
             json.dump(model_results, open((save_results_dir / model.model_tag).with_suffix('.json'), 'w'))
             print(f"Done! Model results for {model.model_tag} on {model_results['num_cases']} slides are available")

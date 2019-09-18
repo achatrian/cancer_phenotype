@@ -42,7 +42,8 @@ class AnnConvertDeployer(BaseDeployer):
             #slide = WSIReader(opt, opt.slide_file)
         # cannot send to cuda outside process in pytorch < 0.4.1 -- patch (torch.multiprocessing issue)
         print("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
-        converter = MaskConverter(min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
+        converter = MaskConverter(
+            min_contour_area=opt.min_contour_area)  # set up converter to go from mask to annotation path
         # end patch
         i, num_images = 0, 0
         while True:

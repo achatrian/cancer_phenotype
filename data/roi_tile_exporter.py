@@ -61,7 +61,7 @@ class ROITileExporter:
         }
 
         if self.roi_dir is not None:
-            self.roi_contour_lib = read_annotations(self.roi_dir, (self.slide_id,), True)[self.slide_id]
+            self.roi_contour_lib = read_annotations(self.roi_dir, (self.slide_id,), full_path=True)[self.slide_id]
 
     @staticmethod
     def get_tile_contours(contours, bounding_rects, labels, tile_rect):

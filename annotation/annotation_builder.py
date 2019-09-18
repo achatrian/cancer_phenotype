@@ -93,6 +93,12 @@ class AnnotationBuilder:
     def num_layers(self):
         return len(self._obj['layers'])
 
+    def is_empty(self):
+        if not self.num_layers():
+            return True
+        else:
+            return not bool(sum(len(layer['items']) for layer in self._obj['layers']))
+
     def rename_layer(self, old_name, new_name):
         layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
         layer = self._obj['layers'][layer_idx]
