@@ -70,7 +70,8 @@ class TilePhenoDataset(BaseDataset):
                         annotation = json.load(annotation_file)
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore")
-                            contours, labels = AnnotationBuilder.from_object(annotation).get_layer_points(0, contour_format=True)
+                            contours, labels = AnnotationBuilder.from_object(annotation).get_layer_points(0,
+                                                                                                          contour_format=True)
                         tumour_areas = [(contour / self.ANNOTATION_SCALING_FACTOR).astype(np.int32) for contour in contours if contour.size]
                         if all(tumour_area.size == 0 for tumour_area in tumour_areas):  # in case all contours are empty
                             continue

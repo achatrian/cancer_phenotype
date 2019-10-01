@@ -2,6 +2,7 @@ from pathlib import Path
 from functools import partial
 from typing import Union
 import warnings
+from random import sample
 import numpy as np
 import cv2
 from skimage import color
@@ -28,12 +29,14 @@ def annotations_summary(contour_struct, print_file=''):
             print(message, file=print_file)
 
 
-def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False):
+def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False, annotation_dirname='annotations'):
     r"""Read annotations for one / many slides
+    :param annotation_dirname:
     :param experiment_name:
     :param data_dir: folder containing the annotation files
     :param slide_ids: ids of the annotations to be read
     :param full_path: if true, the function does not look for the /data/annotations subdir
+    :param annotation_dirname:
     :return: dict: annotation id --> (dict: layer_name --> layer points)
     If there are more annotations for the same slide id, these are listed as keys
     """
@@ -42,7 +45,7 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
     if full_path:
         annotation_dir = Path(data_dir)
     else:
-        annotation_dir = Path(data_dir)/'data'/'annotations'
+        annotation_dir = Path(data_dir)/'data'/annotation_dirname
         if experiment_name:
             annotation_dir = annotation_dir/experiment_name
     if slide_ids:
@@ -61,11 +64,77 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
     return contour_struct
 
 
-def find_overlap(slide_contours: dict, different_labels=True):
+def check_relative_rect_positions(tile_rect0, tile_rect1, eps=0):
+    r"""
+    :param tile_rect0:
+    :param tile_rect1:
+    :param eps: tolerance in checks (not in contained check !)
+    :return: positions: overlap|horizontal|vertical|'' - the relative location of the two paths
+             origin_rect: meaning depends on relative positions of two boxes:
+                        * contained: which box is bigger
+                        * horizontal: leftmost box
+                        * vertical: topmost box
+                        * overlap: topmost box
+                        * '': None
+             rect_areas: areas of the bounding boxes
+    """
+    x0, y0, w0, h0 = tile_rect0
+    x1, y1, w1, h1 = tile_rect1
+    x_w0, y_h0, x_w1, y_h1 = x0 + w0, y0 + h0, x1 + w1, y1 + h1
+    # symmetric relationship - check only in one
+    x_overlap = (x0 - eps <= x1 <= x_w0 + eps or x0 - eps <= x_w1 <= x_w0 + eps)  # no need for symmetric check
+    y_overlap = (y0 - eps <= y1 <= y_h0 + eps or y0 - eps <= y_h1 <= y_h0 + eps)
+    x_contained = (x0 - eps <= x1 <= x_w0 + eps and x0 - eps <= x_w1 <= x_w0 + eps) or \
+                  (x1 - eps <= x0 <= x_w1 + eps and x1 - eps <= x_w0 <= x_w1 + eps)  # one is bigger than the other - not symmetric!
+    y_contained = (y0 <= y1 <= y_h0 and y0 <= y_h1 <= y_h0) or \
+                  (y1 <= y0 <= y_h1 + eps and y1 - eps <= y_h0 <= y_h1)
+    if x_contained and y_contained:
+        positions = 'contained'
+        if (x_w0 - x0) * (y_h0 - y0) >= (x_w1 - x1) * (y_h1 - y1):
+            origin_rect = 0  # which box is bigger
+        else:
+            origin_rect = 1
+    elif not x_contained and y_overlap and (x_w0 <= x1 + eps or x_w1 <= x0 + eps):
+        positions = 'horizontal'
+        if x_w0 <= x1 + eps:
+            origin_rect = 0
+        elif x_w1 <= x0 + eps:
+            origin_rect = 1
+        else:
+            raise ValueError("shouldn't be here")
+    elif not y_contained and x_overlap and (y_h0 <= y1 + eps or y_h1 <= y0 + eps):
+        positions = 'vertical'
+        if y_h0 <= y1 + eps:
+            origin_rect = 0
+        elif y_h1 <= y0 + eps:
+            origin_rect = 1
+        else:
+            raise ValueError("shouldn't be here")
+    elif x_overlap and y_overlap:
+        positions = 'overlap'
+        if y0 <= y1:
+            origin_rect = 0
+        else:
+            origin_rect = 1
+    else:
+        positions = ''
+        origin_rect = None
+    rect_areas = ((x_w0 - x0) * (y_h0 - y0), (x_w1 - x1) * (y_h1 - y1))
+    return positions, origin_rect, rect_areas
+
+
+def check_point_overlap(parent_contour, child_contour, n_points=5):
+    r"""Check whether child contour is inside parent contour by testing n_points points for inclusion"""
+    # sample child contour
+    child_points = sample(child_contour.squeeze().tolist(), min(n_points, child_contour.shape[0]))
+    return all(cv2.pointPolygonTest(parent_contour, tuple(point), False) >= 0 for point in child_points)
+
+
+def find_overlap_(slide_contours: dict, different_labels=True):
     r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
     :param slide_contours:
     :param different_labels: whether overlap is reported only for contours of different classes
-    :return:
+    :return: overlap vectors (boolean)
     """
     contours, labels = [], []
     for layer_name, layer_contours in slide_contours.items():  # merge all layers into one list of contours
@@ -81,7 +150,7 @@ def find_overlap(slide_contours: dict, different_labels=True):
             if different_labels and parent_label == child_label:
                 overlap_vector.append(False)
                 continue  # contours of the same class are not classified as overlapping
-            position, origin_bb, bb_areas = AnnotationBuilder.check_relative_rect_positions(parent_bb, child_bb, eps=0)
+            position, origin_bb, bb_areas = check_relative_rect_positions(parent_bb, child_bb, eps=0)
             if parent_bb == child_bb:  # don't do anything for same box
                 overlap_vector.append(False)
             elif position == 'contained' and origin_bb == 0:  # flag contour when parent contains child
@@ -90,6 +159,38 @@ def find_overlap(slide_contours: dict, different_labels=True):
                 overlap_vector.append(True)
             else:
                 overlap_vector.append(False)
+        overlap_struct.append(overlap_vector)
+    return overlap_struct, contours, contour_bbs, labels
+
+
+def find_overlap(slide_contours: dict, different_labels=True):
+    r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
+    :param slide_contours:
+    :param different_labels: whether overlap is reported only for contours of different classes
+    :return: SPARSE overlap vectors (integers)
+    """
+    contours, labels = [], []
+    for layer_name, layer_contours in slide_contours.items():  # merge all layers into one list of contours
+        indices = tuple(i for i, contour in enumerate(layer_contours) if contour.size > 2)
+        contours.extend(layer_contours[i] for i in indices)
+        labels.extend([layer_name] * len(indices))
+    contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
+    overlap_struct = []
+    for parent_bb, parent_label in zip(contour_bbs, labels):
+        # Find out each contour's children (overlapping); if a parent is encountered, no relationship is recorded
+        overlap_vector = []
+        for child_index, (child_bb, child_label) in enumerate(zip(contour_bbs, labels)):
+            if different_labels and parent_label == child_label:
+                continue  # contours of the same class are not classified as overlapping
+            position, origin_bb, bb_areas = check_relative_rect_positions(parent_bb, child_bb, eps=0)
+            if parent_bb == child_bb:  # don't do anything for same box
+                pass
+            elif position == 'contained' and origin_bb == 0:  # flag contour when parent contains child
+                overlap_vector.append(child_index)
+            elif position == 'overlap':  # flag contour when parent and child overlap to some extent
+                overlap_vector.append(child_index)
+            else:
+                pass
         overlap_struct.append(overlap_vector)
     return overlap_struct, contours, contour_bbs, labels
 
@@ -154,6 +255,7 @@ def mark_point_on_mask(mask, point, bounding_box, value=50, radius=0):
     return mask
 
 
+# DEPRECATED remove - use InstanceMasker instead
 def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_struct: list, bounding_boxes: list,
                                  label_values: dict, shape=(), contour_to_mask=contour_to_mask, indices=()):
     r"""
@@ -186,7 +288,7 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         overlap_vect = overlap_struct[i]
         mask = contour_to_mask(contours[i], value=label_values[labels[i]])
         x_parent, y_parent, w_parent, h_parent = bounding_boxes[i]
-        for child_index in np.where(overlap_vect)[0]:
+        for child_index in overlap_vect:
             if contours[child_index].size < 2:
                 skips.append(child_index)
             if child_index in skips:

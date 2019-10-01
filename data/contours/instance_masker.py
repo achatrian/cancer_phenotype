@@ -1,10 +1,8 @@
 from functools import partial
 from typing import Union
 import warnings
-
 import numpy as np
-
-from data.__init__ import contour_to_mask, find_overlap
+from data.contours import contour_to_mask, find_overlap
 
 
 class InstanceMasker:
@@ -56,7 +54,7 @@ class InstanceMasker:
                       'children_contours': [],
                       'parent_label': self.labels[outer_index],
                       'children_labels': []}
-        for child_index in np.where(overlap_vect)[0]:
+        for child_index in overlap_vect:
             if not self.labels[child_index] in self.label_values:
                 continue  # skip all contours for whom a paint-in value is unspecified
             x_child, y_child, w_child, h_child = self.bounding_boxes[child_index]

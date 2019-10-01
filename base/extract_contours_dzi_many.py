@@ -1,6 +1,5 @@
 from pathlib import Path
 import json
-from datetime import datetime
 import re
 import warnings
 import numpy as np
@@ -19,18 +18,19 @@ if __name__ == '__main__':
     opt.display_id = -1   # no visdom display
     dzi_dir = Path(opt.data_dir)/'data'/'dzi'
     image_paths = list(path for path in Path(opt.data_dir).iterdir()
-                       if path.name.endswith('.svs') or path.name.endswith('.ndpi'))
+                       if path.name.endswith('.svs') or path.name.endswith('.ndpi') or path.name.endswith('.tiff'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.svs'))
+    image_paths += list(path for path in Path(opt.data_dir).glob('*/*.tiff'))
     annotation_dir = Path(opt.data_dir) / 'data' / 'annotations' / opt.experiment_name
     annotation_dir.mkdir(exist_ok=True, parents=True)
     failure_log = []
     for image_path in tqdm(image_paths):
-        slide_id = re.sub(r'\.(ndpi|svs)', '', image_path.name)
+        slide_id = re.sub(r'\.(ndpi|svs|tiff)', '', image_path.name)
         if any(path.name.startswith(slide_id) for path in annotation_dir.iterdir() if path.suffix == '.json'):
             continue
         tqdm.write(f"Processing slide: {slide_id}")
-        source_file = re.sub(r'\.(ndpi|svs)', '.dzi', slide_id)
+        source_file = re.sub(r'\.(ndpi|svs|tiff)', '.dzi', slide_id)
         source_file = source_file if source_file.endswith('.dzi') else source_file + '.dzi'
         target_file = Path('masks')/('mask_' + Path(source_file).name)
         try:
@@ -73,11 +73,11 @@ if __name__ == '__main__':
                     get_layer_points('Tumour area', contour_format=True)
         except FileNotFoundError as err:
             failure_log.append({
-                'file': str(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /
-                      (source_file[:-4] + '.json')),
-                'error': err,
-                'message': f"No annotation file for {source_file[:-4]} under dir '{opt.area_annotation_dir}'"
+                'file': str(Path(opt.data_dir) / 'data' / opt.area_annotation_dir / (source_file[:-4] + '.json')),
+                'error': str(err),
+                'message': f"No tumour area annotation file for {slide_id}"
             })
+            continue
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)

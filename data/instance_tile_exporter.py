@@ -7,8 +7,8 @@ import numpy as np
 import imageio
 from tqdm import tqdm
 from data.images.wsi_reader import WSIReader
-from data import read_annotations, get_contour_image
-from data.instance_masker import InstanceMasker
+from contours import read_annotations, get_contour_image
+from contours.instance_masker import InstanceMasker
 
 
 # from data.images.dzi_io.dzi_io import DZI_IO

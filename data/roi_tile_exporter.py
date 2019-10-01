@@ -14,7 +14,7 @@ from skimage.filters import gaussian
 from skimage.color import rgba2rgb
 from data.images.wsi_reader import WSIReader
 from annotation.annotation_builder import AnnotationBuilder
-from data import read_annotations, contour_to_mask
+from contours import read_annotations, contour_to_mask
 from annotation.mask_converter import MaskConverter
 
 

@@ -45,6 +45,12 @@ def process_image(image, input_path, model):
     return output
 
 
+def make_background_image(image):
+    background_image = np.zeros_like(image)
+    background_image[..., 0] = 255
+    return background_image
+
+
 def merge_tiles(mask0, mask1, overlap=0.5):
     x, y = np.meshgrid(np.arange(mask0.shape[1]), np.arange(mask0.shape[0]))
 
@@ -80,6 +86,7 @@ def merge_tiles(mask0, mask1, overlap=0.5):
 if __name__ == '__main__':
     options = ProcessDZIOptions()
     options.parser.add_argument('--tile_overlap', type=float, default=0.5, help="Determines how big the second dzi offset will be, so that overlap of tiles is as desired")
+    options.parser.add_argument('--shuffle_images', action='store_true')
     opt = options.parse()
     opt.display_id = -1   # no visdom display
     model = create_model(opt)
@@ -87,14 +94,18 @@ if __name__ == '__main__':
     model.eval()
     dzi_dir = Path(opt.data_dir)/'data'/'dzi'
     image_paths = list(path for path in Path(opt.data_dir).iterdir()
-                       if path.name.endswith('.svs') or path.name.endswith('.ndpi'))
+                       if path.name.endswith('.svs') or path.name.endswith('.ndpi') or path.name.endswith('.tiff'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.svs'))
+    image_paths += list(path for path in Path(opt.data_dir).glob('*/*.tiff'))
+    if opt.shuffle_images:
+        import random
+        random.shuffle(image_paths)
     failure_log = []
     for image_path in image_paths:
-        slide_id = re.sub('\.(ndpi|svs)', '', image_path.name)
+        slide_id = re.sub('\.(ndpi|svs|tiff)', '', image_path.name)
         print(f"Processing slide: {slide_id}")
-        source_file = re.sub('\.(ndpi|svs)', '.dzi', slide_id)
+        source_file = re.sub('\.(ndpi|svs|tiff)', '.dzi', slide_id)
         source_file = source_file if source_file.endswith('.dzi') else source_file + '.dzi'
         # first dzi -- start from origin corner in original dzi
         target_file = Path('prob_masks')/('prob_mask_' + Path(source_file).name)
@@ -106,7 +117,7 @@ if __name__ == '__main__':
         except FileNotFoundError as err:
             failure_log.append({
                 'file': str(dzi_dir / source_file),
-                'error': err,
+                'error': str(err),
                 'message': f"Dzi image file at {str(dzi_dir / source_file)} is missing or incomplete"
             })
             tqdm.write(f"Dzi image file at {str(dzi_dir / source_file)} is missing or incomplete")
@@ -124,7 +135,7 @@ if __name__ == '__main__':
             if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > opt.tissue_content_threshold:
                 dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), process_image_with_model, border=0)
             else:
-                dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), np.zeros_like, border=0)
+                dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), make_background_image, border=0)
         dzi.downsample_pyramid(read_level)  # create downsampled levels
         dzi.close()
         # second dzi -- start from origin corner in original dzi
@@ -138,15 +149,15 @@ if __name__ == '__main__':
         mask_size = dzi.slide_to_mask((input_size,) * 2)[0]
         xs, ys = list(range(0, dzi.width, input_size)), list(range(0, dzi.height, input_size))
         # below: add the first position to coordinate lists, so that sequential can overlap images
-        xs, ys = (xs[0],) + tuple(int(x + opt.tile_overlap * opt.patch_size) for x in xs[:-1]), \
-                 (ys[0],) + tuple(int(y + opt.tile_overlap * opt.patch_size) for y in ys[:-1])  # skip last entry as it's outside of image
+        xs, ys = (xs[0],) + tuple(int(x + opt.tile_overlap * input_size) for x in xs[:-1]), \
+                 (ys[0],) + tuple(int(y + opt.tile_overlap * input_size) for y in ys[:-1])  # skip last entry as it's outside of image
         print(f"Processing shifted dzi - overlap of {opt.tile_overlap}%")
         for x, y in tqdm(product(xs, ys), total=len(xs) * len(ys)):
             x_mask, y_mask = dzi.slide_to_mask((x, y))
             if dzi.masked_percent(x_mask, y_mask, mask_size, mask_size) > opt.tissue_content_threshold:
                 dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), process_image_with_model, border=0)
             else:
-                dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), np.zeros_like, border=0)
+                dzi.process_region((x, y), read_level, (opt.patch_size, opt.patch_size), make_background_image, border=0)
         dzi.downsample_pyramid(read_level)  # create downsampled levels
         dzi.close()
         print("Combining shifted dzi images ...")
@@ -168,14 +179,22 @@ if __name__ == '__main__':
         converted_level = int(np.argmin(np.absolute(np.power(2, np.arange(0, 6)) *
                                                     mask_dzi.properties['mpp'] - opt.mpp)))  # relative to lev
         # read tumour area annotation
-        with open(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /
-                  (source_file[:-4] + '.json'), 'r') as annotation_file:
-            annotation_obj = json.load(annotation_file)
-            annotation_obj['slide_id'] = slide_id
-            annotation_obj['project_name'] = 'tumour_area'
-            annotation_obj['layer_names'] = ['Tumour area']
-            contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
-                get_layer_points('Tumour area', contour_format=True)
+        try:
+            with open(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /
+                      (source_file[:-4] + '.json'), 'r') as annotation_file:
+                annotation_obj = json.load(annotation_file)
+                annotation_obj['slide_id'] = slide_id
+                annotation_obj['project_name'] = 'tumour_area'
+                annotation_obj['layer_names'] = ['Tumour area']
+                contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
+                    get_layer_points('Tumour area', contour_format=True)
+        except FileNotFoundError as err:
+            failure_log.append({
+                'file': str(Path(opt.data_dir) / 'data' / opt.area_annotation_dir / (source_file[:-4] + '.json')),
+                'error': str(err),
+                'message': f"No tumour area annotation file for {slide_id}"
+            })
+            continue
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
@@ -208,7 +227,7 @@ if __name__ == '__main__':
         annotation.shrink_paths(0.1)
         annotation.add_data('experiment', opt.experiment_name)
         annotation.add_data('load_epoch', opt.load_epoch)
-        annotation_dir = Path(opt.data_dir) / 'data' / 'annotations_' / opt.experiment_name
+        annotation_dir = Path(opt.data_dir) / 'data' / 'annotations' / opt.experiment_name
         annotation_dir.mkdir(exist_ok=True, parents=True)
         annotation.dump_to_json(annotation_dir)
         print(f"Annotation saved in {str(annotation_dir)}")

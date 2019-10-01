@@ -44,14 +44,15 @@ if __name__ == '__main__':
     model.eval()
     dzi_dir = Path(opt.data_dir)/'data'/'dzi'
     image_paths = list(path for path in Path(opt.data_dir).iterdir()
-                       if path.name.endswith('.svs') or path.name.endswith('.ndpi'))
+                       if path.name.endswith('.svs') or path.name.endswith('.ndpi') or path.name.endswith('.tiff'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*/*.svs'))
+    image_paths += list(path for path in Path(opt.data_dir).glob('*/*.tiff'))
     failure_log = []
     for image_path in image_paths:
-        slide_id = re.sub('\.(ndpi|svs)', '', image_path.name)
+        slide_id = re.sub('\.(ndpi|svs|tiff)', '', image_path.name)
         print(f"Processing slide: {slide_id}")
-        source_file = re.sub('\.(ndpi|svs)', '.dzi', slide_id)
+        source_file = re.sub('\.(ndpi|svs|tiff)', '.dzi', slide_id)
         source_file = source_file if source_file.endswith('.dzi') else source_file + '.dzi'
         target_file = Path('masks')/('mask_' + Path(source_file).name)
         if (Path(opt.data_dir)/'data'/'dzi'/target_file).exists():
@@ -87,14 +88,22 @@ if __name__ == '__main__':
         converted_level = int(np.argmin(np.absolute(np.power(2, np.arange(0, 6)) *
                                                     mask_dzi.properties['mpp'] - opt.mpp)))  # relative to lev
         # read tumour area annotation
-        with open(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /
-                  (source_file[:-4] + '.json'), 'r') as annotation_file:
-            annotation_obj = json.load(annotation_file)
-            annotation_obj['slide_id'] = slide_id
-            annotation_obj['project_name'] = 'tumour_area'
-            annotation_obj['layer_names'] = ['Tumour area']
-            contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
-                get_layer_points('Tumour area', contour_format=True)
+        try:
+            with open(Path(opt.data_dir) / 'data' / opt.area_annotation_dir /
+                      (source_file[:-4] + '.json'), 'r') as annotation_file:
+                annotation_obj = json.load(annotation_file)
+                annotation_obj['slide_id'] = slide_id
+                annotation_obj['project_name'] = 'tumour_area'
+                annotation_obj['layer_names'] = ['Tumour area']
+                contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
+                    get_layer_points('Tumour area', contour_format=True)
+        except FileNotFoundError as err:
+            failure_log.append({
+                'file': str(Path(opt.data_dir) / 'data' / opt.area_annotation_dir / (source_file[:-4] + '.json')),
+                'error': str(err),
+                'message': f"No tumour area annotation file for {slide_id}"
+            })
+            continue
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3), key=cv2.contourArea)
         if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification

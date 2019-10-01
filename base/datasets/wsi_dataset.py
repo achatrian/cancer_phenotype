@@ -99,7 +99,7 @@ class WSIDataset(BaseDataset):
                     annotation_obj['slide_id'] = self.opt.slide_id
                     annotation_obj['project_name'] = 'tumour_area'
                     annotation_obj['layer_names'] = ['Tumour area']
-                    contours, layer_name = AnnotationBuilder.from_object(annotation_obj).\
+                    contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
                         get_layer_points('Tumour area', contour_format=True)
                     slide.filter_locations(contours, delimiters_scaling=self.opt.area_annotation_scale)
             except FileNotFoundError:

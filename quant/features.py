@@ -87,6 +87,10 @@ class MakeFeature:
         return Feature(f, self.returns)
 
 
+# TODO write class for neural network feature, i.e feature that loads and prepares nn feature extraction when it's created
+
+
+
 @MakeFeature(
     list(f'outer_hu_moment{i}' for i in range(7)) + [
         'outer_eccentricity',

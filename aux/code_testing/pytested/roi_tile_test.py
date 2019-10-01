@@ -1,13 +1,9 @@
 from pathlib import Path
-from pytest import fixture
-from tqdm import tqdm_notebook as tqdm
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 from skimage.filters import gaussian
-from data.roi_tile_exporter import ROITileExporter
+from data.roi_tile_exporter import ROITileExporterTileExporter
 from annotation.mask_converter import MaskConverter
-from base.utils import debug
 
 
 def export_tiles_debug(exp, area_layer, save_dir, select_coords=(), hier_rule=lambda x: x):

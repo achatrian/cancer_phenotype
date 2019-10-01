@@ -3,8 +3,9 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 from pytest import fixture
-from quant import read_annotations, contour_to_mask, find_overlap, contours_to_multilabel_masks, \
-    ContourProcessor, quantify
+from contours import read_annotations, contour_to_mask, find_overlap, contours_to_multilabel_masks
+from quant.contour_processor_ import ContourProcessor
+from quant.analyse import quantify
 from quant.features import region_properties, red_haralick, green_haralick, blue_haralick, gray_haralick, \
     surf_points, gray_cooccurrence
 from data.images.wsi_reader import WSIReader
