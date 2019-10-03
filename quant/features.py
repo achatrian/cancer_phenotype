@@ -70,6 +70,10 @@ class Feature:
                 raise ValueError(f"Arguments does not contain grayscale images-type input (f: {self.name})")
         start_time = time.time()
         output = self.function(**kwargs)
+        # error if any output is nan or infinite
+        if self.enable_checks and (np.isnan(output).any() or np.isinf(output).any()):
+            invalid_features_names = tuple(self.returns[i] for i in np.where(output)[0])
+            raise ValueError(f"The following features produced invalid outputs:\n {invalid_features_names[0:20]}\n ... {len(invalid_features_names)} invalid features in total")
         self.call_time = (time.time() - start_time - self.call_time) / (self.n_calls + 1) + self.call_time
         if len(output) != len(self.returns):
             raise ValueError(f"Feature description has different length from feature output ({len(self.returns)} ≠ {len(output)})")
@@ -87,8 +91,8 @@ class MakeFeature:
         return Feature(f, self.returns)
 
 
-# TODO write class for neural network feature, i.e feature that loads and prepares nn feature extraction when it's created
-
+# TODO write class for neural network feature, i.e feature that loads and prepares
+#  nn feature extraction when it's created
 
 
 @MakeFeature(

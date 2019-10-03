@@ -74,11 +74,11 @@ class ContourProcessor:
         }
         return features, self.description, data
 
-    def get_features(self, max_num_features=np.inf):
+    def get_features(self):
         r"""Extract features from all contours.
         Also returns small data items about each gland and distance between glands"""
         f, data, bounding_rects, centroids = [], [], [], []
-        for feats, self.description, datum in tqdm(self):
+        for feats, description, datum in tqdm(self):
             if feats is None:
                 continue
             f.append(feats)

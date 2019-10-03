@@ -30,6 +30,8 @@ if __name__ == '__main__':
         nucleus_contours = read_annotations(args.data_dir, slide_ids=(slide_id,),
                                             annotation_dirname='nuclei_annotations')[slide_id]['nuclei']
         for tumour_area_contour in tqdm(tumour_area_contours, desc='roi'):
+            if tumour_area_contour.size == 0 or tumour_area_contour.shape[0] < 3:
+                continue
             x, y, w, h = cv2.boundingRect(tumour_area_contour)  # FIXME
             roi_id = f'{x}_{y}_{w}_{h}'
             nuclear_areas = []

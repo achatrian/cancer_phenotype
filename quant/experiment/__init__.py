@@ -28,6 +28,7 @@ class Experiment:
         else:
             self.pipeline = None
         self.outlier_removal = outlier_removal
+        self.inliers = None
         self.caching_path = caching_path
         self.x_original = None
         self.fitted = False
@@ -91,6 +92,7 @@ class Experiment:
         # below: need to cast to bool or a np boolean is returned + need to use list as tuple is considered a key by []
         inliers = list(bool(label != -1) for label in self.outlier_removal.fit_predict(self.x))
         self.x = self.x.loc[inliers]
+        self.inliers = inliers
         n_after = len(self.x)
         print(f"Removed {n_before - n_after} outliers through {str(self.outlier_removal)}")
         return self

@@ -32,7 +32,8 @@ class Clustering(Experiment):
             ix = np.where(cluster == self.y)[0]
             plt.scatter(x.iloc[ix, 0], x.iloc[ix, 1], color=colors[i])
 
-    def get_examples(self, image_dir=None, n_examples=5, mpp=0.2, cluster_centers=None):
+    def get_examples(self, image_dir=None, n_examples=5, mpp=0.2, cluster_centers=None, image_dim_increase=0.5):
+        r"""Extract cluster examples directly from images"""
         if self.x is None or self.y is None:
             raise ValueError("Data has not been read / processed yet for cluster extraction")
         if image_dir is None:
@@ -72,11 +73,15 @@ class Clustering(Experiment):
                 sample_index = tuple(x_cluster.iloc[closest_points_indices].index)
             for subset_id, bb_s in sample_index:
                 x, y, w, h = tuple(int(d) for d in bb_s.split('_'))
+                x -= int(w * image_dim_increase/2)  # expand bounding box to give better view of gland
+                y -= int(h * image_dim_increase/2)
+                w += int(w * image_dim_increase)
+                h += int(h * image_dim_increase)
                 try:
                     subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi']
                                        if (image_dir / (subset_id + sfx)).is_file())
                 except StopIteration:
-                    raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an images file")
+                    raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an image file")
                 reader = WSIReader(file_name=str(subset_path))
                 image = np.array(reader.read_region((x, y), 0, (w, h)))  # changed level from None to 0 !!!
                 if image.shape[2] == 4:  # assume 4 channels images are RGBA
