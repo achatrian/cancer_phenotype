@@ -4,10 +4,10 @@ from copy import deepcopy
 import warnings
 from tqdm import tqdm
 import pandas as pd
-from . import Experiment
+from . import BaseExperiment
 
 
-class Collection(Experiment):
+class Collection(BaseExperiment):
 
     def __init__(self, name, steps, step_names=(), experiments=()):
         if experiments:
@@ -34,7 +34,7 @@ class Collection(Experiment):
             try:
                 with open(feature_path, 'r') as features_file:
                     x = pd.read_json(features_file, orient='split')
-                self.experiments.append(Experiment(feature_path.name, deepcopy(self.step_names), deepcopy(self.steps)))
+                self.experiments.append(BaseExperiment(feature_path.name, deepcopy(self.step_names), deepcopy(self.steps)))
                 self.experiments[-1].x = x
                 self.experiments[-1].loaded_paths.append(feature_path)
                 used_memory = sum(e.x.memory_usage(deep=True).sum() for e in self.experiments)

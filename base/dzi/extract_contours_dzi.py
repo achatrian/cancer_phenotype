@@ -38,8 +38,7 @@ if __name__ == '__main__':
         contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
             get_layer_points('Tumour area', contour_format=True)
     # biggest contour is used to select the area to process
-    area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
-                       key=cv2.contourArea)
+    area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3), key=cv2.contourArea)
     if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
         area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
     # read downsampled region corresponding to tumour area annotation and extract contours
@@ -73,8 +72,3 @@ if __name__ == '__main__':
     annotation.dump_to_json(annotation_dir)
     print(f"Annotation saved in {str(annotation_dir)}")
     print("Done !")
-
-
-    
-
-

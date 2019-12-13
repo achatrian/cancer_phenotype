@@ -147,7 +147,8 @@ class ROITileExporter:
             value_binary_masks = []
             for value in value_hier:
                 value_binary_mask = converter.threshold_by_value(value, mask)
-                value_binary_mask = (gaussian(value_binary_mask, sigma=self.sigma_smooth) > 0.5).astype(np.uint8)  # smoothen jagged edges
+                if self.sigma_smooth > 0:
+                    value_binary_mask = (gaussian(value_binary_mask, sigma=self.sigma_smooth) > 0.5).astype(np.uint8)  # smoothen jagged edges
                 # value_binary_mask = converter.remove_ambiguity(
                 #     value_binary_mask,
                 #     small_object_size=0,  # no need to remove small objects from annotation

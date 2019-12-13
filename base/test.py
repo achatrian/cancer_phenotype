@@ -1,3 +1,4 @@
+import socket
 from pathlib import Path
 import json
 from datetime import datetime
@@ -14,6 +15,7 @@ r"Test script for network, aggregates results over whole validation dataset"
 
 if __name__ == '__main__':
     opt = TestOptions().parse()
+    print(f"Running on host: '{socket.gethostname()}'")
     # hard-code some parameters for test
     opt.serial_batches = True  # no shuffle
     opt.no_flip = True    # no flip
@@ -56,9 +58,12 @@ if __name__ == '__main__':
     message = create_visualizer(opt).print_current_losses_metrics(opt.load_epoch, None, losses, metrics)
     if opt.task == 'segment':  # only one split file for segmentation is used (different splits are in that file)
         opt.split_file = str(Path(opt.data_dir) / 'data' / 'CVsplits' / 'tile_split.json')
-    save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'/Path(opt.split_file).with_suffix('').name
+        save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'/Path(opt.split_file).with_suffix('').name
+        split_name = Path(opt.split_file).with_suffix('').name
+    else:
+        save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'
+        split_name = 'split'
     (save_results_dir / model.model_tag).mkdir(exist_ok=True, parents=True)
-    split_name = Path(opt.split_file).with_suffix('').name
     if opt.task == 'segment':
         split_name += str(opt.split_num)
     results_name = f'{opt.slide_id}' if opt.slide_id else split_name

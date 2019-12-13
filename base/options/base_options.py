@@ -8,7 +8,7 @@ from base import models
 from base import datasets
 from base import deploy
 from base.utils import utils
-from options.task_options import get_task_options
+from base.options.task_options import get_task_options
 
 
 class BaseOptions:
@@ -30,8 +30,6 @@ class BaseOptions:
         parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float)
         parser.add_argument('--learning_rate_patience', default=50, type=int)
         parser.add_argument('--weight_decay', default=5e-4, type=float)
-        parser.add_argument('--reg_weight', default=5e-4, type=float, help="weight given to regularization loss")
-        parser.add_argument('--losstype', default='ce', choices=['dice', 'ce'])
         parser.add_argument('--loss_weight', type=str, default=None)
         parser.add_argument('--init_type', type=str, default='normal', help='network initialization [normal|xavier|kaiming|orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')

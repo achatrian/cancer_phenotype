@@ -2,22 +2,22 @@ from pathlib import Path
 import json
 import warnings
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 from sklearn.ensemble import IsolationForest
 from skimage import transform, color
 import cv2
 import imageio
 from scipy.spatial.distance import cdist
-from . import Experiment
+from experiment import BaseExperiment
 from data.images.wsi_reader import WSIReader
 
+# TODO adapt to BaseExperiment
 
-class Clustering(Experiment):
-    def __init__(self, name, step_names=(), steps=(), outlier_removal=IsolationForest(), caching_path=None, x=None,
-                 y=None, clusters=None):
-        super().__init__(name, step_names, steps, outlier_removal, caching_path=caching_path, x=x, y=y)
-        self.clusters = clusters
+
+class Clustering(BaseExperiment):
+    def __init__(self, args):
+        super().__init__(args)
 
     def plot_clusters(self, colors=('b', 'g', 'r', 'c', 'm'), dim_reduction='PCA'):
         r"""Plot clusters for whole dataset. Assume y is vector of cluster indexes"""
@@ -42,6 +42,9 @@ class Clustering(Experiment):
         if self.clusters is None:
             self.clusters = np.unique(self.y)
         examples = []
+        image_dir = Path(image_dir)
+        image_paths = tuple(image_dir.glob('*.ndpi')) + tuple(image_dir.glob('*.svs')) + tuple(image_dir.glob('*.dzi'))\
+            + tuple(image_dir.glob('*/*.ndpi')) + tuple(image_dir.glob('*/*.svs')) + tuple(image_dir.glob('*/*.dzi'))
         for i, cluster in enumerate(tqdm(self.clusters, desc='clusters')):
             x_cluster = self.x.iloc[(self.y == cluster).to_numpy().squeeze()]
             examples.append([])
@@ -78,8 +81,7 @@ class Clustering(Experiment):
                 w += int(w * image_dim_increase)
                 h += int(h * image_dim_increase)
                 try:
-                    subset_path = next((image_dir / (subset_id + sfx)) for sfx in ['.ndpi', '.svs', '.dzi']
-                                       if (image_dir / (subset_id + sfx)).is_file())
+                    subset_path = next(path for path in image_paths if subset_id == path.with_suffix('').name)
                 except StopIteration:
                     raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an image file")
                 reader = WSIReader(file_name=str(subset_path))

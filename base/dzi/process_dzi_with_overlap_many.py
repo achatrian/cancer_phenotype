@@ -22,7 +22,7 @@ def process_image(image, input_path, model):
     Produce soft-maxed network mask that is also visually intelligible.
     Each channel contains the softmax probability of that pixel belonging to that class, mapped to [0-255] RGB values.
     """
-    # scale betwesen 0 and 1
+    # scale between 0 and 1
     image = image / 255.0
     # normalised images between -1 and 1
     image = (image - 0.5) / 0.5

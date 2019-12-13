@@ -1,6 +1,7 @@
 import torch.utils.data as data
 import numbers
 import random
+import copy
 import numpy as np
 import cv2
 import torch
@@ -20,38 +21,52 @@ class BaseDataset(data.Dataset):
         return parser
 
     def __len__(self):
-        return 0
+        return len(self.paths)
 
     def get_sampler(self):
         r"""Abstract method, returns sampler for dataset, which is used in create_dataloader.
         If not overwritten it is ignored via the None flag"""
         return None
 
-    def make_subset(self, selector='', selector_type='match', store_name='paths'):
-        r"""Method to be partially or completely modified in subclasses"""
+    def make_subset(self, selector='', selector_type='match', store_name='paths', deepcopy=False,
+                    additional_stores=('labels',)):
+        r"""
+        :param selector: search for this pattern in data path (selector_type=='match), or pass the desired indices (selector_type=='indices')
+        :param selector_type: 'match': searches for patterns in path strings; 'indices' selects the desired indices
+        :param store_name: name of attribute containing paths to data
+        :param deepcopy: whether to create a new dataset object
+        :param additional_stores: additional stores to be subsampled
+        :return:
+        """
+        dataset = copy.deepcopy(self) if deepcopy else self
         if selector_type == 'match':
-            indices = [i for i, path in enumerate(getattr(self, store_name)) if selector in str(path)]  # NB only works for datasets that store paths in self.paths
+            indices = [i for i, path in enumerate(getattr(dataset, store_name)) if selector in str(path)]  # NB only works for datasets that store paths in self.paths
         elif selector_type == 'indices':
             indices = selector
         else:
             raise NotImplementedError(f"Unknown selector type '{selector_type}'")
-        try:
-            store = getattr(self, store_name)
-            if not indices:
-                raise ValueError("Cannot make subset from empty index set")
-            if not store:
-                raise ValueError(f"{self.name()}().{store_name} is empty")
-            store = tuple(store[i] for i in indices)
-            setattr(self, store_name, store)
-        except AttributeError:
-            print(f"{store_name} not defined in {self.name()}")
-            raise
-        except IndexError:
-            print(f"Max index '{max(indices)}' greater than {store_name} length ({len(store)}))")
-            raise
-        if len(store) == 0:
-            raise ValueError("Subset is empty - could be due to train/test split")
+        lengths = set()
+        for store_name_ in additional_stores + (store_name,):
+            try:
+                store = getattr(dataset, store_name_)
+                lengths.add(len(store))
+                assert len(lengths) == 1, "All stores must have equal length"
+                if not indices:
+                    raise ValueError("Cannot make subset from empty index set")
+                if not store:
+                    raise ValueError(f"{dataset.name()}().{store_name_} is empty")
+                store = tuple(store[i] for i in indices)
+                setattr(dataset, store_name_, store)
+            except AttributeError:
+                print(f"{store_name_} not defined in {dataset.name()}")
+                raise
+            except IndexError:
+                print(f"Max index '{max(indices)}' greater than {store_name_} length ({len(store)}))")
+                raise
+            if len(store) == 0:
+                raise ValueError("Subset is empty - could be due to train/test split")
         print(f"subset of len = {len(store)} was created")
+        return dataset
 
     def setup(self):
         pass

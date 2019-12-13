@@ -5,7 +5,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 import pandas as pd
 import numpy as np
 from skimage import color
-from quant.experiment import Experiment
+from quant.experiment import BaseExperiment
 from data.images.wsi_reader import WSIReader
 
 
@@ -17,7 +17,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.log_dir.makedirs(exist_ok=True)
     metadata_path = args.log_dir/'metadata.tsv'
-    exp = Experiment('projector', [], [])
+    exp = BaseExperiment('projector', [], [])
     exp.read_data(args.data_dir/'data'/'features'/'all.h5')
     index = exp.x.index.levels[0] if isinstance(exp.x.index, pd.core.index.MultiIndex) else list(exp.x.index)
     bounding_boxes = list(tuple(int(d) for d in s.split('_')) for s in exp.x.index)

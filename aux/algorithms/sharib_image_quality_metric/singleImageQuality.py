@@ -9,7 +9,7 @@
 import os
 import glob
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 import matplotlib as mpl
 import cv2
 

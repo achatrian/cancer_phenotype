@@ -205,6 +205,10 @@ def filter_(args):
     print(f"Done! {original_n - final_n} contours were filtered out of feature file ({bytes2human(pre_filter_size)} --> {bytes2human(post_filter_size)}")
 
 
+def single_key(args):
+    feature_dir = args.data_dir/'data'/'features'/args.experiment_name
+    pass
+
 # ########## subparser commands ############
 
 
@@ -247,10 +251,15 @@ def add_filter_args(parser_filter):
                                help="Divide area contour by this number (used for annotations that are not taken at original image magnification)")
 
 
+def add_single_key_args(parser_single_key):
+    parser_single_key.add_argument('data_dir', type=Path)
+    parser_single_key.add_argument('experiment_name', type=str)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='task', help="Name of task to perform")
-    add_quantify_args(subparsers.add_parser('compress'))
+    add_quantify_args(subparsers.add_parser('quantify'))
     add_compress_args(subparsers.add_parser('compress'))
     add_dim_reduce_args(subparsers.add_parser('dim_reduce'))
     add_filter_args(subparsers.add_parser('filter'))

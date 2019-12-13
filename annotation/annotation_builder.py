@@ -7,7 +7,7 @@ from itertools import tee
 from pathlib import Path
 import multiprocessing as mp
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 import cv2
 
 
@@ -133,7 +133,7 @@ class AnnotationBuilder:
         self.metadata[self.layer_names[-1]]['tile_rect'] = []
         return self
 
-    def add_item(self, layer_idx, type_, class_=None, points=None, tile_rect=None):
+    def add_item(self, layer_idx, type_, class_=None, points=None, tile_rect=None, filled=False):
         r"""
         Add item to desired layer
         :param layer_idx: numerical index or layer name (converted to index)
@@ -149,7 +149,21 @@ class AnnotationBuilder:
             'class': class_ if class_ else self._obj['layers'][layer_idx]['name'],
             'type': type_,
             "segments": [],
-            'closed': True
+            'closed': True,
+            'color': {} if not filled else {
+                "fill": {
+                    "saturation": 0.44,
+                    "lightness": 0.69,
+                    "alpha": 0.7,
+                    "hue": 170
+                },
+                "stroke": {
+                    "saturation": 0.44,
+                    "lightness": 0.69,
+                    "alpha": 1,
+                    "hue": 170
+                }
+            }
         }  # TODO properties must change with item type - e.g. circle, rectangle
         self._obj['layers'][layer_idx]['items'].append(new_item)
         self.last_added_item = self._obj['layers'][layer_idx]['items'][-1]  # use to update item
@@ -217,18 +231,36 @@ class AnnotationBuilder:
         json.dump(obj, open(save_path, 'w'))
 
     def get_layer_points(self, layer_idx, contour_format=True):
-        """Get all paths in a given layer, function used to extract layer from annotation object"""
+        r"""Get all paths in a given layer, function used to extract layer from annotation object"""
+        # TODO add code in item_points to convert circles into contours
         if isinstance(layer_idx, str):
             layer_idx = self.get_layer_idx(layer_idx)
         layer = self._obj['layers'][layer_idx]
         if contour_format:
             layer_points = list(
                 np.array(list(self.item_points(item))).astype(np.int32)[:, np.newaxis, :]  # contour functions only work on int32
-                if 'segments' in item and item['segments'] else np.array([]) for item in layer['items']
+                if (item['type'] == 'path' and 'segments' in item and item['segments']) or
+                   (item['type'] == 'rectangle')
+                else np.array([])
+                for item in layer['items']
             )
         else:
             layer_points = list(list(self.item_points(item)) for item in layer['items'])
         return layer_points, layer['name']
+
+    def get_circles(self):
+        r"""Extracts all circle annotations in center-radius format"""
+        circles = dict()
+        for layer in self._obj['layers']:
+            layer_circles = circles[layer['name']] = []
+            for item in layer['items']:
+                if item['type'] != 'circle':
+                    continue
+                layer_circles.append({
+                    'center': (item['center']['x'], item['center']['y']),
+                    'radius': item['radius']
+                })
+        return circles
 
     def shrink_paths(self, factor=0.5, min_point_density=0.1, min_point_num=10):
         r"""Function to remove points from contours in order to decrease the annotation size
@@ -391,7 +423,12 @@ class AnnotationBuilder:
         if item['type'] == 'path':
             points = set()
             for segment in item['segments']:
-                point = tuple(segment['point'].values())  # x and y
+                if 'point' in segment:  # point = {x: v, y: v} format
+                    point = tuple(segment['point'].values())
+                elif isinstance(segment[0], (list, tuple)):  # couple format
+                    point = tuple(segment[0])  # in case graphic handles are present
+                else:
+                    point = tuple(segment)  # in case only point is present
                 if point not in points:
                     points.add(point)
                     yield point

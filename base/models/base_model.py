@@ -2,7 +2,7 @@ import os
 from contextlib import contextmanager
 from itertools import chain
 import torch
-from utils import utils
+from base.utils import utils
 from . import networks
 
 # Benefits of having one skeleton, e.g. for train - is that you can keep all the incremental changes in
@@ -319,10 +319,4 @@ class BaseModel:
             net = getattr(self, 'net' + module_name)
             if net is not None:
                 net.share_memory()
-
-
-
-
-
-
 

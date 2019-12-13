@@ -8,7 +8,7 @@ import warnings
 import numpy as np
 import torch
 import cv2
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 
 
 def anyparser(parser=None, description="Arguments"):

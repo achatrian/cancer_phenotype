@@ -1,6 +1,6 @@
 from pathlib import Path
 import sys
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 import numpy as np
 from pytest import fixture
 from contours import read_annotations, contour_to_mask, find_overlap, contours_to_multilabel_masks

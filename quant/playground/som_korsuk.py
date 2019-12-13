@@ -3,7 +3,7 @@ import glob
 import deepdish
 import numpy as np
 from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 from sompy.sompy import SOMFactory
 from sklearn.neighbors import NearestNeighbors
 import imageio

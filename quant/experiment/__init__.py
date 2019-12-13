@@ -1,158 +1,152 @@
-from typing import Union
-from pathlib import Path
-import warnings
-import time
-from tqdm import tqdm
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import IsolationForest
-from sklearn.decomposition import PCA, FastICA
-import pandas as pd
+import importlib
+from typing import NamedTuple
+from quant.utils import is_namedtuple
 
 
-class Experiment:
+class BaseExperiment:
+    parameters_names = ()
+    parameters_defaults = ()
+    parameters_descriptions = ()
+    preprocess_parameters_names = ()
+    preprocess_parameters_defaults = ()
+    preprocess_parameters_descriptions = ()
 
-    def __init__(self, name, step_names=(), steps=(), outlier_removal=IsolationForest(), caching_path=None, x=None, y=None):
-        if len(step_names) != len(steps):
-            raise ValueError(f"Step_names and steps must have equal length ({len(step_names)} != {len(steps)}")
-        self.name = name
-        self.step_names = step_names
-        self.steps = steps
-        self.x = x
-        self.loaded_paths = []
-        self.y = y
-        if self.step_names:
-            self.pipeline = Pipeline(
-                memory=caching_path,
-                steps=list((name, step) for name, step in zip(step_names, steps))
-            )
-        else:
-            self.pipeline = None
-        self.outlier_removal = outlier_removal
-        self.inliers = None
-        self.caching_path = caching_path
-        self.x_original = None
-        self.fitted = False
-        self.dim_reducer = None
+    def __init__(self, args):
+        self.args = args
+        self.run_parameters = None
 
-    def read_data(self, feature_path: Union[str, Path]):
-        feature_path = Path(feature_path)
-        with open(feature_path, 'r') as features_file:
-            if feature_path.suffix == '.json':
-                self.x = pd.read_json(features_file, orient='split')
-                self.loaded_paths.append(feature_path)
-            elif feature_path.suffix == '.h5':
-                self.x = pd.read_hdf(features_file)
-            else:
-                ValueError(f"Unexpected data format: '{feature_path.suffix}'")
-        return self
+    @staticmethod
+    def name():
+        return "BaseExperiment"
 
-    def read_data_from_dir(self, feature_dir: Union[str, Path], max_memory_use=1e10):
-        feature_dir = Path(feature_dir)
-        frames = []
-        feature_paths = sorted((path for path in feature_dir.iterdir() if path.is_file() and path.suffix in ('.json', '.h5')),
-                               key=str)
-        suffixes = ['th', 'st', 'nd']
-        for i, feature_path in enumerate(tqdm(feature_paths)):
+    @classmethod
+    def modify_commandline_options(cls, parser):
+        r"""
+        Adds parameter range options.
+        Can be modified in subclasses to add experiment-specific options to parser
+        """
+        for name, default, description in zip(
+                cls.preprocess_parameters_names,
+                cls.preprocess_parameters_defaults,
+                cls.preprocess_parameters_descriptions):
+            parser.add_argument(f'--{name}', type=str, default=default, help=f"{description}. Values for preprocessing parameter {name}. Formats: number, range ('[start]:stop[:step]') or values (v1;v2;....)")
+        for name, default, description in zip(
+                cls.parameters_names,
+                cls.parameters_defaults,
+                cls.parameters_descriptions):
+            parser.add_argument(f'--{name}', type=str, default=default, help=f"{description}. Values for preprocessing parameter {name}. Formats: number, range ('[start]:stop[:step]') or values (v1;v2;....)")
+        return parser
+
+    def __len__(self):  # number of parameters
+        return len(self.parameters_names) + len(self.preprocess_parameters_names)
+
+    def read_data(self):
+        r"""
+        Abstract method: reads data to perform experiment on.
+        In case data is read sequentially when running the experiment, this function is called multiple times
+        """
+        pass
+
+    def preprocess(self, parameters=None):
+        r"""
+        :parameter parameters: optional parameters for preprocessing
+        Abstract method: transforms data before the experiment is run
+        """
+
+    def run(self, parameters=None):
+        r"""
+        Abstract method: implements the experimental procedure
+        """
+        pass
+
+    def evaluate(self):
+        r"""
+        Abstract method: evaluates the experiments' results
+        """
+        pass
+
+    def save(self):
+        r"""
+        Abstract method: saves result and evaluation
+        """
+
+    @staticmethod
+    def format_parameters_key(parameters: NamedTuple):
+        if not is_namedtuple(parameters):
+            raise ValueError(f"Parameters must be a NamedTuple, not {type(parameters)}")
+        parameters_key = ''
+        for parameter, value in parameters._asdict().items():
+            parameters_key += f'{parameter}:{value}'
+        return parameters_key
+
+    def save_results(self, results):
+        r"""
+        Save results from multiple runs of the experiment
+        :param results:
+        :return:
+        """
+        pass
+
+    def select_best(self, results) -> NamedTuple:
+        r"""
+        Called at end of grid search. Chooses best run based on results
+        :param results:
+        :return:
+        """
+        pass
+
+    def postprocess(self, best_parameters, best_result):
+        r"""
+        Heavier save method, serialising entire models, only called on the best method
+        :return:
+        """
+
+
+def find_experiment_using_name(experiment_name, task_name):
+    r"""Finds BaseExperiment subclass in any of directories inside quant folder"""
+    try:
+        task_module = importlib.import_module(task_name)
+        experiment_filename = 'quant.' + task_name + '.' + experiment_name + "_experiment"
+        experimentlib = importlib.import_module(experiment_filename, package=task_module)
+    except ModuleNotFoundError as err1:
             try:
-                with open(feature_path, 'r') as features_file:
-                    if feature_path.suffix == '.json':
-                        frame = pd.read_json(features_file, orient='split', convert_axes=False, convert_dates=False)
-                    elif feature_path.suffix == '.h5':
-                        frame = pd.read_hdf(features_file)
-                    else:
-                        raise ValueError("Error when loading data-frame: unexpected format (should not be here)")
-                    frames.append(frame)
-                self.loaded_paths.append(feature_path)
-                used_memory = sum(frame.memory_usage(deep=True).sum() for frame in frames)
-                tqdm.write(f"Memory usage: {used_memory}")
-                suffix = suffixes[i % 10] if i % 10 in (1, 2) else suffixes[0]
-                if used_memory > max_memory_use:
-                    warnings.warn(f"Breaking after {i}{suffix} iteration as memory usage exceeded given maximum ({used_memory} > {max_memory_use})")
-                    break
-            except ValueError as err:
-                print(f"Could not load {str(feature_path)} ...")
-        if len(frames) == 1:
-            self.x = frames[0]
-        else:
-            keys = tuple((path.with_suffix('')).name for path in self.loaded_paths)
-            print(keys)
-            self.x = pd.concat(frames, keys=tuple((path.with_suffix('')).name for path in self.loaded_paths))
-        print(f"{len(self.loaded_paths)} feature files were loaded.")
-        return self
+                # if module not found, attempt to load from base
+                task_module = importlib.import_module(task_name)
+                experiment_filename = 'quant.' + 'experiment.' + experiment_name + "_experiment"
+                experimentlib = importlib.import_module(experiment_filename, package=task_module)
+            except ModuleNotFoundError:
+                if not err1.args:
+                    err1.args = ('',)
+                err1.args = err1.args + (f"{task_name}.experiments contains no file '{experiment_name}.py'",)
+                raise err1
+    except ImportError as importerr:
+        if not importerr.args:
+            importerr.args = ('',)
+        importerr.args = importerr.args + (f"Module {task_name} not found.",)
+        raise
 
-    def add_steps(self, items, names, overwrite=False):
-        if not overwrite:
-            self.pipeline.steps.extend((name, item) for item, name in zip(items, names))
-        else:
-            self.pipeline.steps = list((name, item) for item, name in zip(items, names))
-        self.pipeline._validate_steps()
+    # In the file, the class called experimentNameexperiment() will
+    # be instantiated. It has to be a subclass of Baseexperiment,
+    # and it is case-insensitive.
 
-    def remove_outliers(self):
-        n_before = len(self.x)
-        # below: need to cast to bool or a np boolean is returned + need to use list as tuple is considered a key by []
-        inliers = list(bool(label != -1) for label in self.outlier_removal.fit_predict(self.x))
-        self.x = self.x.loc[inliers]
-        self.inliers = inliers
-        n_after = len(self.x)
-        print(f"Removed {n_before - n_after} outliers through {str(self.outlier_removal)}")
-        return self
+    def is_subclass(subclass, superclass):
+        return next(iter(subclass.__bases__)).__module__.endswith(superclass.__module__)
 
-    def run(self, store_original=False):
-        r"""Method where y is computed. Can be overwritten"""
-        if self.x is None:
-            raise ValueError(f"Data  has not been loaded for '{self.name}'")
-        start_time = time.time()
-        y = self.pipeline.fit_predict(self.x)
-        self.y = pd.DataFrame(data=y, columns=['cluster'], index=self.x.index)
-        print(f"Total run time: {time.time() - start_time}s")
-        if store_original:
-            self.x_original = self.x.copy(deep=True)
-        x = self.x.values
-        for step_name in self.step_names[:-1]:  # pro
-            x = self.pipeline.named_steps[step_name].transform(x)  # transforms have already been fitted
-        naming_step_idx = -2 if len(self.step_names) > 1 else -1
-        columns = list(self.step_names[naming_step_idx] + str(i) for i in range(x.shape[1]))  # e.g. PCA0 PCA1 ..
-        self.x = pd.DataFrame(data=x, columns=columns, index=self.x.index)
-        self.fitted = True
-        return self
+    experiment = None
+    target_experiment_name = experiment_name.replace('_', '') + 'experiment'
+    for name, cls in experimentlib.__dict__.items():
+        if name.lower() == target_experiment_name.lower():
+            if is_subclass(cls, BaseExperiment) or any(is_subclass(cls_b, BaseExperiment) for cls_b in cls.__bases__):
+                experiment = cls
 
-    def dim_reduction(self, ndim=2, type='PCA'):
-        r"""Get reduced dimensionality"""
-        decomposition = PCA(n_components=ndim) if type == 'PCA' else FastICA(n_components=ndim)
-        x = self.x.values
-        if x.shape[1] == ndim:
-            return self.x
-        x = decomposition.fit_transform(x)
-        columns = list(self.step_names[-2] + str(i) for i in range(x.shape[1]))  # e.g. PCA0 PCA1 ..
-        self.dim_reducer = decomposition
-        return pd.DataFrame(data=x, columns=columns, index=self.x.index)
+    if experiment is None:
+        raise NotImplementedError("In {}.py, there should be a subclass of Baseexperiment with class name that matches {} in lowercase.".format(
+              experiment_filename, target_experiment_name))
 
-    def get_subsets(self):
-        # TODO test
-        r"""Assuming x uses a multindex, returns a dataframe for each field in the first level"""
-        return {subset_name: self.x[subset_name] for subset_name in self.x.index.levels[0]}
-
-    def save_results(self, save_dir, format='hdf5'):
-        r"""Save experiment results"""
-        if '~' in str(save_dir):
-            save_dir = Path(save_dir).expanduser()
-        if format == 'hdf5':
-            xpath = Path(save_dir)/f'x_{self.name}_{"fitted" if self.fitted else ""}.hf5'
-            self.x.to_hdf(open(xpath, 'w'), key='x')
-            if self.y is not None:
-                ypath = Path(save_dir)/f'y_{self.name}.json'
-                self.y.to_hdf(open(ypath, 'w'), key='y')
-        elif format == 'json':
-            xpath = Path(save_dir)/f'x_{self.name}_{"fitted" if self.fitted else ""}.json'
-            self.x.to_json(open(xpath, 'w'), orient='split')
-            if self.y is not None:
-                ypath = Path(save_dir)/f'y_{self.name}.json'
-                self.y.to_json(open(ypath, 'w'), orient='split')
-        else:
-            raise ValueError(f"Unexpected saving format: '{format}'")
+    return experiment
 
 
-
-
-
-
+def create_experiment(args):
+    experiment = find_experiment_using_name(args.experiment, args.task)
+    instance = experiment(args)
+    return instance

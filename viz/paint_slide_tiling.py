@@ -12,6 +12,7 @@ from matplotlib import cm
 from tqdm import tqdm
 from data.images.wsi_reader import WSIReader
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--slide_path', type=Path, required=True)

@@ -165,6 +165,8 @@ class ROITilesDataset(BaseDataset):
             offset_y=int(coords[1])
         )
         if not self.opt.no_ground_truth:
-            data['target'] = gt
-            data['target_path'] = str(gt_path)
+            data.update(
+                target=gt,
+                target_path=str(gt_path)
+            )
         return data

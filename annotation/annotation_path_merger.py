@@ -12,7 +12,7 @@ import multiprocessing as mp
 from pathlib import Path
 import numpy as np
 from scipy.spatial.distance import cdist
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 import cv2
 import queue
 import tqdm

@@ -6,9 +6,11 @@ from random import sample
 import numpy as np
 import cv2
 from skimage import color
+from openslide import OpenSlideError
 from annotation.annotation_builder import AnnotationBuilder
 from data.images.wsi_reader import WSIReader
 from data.images.dzi_io import DZI_IO
+from base.utils import debug
 
 r"""Functions to extract and order images and annotation data, for computing features and clustering"""
 
@@ -48,6 +50,9 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
         annotation_dir = Path(data_dir)/'data'/annotation_dirname
         if experiment_name:
             annotation_dir = annotation_dir/experiment_name
+    # NB path is resolved erroneously in PyCharm (mounted path is used)
+    if annotation_dir.is_symlink():
+        annotation_dir = annotation_dir.resolve(strict=True)  # resolve symlinks
     if slide_ids:
         annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
                             if any(slide_id in str(annotation_path.name) for slide_id in slide_ids)]
@@ -301,9 +306,11 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         yield mask, i
 
 
-def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_size=None):
+def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_size=None, level=None, mpp=None):
     r"""
     Extract images from slide corresponding to region covered by contour
+    :param level:
+    :param mpp:
     :param contour: area of interest
     :param reader: object implementing .read_region to extract the desired images
     :param min_size:
@@ -318,9 +325,18 @@ def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_s
             # y -= min_size[1] // 2
             h = min_size[1]
     # level below: annotation coordinates should refer to lowest level
-    image = np.array(reader.read_region((x, y), level=0, size=(w, h)))
+    if mpp is not None:
+        if level is not None:
+            raise ValueError("'level' and 'mpp' cannot be specified at once")
+        assert reader.mpp_x == reader.mpp_y, "Assuming same resolution in both orientations"
+        level = np.argmin(np.absolute(np.array(reader.level_downsamples) * reader.mpp_x - mpp))  # TODO test
+    try:
+        image = np.array(reader.read_region((x, y), level=level or 0, size=(w, h)))
+    except OpenSlideError:
+        raise
     if image.shape[2] == 4:
         image = (color.rgba2rgb(image) * 255).astype(np.uint8)  # RGBA to RGB TODO this failed feature.is_image() test
     return image
+
 
 # if too slow, could get images for contours using multiprocessing dataloader-style

@@ -1,5 +1,5 @@
-from .base_options import BaseOptions
-from utils.utils import str2bool
+from base.options.base_options import BaseOptions
+from base.utils.utils import str2bool
 
 
 class ApplyOptions(BaseOptions):

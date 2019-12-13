@@ -101,6 +101,8 @@ class InceptionModel(BaseModel):
         else:
             pos_prob = np.mean(output)
             self.update_measure_value('pos_prob', pos_prob)  # probability of tile belonging to positive class - for dataset-wide AUC computation
+            # TODO the problem of using probabilities like this is that the network tends to overfit and give high confidence to certain tiles just because they look more like the average tile.
+            # TODO instead of using the probability, use
 
     def add_per_slide_metrics(self, dataset, track_every=5):
         """Setup method - add per-slide metrics"""

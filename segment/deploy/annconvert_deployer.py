@@ -6,7 +6,7 @@ from annotation.mask_converter import MaskConverter
 from annotation.annotation_builder import AnnotationBuilder
 from base.utils import utils
 # if __debug__:
-#     import matplotlib.pyplot as plt
+#     from matplotlib import pyplot as plt
 #     import numpy as np
 #     import cv2
 #     #from base.datasets.wsi_reader import WSIReader

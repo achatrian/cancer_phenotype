@@ -12,12 +12,7 @@ echo "Username: "`whoami`
 echo "Started at: "`date`
 echo "************************************************************************************"
 
-# for when apply is launched by another script
-module use -a /mgmt/modules/eb/modules/all #Make all modules available for loading
-module load Anaconda3/5.1.0 #Load Anaconda
 
-module load cuda/9.0
-module load cudnn/7.0-9.0
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$(tr ',' ' ' <<< $1)  # substitute commas with spaces
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:/well/rittscher/users/achatrian/cancer_phenotype/quant:${PYTHONPATH}"

@@ -1,11 +1,14 @@
 import time
+import socket
 from options.train_options import TrainOptions
 from datasets import create_dataset, create_dataloader
 from models import create_model
 from utils import create_visualizer
 
+
 if __name__ == '__main__':
     opt = TrainOptions().parse()
+    print(f"Running on host: '{socket.gethostname()}'")
     train_dataset = create_dataset(opt)
     train_dataset.setup()  # TEMP: for datasets that require a longer set-up time, this step is not done when making options
     train_dataloader = create_dataloader(train_dataset)
@@ -46,7 +49,7 @@ if __name__ == '__main__':
                 metrics = model.get_current_metrics()  # added by me
                 t = (time.time() - iter_start_time) / opt.batch_size
                 visualizer.print_current_losses_metrics(epoch, epoch_iter, losses, metrics, t, t_data)
-                if opt.display_id > 0:
+                if not opt.no_visdom and opt.display_id > 0:
                     epoch_progress = float(epoch_iter) / (len(train_dataloader) * opt.batch_size)
                     visualizer.plot_current_losses_metrics(epoch, epoch_progress, losses, metrics)
 
@@ -79,10 +82,10 @@ if __name__ == '__main__':
                     update_validation_meters()
                 # metrics and visuals obtained when is_val flag is on
                 visualizer.reset()
-                visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, True)
                 losses_val = model.get_current_losses()
                 metrics_val = model.get_current_metrics()
-                visualizer.print_current_losses_metrics(epoch, None, losses_val, metrics_val, None, None)
-            if opt.display_id > 0:
-                visualizer.plot_current_losses_metrics(epoch, epoch_progress + 0.001, losses_val, metrics_val)
+                visualizer.print_current_losses_metrics(epoch, 0.0, losses_val, metrics_val, None, None)
+            if not opt.no_visdom and opt.display_id > 0:
+                visualizer.plot_current_losses_metrics(epoch, 0.0, losses_val, metrics_val)
+                visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, True)
             print("Validated parameters at epoch {:d} \t Time Taken: {:d} sec".format(epoch, int(time.time() - val_start_time)))

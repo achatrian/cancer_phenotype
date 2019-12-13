@@ -48,7 +48,7 @@ for SLIDEPATH in "${FILES[@]}"; do
     else
         # if iterating over dirs, look for images inside dirs
         for SUBPATH in ${SLIDEPATH}/*; do
-            SUBNAME=$(basename "${SLIDEPATH}") # get basename only
+            SUBNAME=$(basename "${SUBPATH}") # get basename only
             if [[ $SUBNAME == *.ndpi ]]
             then
                 SLIDEID="${SUBNAME%%.ndpi*}"

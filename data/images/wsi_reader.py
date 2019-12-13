@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 import re
 import warnings
+from typing import Tuple
 import csv
 import json
 from numbers import Real
@@ -69,7 +70,7 @@ class WSIReader(OpenSlide):
                     raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc_mpp} < {self.opt.mpp})")
                 best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
                 best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
-                assert best_level_x == best_level_y; "This should be the same, unless pixel has different side lengths"
+                assert best_level_x == best_level_y, "This should be the same, unless pixel has different side lengths"
                 self.read_level = int(best_level_x)  # from np.int64
                 self.read_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level]
                 # same for quality_control read level
@@ -110,8 +111,8 @@ class WSIReader(OpenSlide):
             read_downsample = int(self.level_downsamples[self.read_level])
             self.stride = self.opt.patch_size * read_downsample  # size of read tiles at level 0
             qc_sizes = (self.stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
-            xs = list(range(0, self.level_dimensions[0][0], self.stride))  # dimensions = (width, height)
-            ys = list(range(0, self.level_dimensions[0][1], self.stride))
+            xs = list(range(0, self.level_dimensions[0][0], self.stride))[:-1]  # dimensions = (width, height)
+            ys = list(range(0, self.level_dimensions[0][1], self.stride))[:-1]
             self.tissue_threshold = tissue_threshold
             self.saturation_threshold = saturation_threshold
             coverage = 0
@@ -145,7 +146,7 @@ class WSIReader(OpenSlide):
         """
         name_ext = re.sub('\.(ndpi|svs)', '.json', os.path.basename(self.file_name))
         slide_loc_path = Path(self.opt.data_dir)/'data'/'quality_control'/name_ext
-        utils.mkdirs(str(Path(self.opt.data_dir)/'data'/'quality_control'))
+        Path(self.opt.data_dir, 'data', 'quality_control').mkdir(parents=True, exist_ok=True)
         quality_control = {
             'date': str(datetime.datetime.now()),
             'slide_id': Path(self.file_name).name,
@@ -308,7 +309,7 @@ class WSIReader(OpenSlide):
         ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
         mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
-        return mask.mean() > threshold and not sat_mean < sat_thresh
+        return mask.mean() > threshold and sat_mean >= sat_thresh
 
     @staticmethod
     def is_blurred(image):
@@ -320,11 +321,12 @@ class WSIReader(OpenSlide):
         # TODO implement
         return False
 
-    def read_region(self, location, level=None, size=None):
+    def read_region(self, location: Tuple[int, int], level=None, size=None, array=True):
         if size is None and not hasattr(self.opt, 'patch_size'):
             raise ValueError("Either size or opt.patch_size must be defined")
-        return super().read_region(location, level=level if level is not None else self.read_level,
+        region = super().read_region(location, level=level if level is not None else self.read_level,
                                    size=size or (self.opt.patch_size, )*2)
+        return np.array(region) if array else region
 
 
 if __name__ == '__main__':

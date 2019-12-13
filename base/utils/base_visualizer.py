@@ -52,7 +52,7 @@ class BaseVisualizer:
         self.name = opt.experiment_name
         self.opt = opt
         self.saved = False
-        if self.display_id > 0:
+        if self.display_id > 0 and not self.opt.no_visdom:
             import visdom
             self.ncols = opt.display_ncols
             self.vis = visdom.Visdom(server=opt.display_server, port=opt.display_port, env=opt.display_env, raise_exceptions=True)

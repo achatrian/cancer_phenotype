@@ -2,7 +2,7 @@ import sys
 import os
 import numpy as np
 import openslide
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 from itertools import product
 sys.path.extend(['../', '../base/', '../base/options/*', '../base/data/*'])
 import base.datasets as data

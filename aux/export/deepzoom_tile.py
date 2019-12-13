@@ -282,8 +282,8 @@ if __name__ == '__main__':
                 action='store_true',
                 help='encode directory tree with HTML viewer')
     parser.add_option('-s', '--size', metavar='PIXELS', dest='tile_size',
-                type='int', default=254,
-                help='tile size [254]')
+                type='int', default=1024,
+                help='tile size [1024]')
 
     (opts, args) = parser.parse_args()
     class TimeoutException(Exception):  # Custom exception class
