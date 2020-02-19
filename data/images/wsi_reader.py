@@ -26,7 +26,7 @@ class WSIReader(OpenSlide):
         if include_path:
             parser.add_argument('slide_path', type=str, default='')
         parser.add_argument('--qc_mpp', default=2.0, type=float, help="MPP value to perform quality control on slide")
-        parser.add_argument('--mpp', default=0.50, type=float, help="MPP value to read images from slide")
+        parser.add_argument('--mpp', default=0.40, type=float, help="MPP value to read images from slide")   # CHANGED DEFAULT FROM 0.5 to 0.4
         parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
         parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
         parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
@@ -46,13 +46,22 @@ class WSIReader(OpenSlide):
             opt, unknown = parser.parse_known_args()
         return opt
 
-    def __init__(self, file_name='', opt=None):
+    def __init__(self, file_name='', opt=None, set_mpp=None):
+        r"""
+
+        :param file_name: path to image file
+        :param opt: options, as returned by get_reader_options (or dict)
+        :param set_mpp: if no mpp metadata is available, write
+        """
         file_name = str(file_name)
         super(WSIReader, self).__init__(file_name)
         slide_format = WSIReader.detect_format(file_name)
         if not slide_format:
             warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
-        self.opt = opt or WSIReader.get_reader_options(False, True)
+        if isinstance(opt, dict):
+            self.opt = WSIReader.get_reader_options(include_path=False, args=opt)
+        else:
+            self.opt = opt or WSIReader.get_reader_options(False, True)
         self.file_name = file_name
         self.tissue_locations = []
         self.locations = []
@@ -61,34 +70,37 @@ class WSIReader(OpenSlide):
         self.stride = None  # stride s
         self.PROPERTY_NAME_MPP_X = PROPERTY_NAME_MPP_X
         self.PROPERTY_NAME_MPP_Y = PROPERTY_NAME_MPP_Y
+        self.no_resolution = False
         try:
             self.mpp_x, self.mpp_y = float(self.properties[self.PROPERTY_NAME_MPP_X]), \
                            float(self.properties[self.PROPERTY_NAME_MPP_Y])
-            # compute read level based on mpp
-            if hasattr(opt, 'qc_mpp') and hasattr(opt, 'mpp'):
-                if self.opt.qc_mpp < self.opt.mpp:
-                    raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc_mpp} < {self.opt.mpp})")
-                best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
-                best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
-                assert best_level_x == best_level_y, "This should be the same, unless pixel has different side lengths"
-                self.read_level = int(best_level_x)  # from np.int64
-                self.read_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.read_level]
-                # same for quality_control read level
-                best_level_qc_x = np.argmin(
-                    np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.qc_mpp)
-                )
-                best_level_qc_y = np.argmin(
-                    np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.qc_mpp))
-                assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
-                self.qc_read_level = int(best_level_qc_x)
-                self.qc_mpp = float(self.properties[PROPERTY_NAME_MPP_X]) * self.level_downsamples[self.qc_read_level]
-            else:
-                warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
-                self.find_tissue_locations = lambda tt, st: print("No mpp or qc_mpp options - cannot perform quality control")
-            self.no_resolution = False
         except KeyError:
-            warnings.warn("No resolution information available")
-            self.no_resolution = True  # TODO disable all resolution dependent commands
+            if set_mpp is not None:
+                self.mpp_x, self.mpp_y = set_mpp, set_mpp
+            else:
+                warnings.warn("No resolution information available")
+                self.no_resolution = True  # TODO disable all resolution dependent commands
+        # compute read level based on mpp
+        if not self.no_resolution and hasattr(self.opt, 'qc_mpp') and hasattr(self.opt, 'mpp'):
+            if self.opt.qc_mpp < self.opt.mpp:
+                raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc_mpp} < {self.opt.mpp})")
+            best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
+            best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
+            assert best_level_x == best_level_y, "This should be the same, unless pixel has different side lengths"
+            self.read_level = int(best_level_x)  # from np.int64
+            self.read_mpp = float(self.mpp_x) * self.level_downsamples[self.read_level]
+            # same for quality_control read level
+            best_level_qc_x = np.argmin(
+                np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.qc_mpp)
+            )
+            best_level_qc_y = np.argmin(
+                np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.qc_mpp))
+            assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
+            self.qc_read_level = int(best_level_qc_x)
+            self.qc_mpp = float(self.mpp_x) * self.level_downsamples[self.qc_read_level]
+        else:
+            warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
+            self.find_tissue_locations = lambda: print("No mpp or qc_mpp options - cannot perform quality control")
         self.tissue_threshold = None
         self.tissue_percentage = None
         self.saturation_threshold = None
@@ -321,12 +333,12 @@ class WSIReader(OpenSlide):
         # TODO implement
         return False
 
-    def read_region(self, location: Tuple[int, int], level=None, size=None, array=True):
-        if size is None and not hasattr(self.opt, 'patch_size'):
-            raise ValueError("Either size or opt.patch_size must be defined")
-        region = super().read_region(location, level=level if level is not None else self.read_level,
-                                   size=size or (self.opt.patch_size, )*2)
-        return np.array(region) if array else region
+    # def read_region(self, location: Tuple[int, int], level=None, size=None, array=True):
+    #     if size is None and not hasattr(self.opt, 'patch_size'):
+    #         raise ValueError("Either size or opt.patch_size must be defined")
+    #     region = super().read_region(location, level=level if level is not None else self.read_level,
+    #                                size=size or (self.opt.patch_size, )*2)
+    #     return np.array(region) if array else region
 
 
 if __name__ == '__main__':

@@ -27,7 +27,7 @@ from base.utils.utils import bytes2human
 from quant.experiment import BaseExperiment  # should inherit from clustering instead ?
 from quant.utils import read_parameter_values
 from quant.viz import get_cluster_examples, make_cluster_grids
-import logging  # disable annoying font messagess
+import logging  # disable annoying font messages
 
 logging.getLogger('matplotlib.font_manager').disabled = True
 
@@ -93,6 +93,7 @@ class MCLExperiment(BaseExperiment):
                             help="Contamination parameter in the isolation  (auto or float)")
         parser.add_argument('--mcl_pruning_frequency', type=int, default=1,
                             help="Perform pruning every 'pruning_frequency' iterations.")
+        parser.add_argument('--min_cluster_size', type=int, default=10, help="Clusters with less examples than this number will be discarded")
         parser.add_argument('--overwrite', action='store_true', help="Whether to discard old models and overwrite them")
         parser.add_argument('--gleason_file', type=Path,
                             default=r'/well/rittscher/projects/TCGA_prostate/TCGA/data/gdc_download_20190827_173135.969230/06efd272-a76f-4703-98b8-dfa751c0f019/nationwidechildrens.org_clinical_patient_prad.txt')
@@ -108,7 +109,7 @@ class MCLExperiment(BaseExperiment):
         # data clean-up; remove outliers
         features_file = self.args.data_dir / 'data' / 'features' / self.args.segmentation_experiment / self.args.features_filename
         try:
-            features = pd.read_hdf(features_file.parent / 'single_key.h5', 'features')
+            features = pd.read_hdf(features_file.parent / f'single_key_{self.args.features_filename[:-3]}.h5', 'features')
         except FileNotFoundError:
             slide_ids = list(h5py.File(features_file, 'r').keys())  # read keys to access different stored frames
             feature_frames = []
@@ -120,11 +121,11 @@ class MCLExperiment(BaseExperiment):
                                                                 names=('slide_id', 'bounding_box'))
                 feature_frames.append(feature_frame)
             features = pd.concat(feature_frames)
-            features.to_hdf(features_file.parent / 'single_key.h5', 'features')
+            features.to_hdf(features_file.parent / f'single_key_{self.args.features_filename[:-3]}', 'features')
         print(f"Features were read (size: {bytes2human(features.memory_usage().sum())})")
         print(f"Data shape: {features.shape}")
-        # if __debug__:  # subsample features
-        #     features = features.sample(n=1000)
+        if self.args.debug:  # subsample features
+            features = features.sample(n=1000)
         if self.args.isolation_contamination.isnumeric():
             self.args.isolation_contamination = float(self.args.isolation_contamination)
         # normalize features before outlier removal
@@ -341,10 +342,9 @@ class MCLExperiment(BaseExperiment):
         })
         with open(self.run_results_dir / 'evaluation_results.json', 'w') as evaluation_results_file:
             json.dump(results, evaluation_results_file)
-        # gather examples from each cluster
+        # gather examples from each cluster (exclude very small clusters)
         membership_numbers = [np.sum(cluster_assignment == p) for p in np.unique(som_cluster_membership)]
-        cluster_indices = list(
-            p for p in np.unique(som_cluster_membership) if membership_numbers[p] > 10)  # exclude very small clusters
+        cluster_indices = list(p for p in np.unique(som_cluster_membership) if membership_numbers[p] > 10)
         cluster_centers = tuple(self.som.codebook.matrix[np.where(som_cluster_membership == i)[0]]
                                 for i in cluster_indices)
         examples = get_cluster_examples(self.features, cluster_assignment,
@@ -433,6 +433,106 @@ class MCLExperiment(BaseExperiment):
                                         image_dir=self.args.data_dir,
                                         cluster_centers=cluster_centers)
         make_cluster_grids(examples, final_results_dir, self.name(), image_size=512)
+        print("Done!")
+
+    def apply(self, parameters):  # apply clustering to dataset
+        dataset_savedir = self.save_dir/'applied_results'/(self.args.features_filename[:-3] + '_' + \
+                          self.format_parameters_key(parameters))
+        dataset_savedir.mkdir(exist_ok=True, parents=True)
+        self.run_results_dir = self.results_dir / self.format_parameters_key(parameters)
+        self.matrix = np.load(self.run_results_dir / 'simplicial_matrix.npy')
+        with open(self.run_results_dir / 'clusters.json', 'r') as clusters_file:
+            self.clusters = json.load(clusters_file)
+        # load som
+        best_som_path = self.save_dir / f'model_size:{parameters.map_size}_re:{parameters.rough_epochs}_fte{parameters.finetune_epochs}.joblib'
+        self.som = jl.load(best_som_path)
+        som_cluster_assignment = np.vstack(
+            [[(x, idx) for x in cluster] for idx, cluster in enumerate(self.clusters)])
+        som_cluster_assignment = som_cluster_assignment[som_cluster_assignment[:, 0].argsort()]
+        som_cluster_membership = som_cluster_assignment[:, 1]
+        np.save(dataset_savedir / 'som_cluster_membership.npy', som_cluster_membership)
+        nearest_neighbours = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(self.som.codebook.matrix)
+        distance, indices = nearest_neighbours.kneighbors(self.features)  # find nearest SOM cluster for each data-point
+        distance = distance.ravel()
+        indices = indices.ravel()
+        # assign each point to the markov cluster of his nearest codebook
+        cluster_assignment = pd.Series(data=[som_cluster_membership[idx] for idx in indices], index=self.features.index)
+        num_clusters = len(self.clusters)
+        membership_histogram = np.histogram(cluster_assignment, bins=num_clusters, range=(0, num_clusters))[0]
+        # make figure describing distribution of gland examples onto different clusters
+        plt.hist(cluster_assignment)
+        plt.title('cluster_assignment')
+        plt.savefig(dataset_savedir / f'cluster_assignment_{self.format_parameters_key(parameters)}.png')
+        plt.close()
+        cluster_assignment.to_csv(dataset_savedir / f'cluster_assignment_{self.format_parameters_key(parameters)}.csv')
+        results = {
+            'clusters': self.clusters,
+            'num_clusters': num_clusters,
+            'membership_histogram': list(int(n) for n in membership_histogram),
+            'median_cluster_coverage': round((np.median(membership_histogram) / len(self.features)), 2),
+            'max_cluster_coverage': round((membership_histogram.max() / len(self.features)), 2),
+            'min_cluster_coverage': round((membership_histogram.min() / len(self.features)), 2),
+            'calinski_harabasz_score': calinski_harabasz_score(self.features, cluster_assignment),
+            'davies_bouldin_score': davies_bouldin_score(self.features, cluster_assignment),
+            'silhouette_score': silhouette_score(self.features, cluster_assignment),
+        }
+        # calculate cluster histograms
+        num_clusters = len(np.unique(cluster_assignment))
+        histograms = dict()
+        for slide_id in np.unique(cluster_assignment.index.get_level_values('slide_id')):
+            assignments = cluster_assignment.loc[slide_id]
+            histograms[slide_id] = np.histogram(assignments, bins=num_clusters, range=(0, num_clusters), density=True)[
+                0]
+        histograms = pd.DataFrame(histograms).T  # slide ids will be index values instead of columns
+        # read gleason file
+        gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])
+        # construct labels for the histogram data-points
+        labels = []
+        for slide_id, row in histograms.iterrows():
+            subtable = gleason_table[gleason_table['bcr_patient_barcode'].str.startswith(slide_id[:12])]
+            assert (len(subtable) == 1)
+            if subtable['gleason_pattern_primary'].iloc[0] == 3 and subtable['gleason_pattern_secondary'].iloc[0] == 4:
+                labels.append('3+4')
+            elif subtable['gleason_pattern_primary'].iloc[0] == 4 and subtable['gleason_pattern_secondary'].iloc[0] == 3:
+                labels.append('4+3')
+            elif subtable['gleason_score'].iloc[0] == 6:
+                labels.append('low')
+            else:
+                labels.append('high')
+        # train to predict gleason from clusters
+        labels_rfc = [{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels]
+        scores, rfc_importances = [], []
+        for i in range(100):
+            x_train, x_test, y_train, y_test = train_test_split(histograms, labels_rfc, train_size=0.5)
+            rfc = RandomForestClassifier(n_estimators=100)
+            rfc.fit(x_train, y_train)
+            scores.append(rfc.score(x_test, y_test))
+            rfc_importances.append(rfc.feature_importances_)
+        average_score = np.mean(scores)
+        feature_importances = list(float(f) for f in np.array(rfc_importances).mean(axis=0))
+        # cluster in K means space to assess feature space separation
+        selected = SelectPercentile(
+            lambda X, y: RandomForestClassifier(n_estimators=100).fit(X, y).feature_importances_,
+            percentile=15).fit_transform(histograms, labels_rfc)
+        comparison_labels = KMeans(n_clusters=4).fit_predict(selected)
+        assert set(labels_rfc) == set(comparison_labels)
+        # gather examples from each cluster
+        results.update({
+            'rf_average_gleason_prediction_score': average_score,
+            'feature_importances': feature_importances,
+            'adjusted_mutual_information_score': adjusted_mutual_info_score(labels_rfc, comparison_labels),
+            'adjusted_rand_score': adjusted_rand_score(labels_rfc, comparison_labels)
+        })
+        with open(dataset_savedir/'evaluation_results.json', 'w') as evaluation_results_file:
+            json.dump(results, evaluation_results_file)
+        # gather examples from each cluster
+        membership_numbers = [np.sum(cluster_assignment == p) for p in np.unique(som_cluster_membership)]
+        cluster_indices = list(p for p in np.unique(som_cluster_membership) if membership_numbers[p] > 10)  # exclude very small clusters
+        cluster_centers = tuple(self.som.codebook.matrix[np.where(som_cluster_membership == i)[0]]
+                                for i in cluster_indices)
+        examples = get_cluster_examples(self.features, cluster_assignment,
+                                        image_dir=self.args.data_dir, cluster_centers=cluster_centers)
+        make_cluster_grids(examples, dataset_savedir, self.name(), image_size=512)
         print("Done!")
 
 

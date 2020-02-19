@@ -6,6 +6,7 @@ import warnings
 import json
 from datetime import datetime
 from collections import OrderedDict
+from itertools import chain
 import numpy as np
 import cv2
 import imageio
@@ -13,16 +14,14 @@ from tqdm import tqdm
 from skimage.filters import gaussian
 from skimage.color import rgba2rgb
 from data.images.wsi_reader import WSIReader
-from annotation.annotation_builder import AnnotationBuilder
-from contours import read_annotations, contour_to_mask
+from contours import read_annotations, contour_to_mask, check_relative_rect_positions
 from annotation.mask_converter import MaskConverter
 
 
 class ROITileExporter:
     r"""Extract tiles from an annotation area"""
-    def __init__(self, data_dir, slide_id, tile_size=1024, mpp=0.2,
-                 label_values=(('epithelium', 200), ('lumen', 250)), roi_dir_name=None,
-                 sigma_smooth=10):
+    def __init__(self, data_dir, slide_id, experiment_name='', annotation_dirname='', tile_size=1024, mpp=0.2,
+                 label_values=(('epithelium', 200), ('lumen', 250)), roi_dir_name=None, sigma_smooth=10):
         self.data_dir = Path(data_dir)
         self.slide_id = slide_id
         self.tile_size = tile_size
@@ -33,21 +32,25 @@ class ROITileExporter:
             ValueError(f"{str(self.data_dir/'data'/roi_dir_name)} is not a directory")
         self.roi_dir = self.data_dir/'data'/roi_dir_name if roi_dir_name is not None else None
         try:
-            self.slide_path = next(path for path in self.data_dir.iterdir() if slide_id in path.name
-                                   and path.name.endswith(('.svs', 'ndpi', 'tiff')))
+            self.slide_path = next(path for path in chain(tuple(self.data_dir.glob('*.tiff')),
+                                                          tuple(self.data_dir.glob('*.svs')),
+                                                          tuple(self.data_dir.glob('*.ndpi')),
+                                                          tuple(self.data_dir.glob('*/*.tiff')),
+                                                          tuple(self.data_dir.glob('*/*.svs')),
+                                                          tuple(self.data_dir.glob('*/*.ndpi'))) if slide_id in path.name)
         except StopIteration:
             raise ValueError(f"No image file matching slide id: {slide_id}")
-        slide_opt = WSIReader.get_reader_options(include_path=False, args={
+        self.slide = WSIReader(self.slide_path, {
             'patch_size': tile_size,
             'mpp': mpp,
             'data_dir': str(data_dir)
         })
-        self.slide = WSIReader(self.slide_path, slide_opt)
         self.slide.opt.patch_size = self.tile_size
-        self.slide.find_tissue_locations()
+        self.slide.find_tissue_locations(0.0, 0)
         self.original_tissue_locations = self.slide.tissue_locations
         assert self.original_tissue_locations, "Cannot have 0 tissue locations"
-        self.contour_lib = read_annotations(self.data_dir, slide_ids=(self.slide_id,))[self.slide_id]
+        self.contour_lib = read_annotations(self.data_dir, slide_ids=(self.slide_id,),
+                                            experiment_name=experiment_name)[self.slide_id]
         # clean contours
         for layer_name in self.contour_lib:
             self.contour_lib[layer_name] = tuple(contour for contour in self.contour_lib[layer_name]
@@ -70,31 +73,27 @@ class ROITileExporter:
         for contour, bounding_rect, label in zip(contours, bounding_rects, labels):
             if contour.size == 0:
                 continue
-            overlap, origin_rect, areas = AnnotationBuilder.check_relative_rect_positions(tile_rect, bounding_rect)
+            overlap, origin_rect, areas = check_relative_rect_positions(tile_rect, bounding_rect)
             if overlap not in overlap_labels:
                 continue
             tile_contours.append(contour)
             tile_labels.append(label)
         return tile_contours, tile_labels
 
-    def stitch_segmentation_map(self, tile_contours, labels, mask_origin):
+    def make_segmentation_map(self, tile_contours, labels, mask_origin):
         r"""All contours are assumed to fit into the tile"""
         mask = None
         shape = (self.tile_size*round(self.mpp/self.slide.mpp_x),
                  self.tile_size*round(self.mpp/self.slide.mpp_y))
         # reorder contours and labels so that innermost is applied last
-        order = tuple(key for key in self.label_values)
+        order = tuple(self.label_values)  # get the label names
         ordering = tuple(order.index(label) for label in labels)
         tile_contours = tuple(contour for _, contour in sorted(zip(ordering, tile_contours), key=lambda oc: oc[0]))
         labels = tuple(label for _, label in sorted(zip(ordering, labels)))
         for contour, label in zip(tile_contours, labels):
             try:
                 mask = contour_to_mask(
-                    contour,
-                    self.label_values[label],
-                    shape,
-                    mask,
-                    mask_origin
+                    contour, value=self.label_values[label], shape=shape, mask=mask, mask_origin=mask_origin
                 )  # contours that lay outside of mask are cut
             except ValueError as err:
                 if not err.args[0].startswith('Contour'):
@@ -105,7 +104,8 @@ class ROITileExporter:
                     print("###")
         return mask
 
-    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path], hier_rule=lambda x: x):
+    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path], hier_rule=lambda x: x,
+                     area_contour_rescaling=1.0):
         r"""
         :param area_layer: annotation layer marking areas in the slide to extract tiles from
         :param save_dir: where to save the tiles
@@ -114,7 +114,7 @@ class ROITileExporter:
         # TODO externalise parameters
         save_dir = Path(save_dir)/area_layer
         slide_dir = save_dir/self.slide_id
-        save_dir.mkdir(exist_ok=True), slide_dir.mkdir(exist_ok=True)
+        save_dir.mkdir(exist_ok=True, parents=True), slide_dir.mkdir(exist_ok=True, parents=True)
         try:
             areas_to_tile = self.contour_lib[area_layer] if self.roi_dir is None else self.roi_contour_lib[area_layer]
         except KeyError:
@@ -128,6 +128,13 @@ class ROITileExporter:
             labels.extend([layer_name] * len(layer_contours))
         # remove all tissue locations outside of ROI
         initial_length = len(self.slide.tissue_locations)
+        if area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
+            areas_to_tile = [(area_contour / area_contour_rescaling).astype(np.int32)
+                             for area_contour in areas_to_tile]
+        areas_to_tile = [area_contour for area_contour in areas_to_tile if area_contour.size > 0]
+        if len(areas_to_tile) == 0:
+            warnings.warn("No ROIs to tile ... returning")
+            return
         self.slide.filter_locations(areas_to_tile)
         if len(self.slide.tissue_locations) == initial_length:
             warnings.warn("ROI is whole slide image")
@@ -142,7 +149,7 @@ class ROITileExporter:
                                                                 (x, y, x_tile_size, y_tile_size))
             if not tile_contours:
                 continue
-            mask = self.stitch_segmentation_map(tile_contours, tile_labels, (x, y))
+            mask = self.make_segmentation_map(tile_contours, tile_labels, (x, y))
             mask = cv2.dilate(mask, np.ones((3, 3)))  # pre-dilate to remove jagged boundary from low-res contour extraction
             value_binary_masks = []
             for value in value_hier:
@@ -160,12 +167,12 @@ class ROITileExporter:
             for value_binary_mask, value in zip(value_binary_masks, value_hier):
                 mask[value_binary_mask > 0] = value
             mask = np.array(mask, dtype=np.uint8)
-            tile = self.slide.read_region((x, y))
-            tile = np.array(tile, dtype=np.uint8)
+            tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=(self.tile_size,)*2),
+                                                   dtype=np.uint8)
             if tile.shape[-1] == 4:  # assume tile is in RGBA format
-                tile = rgba2rgb(tile)
+                tile = (rgba2rgb(tile)*255).astype(np.uint8)
             # resize mask according to mpp difference
-            mask = cv2.resize(mask, tile.shape[:2], interpolation=cv2.INTER_NEAREST)
+            mask = cv2.resize(mask, tile.shape[:2], interpolation=cv2.INTER_NEAREST).astype(np.uint8)
             assert tile.shape[:2] == mask.shape, f"Tile and mask shapes don't match: {tile.shape[:2]} != {mask.shape}"
             imageio.imwrite(slide_dir/f'{x}_{y}_image.png', tile)
             imageio.imwrite(slide_dir/f'{x}_{y}_mask.png', mask)
@@ -213,12 +220,6 @@ if __name__ == '__main__':
     parser.add_argument('--area_label', type=str, default='Tumour area')
     parser.add_argument('--roi_dir_name', default='tumour_area_annotations')
     args = parser.parse_args()
-    exporter = ROITileExporter(args.data_dir,
-                               args.slide_id,
-                               args.tile_size,
-                               args.mpp,
-                               args.label_values,
-                               roi_dir_name=args.roi_dir_name)
+    exporter = ROITileExporter(args.data_dir, args.slide_id, tile_size=args.tile_size, mpp=args.mpp,
+                               label_values=args.label_values, roi_dir_name=args.roi_dir_name)
     exporter.export_tiles(args.area_label, args.data_dir/'data'/'tiles')
-
-

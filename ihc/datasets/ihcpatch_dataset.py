@@ -20,7 +20,7 @@ class IHCPatchDataset(BaseDataset):
         # read file describing what type of stains the images are
         self.slide_data = pd.read_csv(self.opt.ihc_data_file)
         # assume data organization is dd/data/tiles/Focus#/slide_id
-        self.tiles_dir = self.opt.data_dir/'data'/'tiles'
+        self.tiles_dir = self.opt.data_dir/'data'/self.opt.tiles_dirname
         self.all_paths = []  # store both H&E and CK5 images
         for focus_path in self.tiles_dir.iterdir():
             if not focus_path.is_dir():
@@ -64,10 +64,18 @@ class IHCPatchDataset(BaseDataset):
             self.paths, self.labels, self.ck5_paths, self.ck5_labels = self.train_test_split['train_paths'], self.train_test_split['train_labels'], self.train_test_split['train_ck5_paths'], self.train_test_split['train_ck5_labels']
         elif self.opt.phase in {'val', 'test'}:
             self.paths, self.labels, self.ck5_paths, self.ck5_labels = self.train_test_split['test_paths'], self.train_test_split['test_labels'], self.train_test_split['test_ck5_paths'], self.train_test_split['test_ck5_labels']
+        assert len(self.paths) == len(self.labels) and len(self.ck5_paths) == len(self.ck5_labels),  "Same # of paths and labels (shouldn't be possible unless file is tampered with)"
         print(f"Selected data for {self.opt.phase} split.")
         self.randomcrop = RandomCrop(self.opt.patch_size)
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
+        # read resolution info on tiles
+        try:
+            tiles_info_path = next(self.tiles_dir.glob('tiles_info*'))
+            with open(tiles_info_path, 'r') as tiles_info_file:
+                self.tiles_info = json.load(tiles_info_file)  # read resolution of tiles
+        except StopIteration:
+            self.tiles_info = None
         # TODO divide into train-test splits, save split info and keep only train / test depending on opt.phase
         # TODO check that images are all at same resolution ? (Maybe not here though)
         # TODO only applying annotations to CK5 images for a lot of cases -- apply to all!!
@@ -82,6 +90,7 @@ class IHCPatchDataset(BaseDataset):
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--ihc_data_file', type=Path,
                             default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_12_12_19.csv')
+        parser.add_argument('--tiles_dirname', type=str, default='tiles', help="Name of folder containing the loaded tiles")
         parser.add_argument('--stain', type=str, default='HE', choices=['HE', 'CK5'], help="What stain data to use")
         parser.add_argument('--train_fraction', type=float, default=0.6, help="Fraction of samples used for training")
         parser.add_argument('--no_ground_truth', action='store_true',
@@ -155,13 +164,13 @@ class IHCPatchDataset(BaseDataset):
         ground_truth = imageio.imread(ground_truth_path) if not self.opt.no_ground_truth else None
         if image.shape[-1] == 4:  # convert RGBA to RGB
             image = np.array(Image.fromarray(image.astype('uint8'), 'RGBA').convert('RGB'))
-        image, ground_truth = self.rescale(image, ground_truth=ground_truth)
         # process images and ground truth together to keep spatial correspondence
         if not self.opt.no_ground_truth:
             assert ground_truth.ndim == 2, "Check ground_truth format"
             if not (isinstance(ground_truth, np.ndarray) and ground_truth.ndim > 0):
                 raise ValueError("{} is not valid".format(ground_truth_path))
-        image, ground_truth = self.rescale(image, ground_truth=ground_truth)
+        image, ground_truth = self.rescale(image, ground_truth=ground_truth,
+                                           dataset_mpp=self.tiles_info['mpp'] if self.tiles_info is not None else 0.25)
         # im aug
         if self.opt.augment_level:
             seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug

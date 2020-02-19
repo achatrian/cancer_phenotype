@@ -91,7 +91,9 @@ class ContourProcessor:
                        index=tuple('{}_{}_{}_{}'.format(*bb) for bb in bounding_rects),
                        columns=self.description)
         centroids = np.array(centroids)
-        dist = distance.cdist(centroids, centroids, 'euclidean')
+        dist = DataFrame(distance.cdist(centroids, centroids, 'euclidean'),
+                         index=tuple(f'{c[0]}_{c[1]}' for c in centroids),
+                         columns=tuple(f'{c[0]}_{c[1]}' for c in centroids))
         return df, data, dist
 
 

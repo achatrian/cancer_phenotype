@@ -83,5 +83,3 @@ if __name__ == '__main__':
             options_str += '\n'
             runs_file.write(options_str)
 
-
-

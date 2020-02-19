@@ -8,6 +8,7 @@ from datetime import datetime
 import cv2
 import torch
 import numpy as np
+from openslide.lowlevel import OpenSlideError
 from options.process_openslide_options import ProcessOpenSlideOptions
 from models import create_model
 from inference.wsi_processor import WSIProcessor
@@ -67,7 +68,10 @@ if __name__ == '__main__':
         try:
             processor = WSIProcessor(file_name=str(image_path), opt=opt)
             processor.apply(process_image_with_model, np.uint8, Path(opt.data_dir)/'data'/'masks')
-        except Exception as err:
+        except (RuntimeError, ValueError, KeyError) as err:
+            raise
+        except (FileNotFoundError, OpenSlideError) as err:
+            print(err)
             failure_log.append({
                 'file': str(image_path),
                 'error': str(err),
@@ -91,6 +95,7 @@ if __name__ == '__main__':
                 'error': str(err),
                 'message': f"No tumour area annotation file: {str(Path(opt.data_dir) / 'data' / opt.area_annotation_dir / (slide_id + '.json'))}"
             })
+            print(failure_log[-1]['message'])
             continue
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
@@ -117,7 +122,7 @@ if __name__ == '__main__':
             annotation.add_item(label, 'path')
             contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
             annotation.add_segments_to_last_item(contour)
-        if annotation.is_empty():
+        if len(annotation) == 0:
             warnings.warn(f"No contours were extracted for slide: {slide_id}")
         annotation.shrink_paths(0.1)
         annotation.add_data('experiment', opt.experiment_name)
@@ -129,6 +134,6 @@ if __name__ == '__main__':
     # save failure log
     logs_dir = Path(opt.data_dir, 'data', 'logs')
     logs_dir.mkdir(exist_ok=True, parents=True)
-    with open(logs_dir/f'failures_process_openslide_many_{str(datetime.now())[:10]}') as failures_log_file:
+    with open(logs_dir/f'failures_process_openslide_many_{str(datetime.now())[:10]}', 'w') as failures_log_file:
         json.dump(failure_log, failures_log_file)
 

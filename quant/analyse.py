@@ -16,8 +16,8 @@ import joblib as jl
 from data.images.wsi_reader import WSIReader
 from data.contours import read_annotations, annotations_summary, check_point_overlap
 from data.contours.instance_masker import InstanceMasker
-from quant.contour_processor import ContourProcessor
-from quant.features import region_properties, gray_haralick, gray_cooccurrence
+from utils.contour_processor import ContourProcessor
+from features import region_properties, gray_haralick, gray_cooccurrence
 from base.utils.utils import bytes2human
 
 r"""Script with tasks to transform and crunch data"""
@@ -198,11 +198,16 @@ def filter_(args):
         slide_features = pd.read_hdf(compressed_path, slide_id)
         pre_filter_size += slide_features.memory_usage().sum()
         original_n += len(slide_features)
-        slide_features = slide_features[slide_features.index.map(lambda bb_str: bb_str in bounding_boxes_to_discard)]
+        slide_features = slide_features[slide_features.index.map(lambda bb_str: bb_str not in bounding_boxes_to_discard)]  # YOU HAD MADE A CATASTROPHIC MISTAKE HERE, BY FORGETTING THE 'NOT'
+        # additional subsampling to keep dataset small
+        if args.subsample_fraction != 1.0:
+            slide_features = slide_features.sample(frac=args.subsample_fraction)
         post_filter_size += slide_features.memory_usage().sum()
         final_n += len(slide_features)
         slide_features.to_hdf(filtered_path, key=slide_id)
     print(f"Done! {original_n - final_n} contours were filtered out of feature file ({bytes2human(pre_filter_size)} --> {bytes2human(post_filter_size)}")
+    if args.subsample_fraction != 1.0:
+        print(f"Only {args.subsample_fraction*100}% of the dataset was kept")
 
 
 def single_key(args):
@@ -249,6 +254,8 @@ def add_filter_args(parser_filter):
                                help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
     parser_filter.add_argument('--area_contour_rescaling', type=float, default=1.0,
                                help="Divide area contour by this number (used for annotations that are not taken at original image magnification)")
+    # additional subsampling
+    parser_filter.add_argument('--subsample_fraction', type=float, default=1.0, help="Subsample the dataset further to keep only the important pieces")
 
 
 def add_single_key_args(parser_single_key):

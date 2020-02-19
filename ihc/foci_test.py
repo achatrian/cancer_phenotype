@@ -56,15 +56,24 @@ if __name__ == '__main__':
                 model.test()
                 model.evaluate_parameters()
                 target = model.target.detach().cpu().numpy().squeeze()
-                output = torch.nn.functional.softmax(model.output, dim=1).max(1)[1].detach().cpu().numpy().astype(target.dtype).squeeze()
-                targets.extend(target)
-                class_predictions.extend(output)
+                output = torch.nn.functional.softmax(model.output, dim=1).max(1)[1].detach().cpu().numpy().astype(target.dtype).squeeze().tolist()
+                target = target.tolist()  # convert later as need to extract dtype for above
+                try:
+                    targets.extend(target)
+                except TypeError:
+                    targets.append(target)
+                try:
+                    class_predictions.extend(output)
+                except TypeError:
+                    class_predictions.append(output)
             # Compute the probability that focus belongs to positive class by averaging over how many tiles which compose it
             # belong to that class. In case there is only one tile, its probability becomes the probability for the whole focus
             focus_class_prob = np.mean(class_predictions)
             losses, metrics = model.get_current_metrics(), model.get_current_losses()
-            focus_results = dict(focus=focus_path.name, slide_id=slide_path.name, target=int(targets[0]),
-                                 class_prob=focus_class_prob, prediction_acc=float(np.mean(class_predictions == targets)))
+            focus_results = dict(
+                focus=focus_path.name, slide_id=slide_path.name, target=int(targets[0]), num_tiles=len(dataloader),
+                class_prob=focus_class_prob, prediction_acc=float(np.mean(class_predictions == targets)),
+                                 )
             focus_results.update(**dict(losses, **metrics))  # merge
             print(f"Results for {slide_path.name}, {focus_path.name}:")
             print(' '.join([f'{k}={v},' for k, v in focus_results.items()]))
@@ -75,8 +84,9 @@ if __name__ == '__main__':
         [focus_result['class_prob'] for focus_result in foci_results]
     )
     all_results['accuracy'] = float(np.mean([focus_result['prediction_acc'] for focus_result in foci_results]))
-    with open(Path(opt.checkpoints_dir)/f'foci_test_results_e:{opt.load_epoch}.json', 'w') as foci_results_file:
+    with open(Path(opt.checkpoints_dir)/opt.experiment_name/f'foci_test_results_e:{opt.load_epoch}.json', 'w') as foci_results_file:
         json.dump(all_results, foci_results_file)
+    print("Done !")
 
 
 

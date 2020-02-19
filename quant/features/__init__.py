@@ -228,3 +228,24 @@ def orb_descriptor(gray_image):
         else:
             raise
     return descriptors.astype(np.uint8).flatten()
+
+
+# nuclear features  TODO test !!!
+@MakeFeature(['nuclear_density', 'nuclear_hu_moments', 'nuclear_eccentricity', 'nuclear_solidity',
+              'nuclear_extent', 'nuclear_inertia_tensor_eigenvals'])
+def nuclear_features(nuclear_mask, nuclear_image):
+    nuclear_rps = measure.regionprops(nuclear_mask, nuclear_image)
+    features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigenvals': []}
+    nuclear_perimeter, previous_nuclear_rp = 0, None  # compute distance connecting all nuclei in an image
+    for nuclear_rp in nuclear_rps:
+        for feature_name, feature_values in features.items():
+            feature_values.append(getattr(nuclear_rp, feature_name))
+        if previous_nuclear_rp is not None:
+            nuclear_perimeter += np.linalg.norm(nuclear_rp.centroid - previous_nuclear_rp.centroid, ord=2)
+        previous_nuclear_rp = nuclear_rp
+    mean_features = {name: sum(values)/len(values) for name, values in features.items()}
+    nuclear_density = nuclear_perimeter / len(nuclear_rps)
+    return dict(nuclear_density=nuclear_density, **mean_features)
+
+
+

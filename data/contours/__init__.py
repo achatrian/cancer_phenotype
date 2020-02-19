@@ -200,15 +200,14 @@ def find_overlap(slide_contours: dict, different_labels=True):
     return overlap_struct, contours, contour_bbs, labels
 
 
-def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_origin=None):
+def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_origin=None, smoothing=0):
     r"""Convert a contour to the corresponding mask
     :param contour:
     :param value:
     :param shape: shape of output mask. If not given, mask is as large as contour
-    :param pad: amount
     :param mask: mask onto which to paint the new contour
     :param mask_origin: position of mask in slide coordinates
-    :param fit_to_size: whether to crop contour to mask if mask is too small or mask to contour if contour is too big
+    :param smoothing:
     :return:
     """
     assert type(contour) is np.ndarray and contour.size > 0, "Non-empty numpy array expected for contour"
@@ -238,6 +237,11 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
     )
     assert mask.shape[0] >= contour_dims[0] - 1 and mask.shape[1] >= contour_dims[1] - 1, "Shifted contour should fit in mask"
     cv2.drawContours(mask, [contour], -1, value, thickness=-1)  # thickness=-1 fills the entire area inside
+    if smoothing > 0:
+        mask_type = mask.dtype
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((10, 10)))
+        blurred_mask = cv2.blur(mask, (smoothing, smoothing))
+        mask = ((blurred_mask > 0.5*value) * value).astype(mask_type)
     # assert np.unique(mask).size > 1, "Cannot return empty (0) mask after contour drawing"
     if np.unique(mask).size <= 1:
         with warnings.catch_warnings():
@@ -256,7 +260,7 @@ def mark_point_on_mask(mask, point, bounding_box, value=50, radius=0):
         radius = int(np.sqrt(w*h) / 10)  # small w.r.to images size
     radius = max(radius, 1)
     # modifies passed images (no return); negative thickness means fill circle
-    cv2.circle(mask, shifted_point, radius, color=value ,thickness=-1)
+    cv2.circle(mask, shifted_point, radius, color=value, thickness=-1)
     return mask
 
 
@@ -306,32 +310,58 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         yield mask, i
 
 
-def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_size=None, level=None, mpp=None):
+def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_size=None, level=None, mpp=None,
+                      contour_level=0, min_size_enforce='one-sided'):
     r"""
     Extract images from slide corresponding to region covered by contour
     :param level:
     :param mpp:
     :param contour: area of interest
     :param reader: object implementing .read_region to extract the desired images
-    :param min_size:
+    :param min_size: minimum size of output image 
+    :param contour_level: level of contour coordinates
+    :param min_size_enforce: way of expanding read region if min_size is given: add to right side or to both side
     """
-    x, y, w, h = cv2.boundingRect(contour)
-    if min_size is not None:
-        assert len(min_size) == 2, "Tuple must contain x and y side lengths of bounding box"
-        if w < min_size[0]:
-            # x -= min_size[0] // 2 # would break correspondence with mask
-            w = min_size[0]
-        if h < min_size[1]:
-            # y -= min_size[1] // 2
-            h = min_size[1]
     # level below: annotation coordinates should refer to lowest level
     if mpp is not None:
         if level is not None:
             raise ValueError("'level' and 'mpp' cannot be specified at once")
         assert reader.mpp_x == reader.mpp_y, "Assuming same resolution in both orientations"
-        level = np.argmin(np.absolute(np.array(reader.level_downsamples) * reader.mpp_x - mpp))  # TODO test
+        level = np.argmin(np.absolute(np.array(reader.level_downsamples) * reader.mpp_x - mpp))
+    rescale_factor = reader.level_downsamples[contour_level]/reader.level_downsamples[level or 0]
+    x, y, w_read, h_read = cv2.boundingRect(contour)
+    w_out, h_out = int(w_read * rescale_factor), int(h_read * rescale_factor)
+    if min_size is not None:
+        assert len(min_size) == 2, "Tuple must contain x and y side lengths of bounding box"
+        if min_size_enforce == 'one-sided':
+            if w_out < min_size[0]:
+                w_read = min(int(min_size[0] / rescale_factor), reader.level_dimensions[contour_level][0] - x)
+                w_out = int(w_read * rescale_factor)
+            if h_out < min_size[1]:
+                h_read = min(int(min_size[1] / rescale_factor), reader.level_dimensions[contour_level][1] - y)
+                h_out = int(h_read * rescale_factor)
+        elif min_size_enforce == 'two-sided':
+            # THIS OPTION BREAKS CORRESPONDENCE WITH MASK WHEN WRITING MANY CONTOURS TO A SINGLE MASK
+            # (I.E. ORIGIN CHANGES)
+            if w_out < min_size[0]:
+                w_ = w_read
+                w_read = min(int(min_size[0] / rescale_factor), reader.level_dimensions[contour_level][0] - x)
+                x -= max(w_read - w_, 0) // 2  # would break correspondence with mask
+                w_out = int(w_read * rescale_factor)
+            if h_out < min_size[1]:
+                h_ = h_read
+                h_read = min(int(min_size[1] / rescale_factor), reader.level_dimensions[contour_level][1] - y)
+                y -= max(h_read - h_, 0) // 2
+                h_out = int(h_read * rescale_factor)
+        else:
+            raise ValueError(f"Invalid read expansion method '{min_size_enforce}'")
     try:
-        image = np.array(reader.read_region((x, y), level=level or 0, size=(w, h)))
+        # WITH SOME IMAGES, READING FROM LEVELS > 0 AT LOCATIONS THAT AREN'T POWERS OF 2 IS NOT RELIABLE.
+        # THE SOLUTION IS TO READ AT BASE LEVEL AND DOWNSAMPLE
+        # THE IMAGE -- MORE RELIABLE
+        # image = np.array(reader.read_region((x, y), level=level or 0, size=(w_read, h_read)))
+        image = np.array(reader.read_region((x, y), level=0, size=(w_read, h_read)))
+        image = cv2.resize(image, (w_out, h_out))
     except OpenSlideError:
         raise
     if image.shape[2] == 4:

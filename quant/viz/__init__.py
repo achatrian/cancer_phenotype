@@ -2,17 +2,15 @@ import json
 import warnings
 from pathlib import Path
 from random import shuffle
-
 import imageio
 import numpy as np
 from scipy.spatial.distance import cdist
 from skimage import color, transform, util
 from tqdm import tqdm
+from data.images.wsi_reader import WSIReader
 
-from wsi_reader import WSIReader
 
-
-def get_cluster_examples(features, cluster_assignment, image_dir, n_examples=5, mpp=0.2, cluster_centers=None, clusters=None, image_dim_increase=0.5):
+def get_cluster_examples(features, cluster_assignment, image_dir, n_examples=9, mpp=0.2, cluster_centers=None, clusters=None, image_dim_increase=0.5):
     r"""Extract cluster examples directly from images"""
     assert (image_dir / 'data').is_dir(), "image_dir should contain dir 'data'"
     if clusters is None:

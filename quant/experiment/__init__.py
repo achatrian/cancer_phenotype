@@ -101,6 +101,12 @@ class BaseExperiment:
         :return:
         """
 
+    def apply(self, parameters):
+        r"""
+        Apply clustering to features
+        :return:
+        """
+
 
 def find_experiment_using_name(experiment_name, task_name):
     r"""Finds BaseExperiment subclass in any of directories inside quant folder"""

@@ -17,7 +17,6 @@ class InstanceMasker:
         :param shape:
         :param contour_to_mask:
         """
-        self.slide_contours = slide_contours
         self.label_values = label_values
         self.outer_label = outer_label
         self.shape = shape
@@ -42,13 +41,13 @@ class InstanceMasker:
     def __len__(self):
         return len(self.outer_contours_indices)
 
-    def __getitem__(self, index, shape=None) -> np.array:
+    def __getitem__(self, index, shape=None, smoothing=0) -> np.array:
         if index > len(self):
             raise ValueError("Index exceeds number of outer contours")
         outer_index = self.outer_contours_indices[index]
         overlap_vect = self.overlap_struct[outer_index]
         mask = contour_to_mask(self.contours[outer_index], value=self.label_values[self.labels[outer_index]],
-                               shape=shape)
+                               shape=shape, smoothing=smoothing)
         x_parent, y_parent, w_parent, h_parent = self.bounding_boxes[outer_index]
         components = {'parent_contour': self.contours[outer_index],
                       'children_contours': [],
@@ -59,13 +58,13 @@ class InstanceMasker:
                 continue  # skip all contours for whom a paint-in value is unspecified
             x_child, y_child, w_child, h_child = self.bounding_boxes[child_index]
             if h_parent * w_parent > h_child * w_child:  # if parent bigger than child write on previous mask
-                mask = contour_to_mask(self.contours[child_index], mask=mask, mask_origin=(x_parent, y_parent),
+                mask = self.contour_to_mask(self.contours[child_index], mask=mask, mask_origin=(x_parent, y_parent),
                                        value=self.label_values[self.labels[child_index]])
                 components['children_contours'].append(self.contours[child_index])
                 components['children_labels'].append(self.labels[child_index])
         return mask, components
 
-    def get_shaped_mask(self, index, shape):
+    def get_shaped_mask(self, index, shape, smoothing=0):
         return self.__getitem__(index, shape=shape)
 
     @property

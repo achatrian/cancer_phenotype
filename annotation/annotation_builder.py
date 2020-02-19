@@ -55,7 +55,6 @@ class AnnotationBuilder:
         }  # to be dumped to .json
         self.layer_names = []
         # store additional info on segments for processing
-        self.metadata = defaultdict(lambda: {'tile_dict': [], 'dist': []})  # layer_idx -> (metadata_name -> (item_idx -> value)))
         self.last_added_item = None
         # point comparison
         for layer_name in layers:
@@ -93,11 +92,8 @@ class AnnotationBuilder:
     def num_layers(self):
         return len(self._obj['layers'])
 
-    def is_empty(self):
-        if not self.num_layers():
-            return True
-        else:
-            return not bool(sum(len(layer['items']) for layer in self._obj['layers']))
+    def __len__(self):
+        return 0 if not self.num_layers() else sum(len(layer['items']) for layer in self._obj['layers'])
 
     def rename_layer(self, old_name, new_name):
         layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
@@ -130,10 +126,9 @@ class AnnotationBuilder:
         }
         self._obj['layers'].append(new_layer)
         self.layer_names.append(self._obj['layers'][-1]['name'])
-        self.metadata[self.layer_names[-1]]['tile_rect'] = []
         return self
 
-    def add_item(self, layer_idx, type_, class_=None, points=None, tile_rect=None, filled=False):
+    def add_item(self, layer_idx, type_, class_=None, points=None, filled=False, color=None, rectangle=None):
         r"""
         Add item to desired layer
         :param layer_idx: numerical index or layer name (converted to index)
@@ -141,16 +136,14 @@ class AnnotationBuilder:
         :param class_:
         :param points:
         :param tile_rect:
+        :param filled:
+        :param color:
         :return:
         """
         if type(layer_idx) is str:
             layer_idx = self.get_layer_idx(layer_idx)  # if name is given rather than index
-        new_item = {
-            'class': class_ if class_ else self._obj['layers'][layer_idx]['name'],
-            'type': type_,
-            "segments": [],
-            'closed': True,
-            'color': {} if not filled else {
+        if color is None:
+            color = {} if not filled else {
                 "fill": {
                     "saturation": 0.44,
                     "lightness": 0.69,
@@ -162,40 +155,56 @@ class AnnotationBuilder:
                     "lightness": 0.69,
                     "alpha": 1,
                     "hue": 170
-                }
+                }  # fill with pre-selected color
             }
-        }  # TODO properties must change with item type - e.g. circle, rectangle
-        self._obj['layers'][layer_idx]['items'].append(new_item)
+        new_item = {
+            'class': class_ if class_ else self._obj['layers'][layer_idx]['name'],
+            'type': type_,
+            'closed': True,
+            'color': color
+        }
+        if type_ == 'path':
+            new_item.update(segments=[])
+            self._obj['layers'][layer_idx]['items'].append(new_item)
+            if points:
+                self.add_segments_to_last_item(points)
+        elif type_ == 'rectangle':
+            if rectangle is not None:
+                if isinstance(rectangle, (tuple, list)):
+                    new_item.update(x=rectangle[0], y=rectangle[1], width=rectangle[2], height=rectangle[3])
+                elif isinstance(rectangle, dict) and set(rectangle.keys()) == {'x', 'y', 'width', 'height'}:
+                    new_item.update(**rectangle)
+                else:
+                    raise ValueError(f"Unsupported format for rectangle {rectangle}")
+            self._obj['layers'][layer_idx]['items'].append(new_item)
         self.last_added_item = self._obj['layers'][layer_idx]['items'][-1]  # use to update item
-        if points:
-            self.add_segments_to_last_item(points)
-        if tile_rect:
-            # add tile info to metadata
-            if not isinstance(tile_rect, (tuple, list)) or len(tile_rect) != 4:
-                raise ValueError("Invalid tile rect was passed - must be a tuple (x, y, w, h) specifying the bounding box around the item's segments")
-            self.metadata[self.layer_names[layer_idx]]['tile_rect'].append(tile_rect)
         return self
 
     def remove_item(self, layer_idx, item_idx):
         layer_idx = self.get_layer_idx(layer_idx)  # FIXME slightly confusing - this is getting layer idx from name or doing nothing
         del self._obj['layers'][layer_idx]['items'][item_idx]
-        layer_name = self._obj['layers'][layer_idx]['name']
-        del self.metadata[layer_name]['tile_rect'][item_idx]
 
     def set_layer_items(self, layer_idx, items):
         self._obj['layers'][layer_idx]['items'] = items
         return self
 
-    def add_segments_to_last_item(self, points):
+    def add_segments_to_last_item(self, points, version='new'):
         segments = []
         for i, point in enumerate(points):
             x, y = point
-            new_segment = {
-                'point': {
-                    'x': x,
-                    'y': y,
-                }
-              }
+            if version == 'old':
+                new_segment = {
+                    'point': {
+                        'x': x,
+                        'y': y,
+                    }
+                  }
+            elif version == 'new':
+                new_segment = [
+                    [x, y]
+                ]
+            else:
+                raise ValueError(f"version must be 'new' or 'old' (not {version})")
             segments.append(new_segment)
         self.last_added_item['segments'] = segments
         return self
@@ -212,7 +221,7 @@ class AnnotationBuilder:
         obj['project_name'] = self.project_name
         obj['slide_id'] = self.slide_id
         obj['layer_names'] = self.layer_names
-        return obj, dict(self.metadata)  # defaultdict with lambda cannot be pickled
+        return obj
 
     def dump_to_json(self, save_dir, name='', suffix_to_remove=('.ndpi', '.svs', '.json'), rewrite_name=False):  # adding .json here so that .json is not written twice
         for layer_name, count in Counter(tuple(layer['name'] for layer in self._obj['layers'])).items():
@@ -226,9 +235,8 @@ class AnnotationBuilder:
             save_path.parent/(save_path.name +'.json')  # add json taking care of file ending in .some_text.[ext,no_ext]
         if name and not rewrite_name:
             save_path = str(save_path)[:-5] + '_' + name + '.json'
-        obj, metadata = self.export()
-        obj['metadata'] = metadata
-        json.dump(obj, open(save_path, 'w'))
+        with open(save_path, 'w') as dump_file:
+            json.dump(self.export(), dump_file)
 
     def get_layer_points(self, layer_idx, contour_format=True):
         r"""Get all paths in a given layer, function used to extract layer from annotation object"""
@@ -433,10 +441,15 @@ class AnnotationBuilder:
                     points.add(point)
                     yield point
         elif item['type'] == 'rectangle':
-            upper_left_corner = tuple(item['from'].values())  # x and y
-            bottom_left_corner = tuple(item['to'].values())  # x and y
-            x, y = upper_left_corner
-            w, h = bottom_left_corner[0] - x, bottom_left_corner[1] - y
+            if 'from' in item and 'to' in item:
+                upper_left_corner = tuple(item['from'].values())  # x and y
+                bottom_left_corner = tuple(item['to'].values())  # x and y
+                x, y = upper_left_corner
+                w, h = bottom_left_corner[0] - x, bottom_left_corner[1] - y
+            elif 'x' in item and 'y' in item and 'width' in item and 'height' in item:
+                x, y, w, h = item['x'], item['y'], item['width'], item['height']
+            else:
+                raise ValueError(f"Invalid rectangle layer item \n{item}\n Either 'from' and 'to' or 'x', 'y', 'width', and 'height' must be specified")
             yield (x, y)  # yield points anticlockwise
             yield (x, y + h)
             yield (x + w, y + h)
@@ -468,7 +481,7 @@ class AnnotationBuilder:
 
     @staticmethod
     def check_relative_rect_positions(tile_rect0, tile_rect1, eps=0):
-        """
+        r"""
         :param tile_rect0:
         :param tile_rect1:
         :param eps: tolerance in checks (not in contained check !)
@@ -527,6 +540,25 @@ class AnnotationBuilder:
 
     def add_data(self, key, value):
         self._obj['data'][key] = value
+
+    def old_to_new(self):
+        r"""
+        Translates annotation in old annotation schema to newer annotation schema
+        This corresponds to a bunch of changes, which should be routinely updated
+        16/12/2019
+        Rectangle: was specified by 'from' and 'to' attributes. Is now specified by 'x', 'y', 'width' and 'length
+        """
+        num_changed_items = 0
+        for layer in self._obj['layers']:
+            for item in layer['items']:
+                if item['type'] == 'rectangle' and 'from' in item and 'to' in item:
+                    x, y = tuple(item['from'].values())
+                    xw, yh = tuple(item['to'].values())
+                    w, h = xw - x, yh - y
+                    item['x'], item['y'], item['width'], item['height'] = x, y, w, h
+                    # keep from and to attributes for backward compatibility
+                    num_changed_items += 1
+        print(f"{num_changed_items} items were updated")
 
 
 def pairwise(iterable):

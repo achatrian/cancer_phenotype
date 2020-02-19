@@ -193,9 +193,10 @@ class UNet(torch.nn.Module):
             torch.nn.LeakyReLU(inplace=True)
         )
 
-        self.final_conv = torch.nn.Conv2d(num_filters, num_classes, kernel_size=1)
+        self.final_conv = torch.nn.Conv2d(num_filters + num_input_channels, num_classes, kernel_size=1)
 
     def forward(self, x):
+        input_x = x.clone()
         x = self.input_block(x)
         encoded = []
         for d in range(self.depth):
@@ -203,14 +204,12 @@ class UNet(torch.nn.Module):
             encoded.append(enc(x))
             x = encoded[-1]
         x = self.center(x)
-
         for d in range(self.depth-1, -1, -1):
             dec = getattr(self, 'dec{}'.format(d))
             x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
             x = dec(x)
-
         x = F.interpolate(self.output_block(x), (self.tile_size,) * 2, mode='bilinear')
-        y = self.final_conv(x)
+        y = self.final_conv(torch.cat([x, input_x], 1))
         return y
 
 

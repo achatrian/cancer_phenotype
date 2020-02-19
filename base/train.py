@@ -1,5 +1,7 @@
 import time
 import socket
+from pathlib import Path
+import json
 from options.train_options import TrainOptions
 from datasets import create_dataset, create_dataloader
 from models import create_model
@@ -22,6 +24,7 @@ if __name__ == '__main__':
     model.setup(dataset=train_dataset)  # dataset is used by some models
     visualizer = create_visualizer(opt)
     total_steps = 0
+    all_results = {'training': [], 'validation': []}
 
     for epoch in range(opt.epoch_count, opt.nepoch + opt.nepoch_decay):
         epoch_start_time = time.time()
@@ -52,6 +55,8 @@ if __name__ == '__main__':
                 if not opt.no_visdom and opt.display_id > 0:
                     epoch_progress = float(epoch_iter) / (len(train_dataloader) * opt.batch_size)
                     visualizer.plot_current_losses_metrics(epoch, epoch_progress, losses, metrics)
+                training_result = dict(losses, **metrics)
+                training_result.update(epoch=epoch, epoch_iter=epoch_iter)
 
             if total_steps % opt.save_latest_freq == 0:
                 print('saving the latest model (epoch %d, total_steps %d)' % (epoch, total_steps))
@@ -86,6 +91,14 @@ if __name__ == '__main__':
                 metrics_val = model.get_current_metrics()
                 visualizer.print_current_losses_metrics(epoch, 0.0, losses_val, metrics_val, None, None)
             if not opt.no_visdom and opt.display_id > 0:
-                visualizer.plot_current_losses_metrics(epoch, 0.0, losses_val, metrics_val)
+                visualizer.plot_current_losses_metrics(epoch, 1.0, losses_val, metrics_val)
                 visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, True)
             print("Validated parameters at epoch {:d} \t Time Taken: {:d} sec".format(epoch, int(time.time() - val_start_time)))
+            result = dict(losses_val, **metrics_val)
+            result.update(epoch=epoch)
+            all_results['validation'].append(result)
+
+        with open(Path(opt.checkpoints_dir, opt.experiment_name, 'results.json'), 'w') as results_file:
+            json.dump(all_results, results_file)
+
+    print("Done!")

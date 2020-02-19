@@ -17,9 +17,9 @@ def grid_search(experiment, parameters=None, level=0):
         Parameters = namedtuple('Parameters', experiment.parameters_names,
                                 defaults=[None]*len(experiment.parameters_names))
         parameters = Parameters()
-    try:
+    if level + 1 <= len(experiment.parameters_names):
         # levels 0 to P - 1
-        parameter = experiment.parameters_names[level]
+        parameter = experiment.parameters_names[level]  # index error if there are no more parameters to assign
         parameter_values = read_parameter_values(experiment.args, parameter)
         if not hasattr(experiment.args, f'{parameter}'):
             raise ValueError(f"No parameter values are defined for parameter {parameter} (level {level})")
@@ -29,7 +29,7 @@ def grid_search(experiment, parameters=None, level=0):
             results = grid_search(experiment, run_parameters, level + 1)
             level_results.update(results)
         return level_results
-    except IndexError:
+    else:
         # level P - where experiment is run
         assert not any(value is None for value in parameters._asdict().values()), \
             "At deepest level of search, all parameters have been assigned (are not None)"
@@ -71,6 +71,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', type=Path, help="Directory where data is stored")
     parser.add_argument('--preprocess_search', action='store_true', help="whether to instantiate a search over preprocessing parameters")
     parser.add_argument('--exp_help', action='store_true')
+    parser.add_argument('--debug', action='store_true', help="flag used in experiment to run tests for debugging")
     args, unparsed = parser.parse_known_args()
     experiment_type = find_experiment_using_name(args.experiment, args.task)
     parser = experiment_type.modify_commandline_options(parser)

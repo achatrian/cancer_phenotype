@@ -36,7 +36,7 @@ def export_tiles_debug(exp, area_layer, save_dir, select_coords=(), hier_rule=la
         tile_contours, tile_labels = exp.get_tile_contours(contours, bounding_rects, labels,                                                 (x, y, x_tile_size, y_tile_size))
         if not tile_contours:
             continue
-        mask = exp.stitch_segmentation_map(tile_contours, tile_labels, (x, y))
+        mask = exp.make_segmentation_map(tile_contours, tile_labels, (x, y))
         mask = cv2.dilate(mask, np.ones((3, 3)))  # pre-dilate to remove jagged boundary from low-res contour extraction
         value_binary_masks = []
         for value in value_hier:

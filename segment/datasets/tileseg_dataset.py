@@ -23,7 +23,7 @@ class TileSegDataset(BaseDataset):
         super(TileSegDataset, self).__init__()
         self.opt = opt
         self.paths = []
-        split_tiles_path = Path(self.opt.data_dir) / 'CVsplits' / (
+        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'CVsplits' / (
                     re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
         split_tiles_path = str(split_tiles_path)
         # read resolution data - requires global tcga_resolution.json file
@@ -31,7 +31,7 @@ class TileSegDataset(BaseDataset):
             self.resolutions = json.load(resolution_file)
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
-                self.paths = json.load(split_tiles_file)
+                self.paths = [Path(image_path) for image_path in json.load(split_tiles_file)]
             print(f"Loaded {len(self.paths)} tile paths for split {Path(self.opt.split_file).name}")
         except FileNotFoundError as err:
             raise ValueError("Given path does not correspond to any split file") from err
@@ -69,6 +69,7 @@ class TileSegDataset(BaseDataset):
         parser.add_argument('--split_file', type=str, default='', help="File containing data division in train - test split")
         parser.add_argument('--image_glob_pattern', type=str, default='*_*.png', help='Pattern used to find images in each WSI / region folder')
         parser.add_argument('--area_based_input', action='store_true', help="For compatibility with first experiment, if true coords of tiles are relative to area they were extracted from")
+        parser.add_argument('--mpp', type=float, default=0.4, help="Resolution to read tiles at")
         return parser
 
     def rescale(self, image, resolution_data=None, gt=None):
@@ -195,7 +196,9 @@ class TileSegDataset(BaseDataset):
         # normalised images between -1 and 1
         image = (image - 0.5)/0.5
         # convert to torch tensor
-        assert(image.shape[-1] == 3)
+        if image.shape[2] > 3:
+            image = image[..., :3]
+        assert(image.shape[2] == 3)
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
         # get coords info of tile wrt WSI

@@ -8,14 +8,12 @@ import numpy as np
 import cv2
 from skimage.color import rgba2rgb
 import imgaug as ia
-import warnings
 from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 ia.seed(1)
 
 
 class ROITilesDataset(BaseDataset):
-    """
-        Dataset to train on output of data.roi_tile_extractor - multiple instances per image
+    r"""Dataset to train on output of data.roi_tile_extractor - multiple instances per image
     """
 
     def __init__(self, opt):
@@ -77,7 +75,7 @@ class ROITilesDataset(BaseDataset):
         return parser
 
     def rescale(self, image, gt=None):
-        """
+        r"""
         Rescale to desired resolution, if tiles are at a different millimeter per pixel (mpp) scale
         mpp replaces fine_size to decide rescaling.
         Also, rescaling is done before cropping/padding, to ensure that final images is of desired size and resolution
@@ -95,7 +93,7 @@ class ROITilesDataset(BaseDataset):
             resize_factor = target_mpp / read_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
             if gt is not None:
-                gt = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
+                gt = cv2.resize(gt, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
 
         if image.shape[0:2] != (self.opt.patch_size,) * 2:
             too_narrow = image.shape[1] < self.opt.patch_size
