@@ -152,10 +152,10 @@ class UNet(torch.nn.Module):
         self.tile_size = tile_size
 
         self.input_block = self.dec1 = torch.nn.Sequential(
-            torch.nn.Conv2d(num_input_channels, num_filters, kernel_size=3),
+            torch.nn.Conv2d(num_input_channels, num_filters, kernel_size=3, padding=1),
             torch.nn.InstanceNorm2d(num_filters),
             torch.nn.LeakyReLU(inplace=True),
-            torch.nn.Conv2d(num_filters, num_filters, kernel_size=3),
+            torch.nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1),
             torch.nn.InstanceNorm2d(num_filters),
             torch.nn.LeakyReLU(inplace=True)
         )
@@ -193,18 +193,18 @@ class UNet(torch.nn.Module):
             torch.nn.LeakyReLU(inplace=True)
         )
 
-        self.final_conv = torch.nn.Conv2d(num_filters + num_input_channels, num_classes, kernel_size=1)
+        self.final_conv = torch.nn.Conv2d(2*num_filters, num_classes, kernel_size=1)
 
     def forward(self, x):
-        input_x = x.clone()
         x = self.input_block(x)
+        input_x = x.clone()
         encoded = []
         for d in range(self.depth):
             enc = getattr(self, 'enc{}'.format(d))
             encoded.append(enc(x))
             x = encoded[-1]
         x = self.center(x)
-        for d in range(self.depth-1, -1, -1):
+        for d in range(self.depth - 1, -1, -1):
             dec = getattr(self, 'dec{}'.format(d))
             x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
             x = dec(x)

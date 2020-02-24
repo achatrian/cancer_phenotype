@@ -62,7 +62,7 @@ class BaseVisualizer:
             self.img_dir = os.path.join(self.web_dir, 'images')
             print('create web directory %s...' % self.web_dir)
             Path(self.web_dir).mkdir(exist_ok=True), Path(self.img_dir).mkdir(exist_ok=True)
-        self.log_name = os.path.join(opt.checkpoints_dir, self.opt.experiment_name, 'loss_log.txt')
+        self.log_name = Path(opt.checkpoints_dir, self.opt.experiment_name, 'loss_log.txt')
         self.image_size = 256
         with open(self.log_name, "a") as log_file:
             now = time.strftime("%c")
@@ -75,14 +75,18 @@ class BaseVisualizer:
         raise ConnectionError("Could not connect to Visdom server (https://github.com/facebookresearch/visdom) for displaying training progress.\nYou can suppress connection to Visdom using the option --display_id -1. To install visdom, run \n$ pip install visdom\n, and start the server by \n$ python -m visdom.server.\n")
 
     def log_losses_metrics_to_file(self, losses_and_metrics, epoch, iters):
-        write_path = Path(self.opt.checkpoints_dir)/self.opt.experiment_name/'results'
+        r"""Save all metrics to a csv file"""
+        write_path = Path(self.opt.checkpoints_dir)/self.opt.experiment_name/'results.csv'
         losses_and_metrics['epoch'] = epoch
         losses_and_metrics['iters'] = iters
         losses_and_metrics.move_to_end('iters', last=False)
         losses_and_metrics.move_to_end('epoch', last=False)
         columns = list(losses_and_metrics.keys())
-        with write_path.open('w') as write_file:
+        write_header = not write_path.exists()
+        with write_path.open('a') as write_file:
             csv_log = csv.DictWriter(write_file, fieldnames=columns, delimiter='\t')
+            if write_header:
+                csv_log.writeheader()
             csv_log.writerow(losses_and_metrics)
 
     def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):

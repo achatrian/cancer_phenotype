@@ -52,6 +52,3 @@ if __name__ == '__main__':
         for slide_id in slide_ids:
             run_exporter(slide_id)
     print("Done!")
-
-
-

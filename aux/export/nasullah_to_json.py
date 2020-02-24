@@ -8,6 +8,7 @@ from tqdm import tqdm
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('csv_path', type=Path)
+    parser.add_argument('-t-', '--target_dir', type=Path, default=None)
     args = parser.parse_args()
     with args.csv_path.open('r') as csv_file:
         reader = csv.reader(csv_file, delimiter=',', quotechar='@')  # need quotechar that does not appear in json
@@ -33,7 +34,10 @@ if __name__ == '__main__':
                 except json.decoder.JSONDecodeError as decode_err1:
                     raise NotImplementedError("Empty strings in json (cannot deal with this yet)")
             obj = obj['annotation']
-            annotator_dir = args.csv_path.parent/annotator_name
+            if args.target_dir is not None:
+                annotator_dir = args.target_dir / annotator_name
+            else:
+                annotator_dir = args.csv_path.parent / annotator_name
             annotator_dir.mkdir(exist_ok=True)
             with open(annotator_dir/f'{image_name}.json', 'w') as annotation_file:
                 json.dump(obj, annotation_file)

@@ -194,11 +194,15 @@ class BaseModel:
         self.is_val = False  # begin working with training measures again
 
     # update learning rate (called once every epoch)
-    def update_learning_rate(self):
+    def update_learning_rate(self, per_batch=False):
         for scheduler in self.schedulers:
-            scheduler.step()
-        lr = self.optimizers[0].param_groups[0]['lr']
-        print('learning rate = %.7f' % lr)
+            if per_batch and hasattr(scheduler, 'batch_step'):
+                scheduler.batch_step()
+            else:
+                scheduler.step()
+        if not per_batch:
+            lr = self.optimizers[0].param_groups[0]['lr']
+            print('learning rate = %.7f' % lr)
 
     def get_current_losses(self):
         errors_ret = dict()  # before python 3.6, dictionaries are not ordered and this malfunctions (use OrderedDict)

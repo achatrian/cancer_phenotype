@@ -3,6 +3,7 @@ from inspect import getfullargspec
 from pathlib import Path
 import time
 import warnings
+from numbers import Real
 import numpy as np
 from skimage import measure
 from skimage import color
@@ -37,8 +38,7 @@ def is_gray_image(arg):  # specifies gray images format (grayscale mapped to [-1
 
 
 class Feature:
-    r"""Feature callable
-    """
+    r"""Feature callable"""
     __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls', 'enable_checks',
                  'is_contour', 'is_mask', 'is_image', 'is_gray_image']
     # how-to-python: docstring and __slots__ defined this way are class attributes
@@ -96,13 +96,13 @@ class MakeFeature:
 
 
 @MakeFeature(
-    list(f'outer_hu_moment{i}' for i in range(7)) + [
+    list(f'outer_hu_moment{i}' for i in range(7)) + list(f'outer_weighted_hu_moment{i}' for i in range(7)) + [
         'outer_eccentricity',
         'outer_solidity',
         'outer_extent',
         'outer_inertia_eigenval0',
         'outer_inertia_eigenval1'
-    ] + list(f'inner_hu_moment{i}' for i in range(7)) + [
+    ] + list(f'inner_hu_moment{i}' for i in range(7)) + list(f'inner_weighted_hu_moment{i}' for i in range(7)) + [
         'inner_eccentricity',
         'inner_solidity',
         'inner_extent',
@@ -124,11 +124,11 @@ def region_properties(mask, image):
     else:
         outer_rp = all_rp.pop()
         inner_rp = None
-    outer_features = tuple(outer_rp.moments_hu) + \
+    outer_features = tuple(outer_rp.moments_hu) + tuple(outer_rp.weighted_moments_hu) + \
                      (outer_rp.eccentricity, outer_rp.solidity, outer_rp.extent) + \
                      tuple(outer_rp.inertia_tensor_eigvals)
     if inner_rp:
-        inner_features = tuple(inner_rp.moments_hu) + \
+        inner_features = tuple(inner_rp.moments_hu) + tuple(inner_rp.weighted_moments_hu) + \
                       (inner_rp.eccentricity, inner_rp.solidity, inner_rp.extent) + \
                       tuple(inner_rp.inertia_tensor_eigvals)
     else:
@@ -231,9 +231,21 @@ def orb_descriptor(gray_image):
 
 
 # nuclear features  TODO test !!!
-@MakeFeature(['nuclear_density', 'nuclear_hu_moments', 'nuclear_eccentricity', 'nuclear_solidity',
-              'nuclear_extent', 'nuclear_inertia_tensor_eigenvals'])
-def nuclear_features(nuclear_mask, nuclear_image):
+
+rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + list(f'outer_weighted_hu_moment{i}' for i in range(7)) + [
+        'outer_eccentricity',
+        'outer_solidity',
+        'outer_extent',
+        'outer_inertia_eigenval0',
+        'outer_inertia_eigenval1'
+    ]
+
+# TODO test
+@MakeFeature(['nuclear_' + rp_name for rp_name in rp_names] + ['nuclear_density'])
+def nuclear_features(nuclear_mask, nuclear_image, mask):
+    assert nuclear_mask.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
+    nuclear_mask[mask == 0] = 0  # zero out all nuclei that aren't contained within glands
+    nuclear_image[mask == 0] = 0
     nuclear_rps = measure.regionprops(nuclear_mask, nuclear_image)
     features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigenvals': []}
     nuclear_perimeter, previous_nuclear_rp = 0, None  # compute distance connecting all nuclei in an image
@@ -243,9 +255,16 @@ def nuclear_features(nuclear_mask, nuclear_image):
         if previous_nuclear_rp is not None:
             nuclear_perimeter += np.linalg.norm(nuclear_rp.centroid - previous_nuclear_rp.centroid, ord=2)
         previous_nuclear_rp = nuclear_rp
-    mean_features = {name: sum(values)/len(values) for name, values in features.items()}
+    mean_features = {}
+    for name, values in features.items():
+        if isinstance(values[0], Real):
+            mean_features[name] = sum(values)/len(values)
+        elif isinstance(values[0], (tuple, list)):
+            values = np.array(values)
+            for index, value in enumerate(values):
+                mean_features[f'{name}{index}'] = np.mean(values[:, index])
     nuclear_density = nuclear_perimeter / len(nuclear_rps)
-    return dict(nuclear_density=nuclear_density, **mean_features)
+    return tuple(mean_features.values()) + (nuclear_density,)
 
 
 

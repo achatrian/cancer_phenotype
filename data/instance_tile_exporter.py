@@ -119,12 +119,13 @@ class InstanceTileExporter:
                 min_size = (self.tile_size,) * 2
             else:
                 min_size = ()
-            image = get_contour_image(contour, self.slide, min_size=min_size, mpp=self.mpp)  #min_size_enforce='two-sided')  # FIXME masks aren't correct if mpp is different from base one with min_size_enforce
-            mask, components = masker.get_shaped_mask(i, shape=image.shape, smoothing=smoothing)
+            image = get_contour_image(contour, self.slide, min_size=min_size, mpp=self.mpp,  min_size_enforce='two-sided')
+            mask, components = masker.get_shaped_mask(i, shape=image.shape, smoothing=smoothing,
+                                                      scaling=self.mpp/self.slide.mpp_x, center=True)
             mask = cv2.dilate(mask, np.ones((dilate, dilate)))  # pre-dilate to remove jagged boundary from low-res contour extraction
             x, y, w, h = cv2.boundingRect(components['parent_contour'])
             assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
-            images, masks = self.fit_to_size(image, mask, multitile_threshold, min_mask_fill)  # FIXME min mask fill doesn't seem to work
+            images, masks = self.fit_to_size(image, mask, multitile_threshold, min_mask_fill)
             for j, (image, mask) in enumerate(zip(images, masks)):
                 assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
                 name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + '_' + ('' if len(images) == 1 else str(j))

@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import json
 from datetime import datetime
+from collections import Counter
 import imageio
 import pandas as pd
 import numpy as np
@@ -15,7 +16,7 @@ r"""Get overview of foci images generated from annotations on IHC Request Cases"
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', type=Path)
-    parser.add_argument('--ihc_data_file', type=Path, default='/well/rittscher/projects/IHC_Request/data/documents/additional_data.csv')
+    parser.add_argument('--ihc_data_file', type=Path, default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-02-20.csv')
     args = parser.parse_args()
     tiles_dir = args.data_dir/'data'/'tiles'
     slide_data = pd.read_csv(args.ihc_data_file)
@@ -25,6 +26,7 @@ if __name__ == '__main__':
     slides_with_missing_data, focus_extends_across_cuts = set(), {}
     slide_ids, foci_per_slide = set(), {}
     focus_paths = sorted(list(tiles_dir.iterdir()), key=lambda p: p.name)
+    foci_stains = {}
     for focus_path in tqdm(focus_paths, desc="Focus num"):
         if not focus_path.is_dir():
             continue
@@ -42,6 +44,8 @@ if __name__ == '__main__':
             image_paths = list(slide_path.glob('*_image.png'))
             if image_paths:
                 foci_per_slide[slide_id].append(focus_path.name)
+            if slide_row is not None:
+                foci_stains[slide_id] = slide_row['Staining code']
             # foci can extend across different adjacent cuts of tissue that are present on the same slide
             # in this case the focus size is computed as an average of sizes over different cuts
             focus_size = {}
@@ -85,6 +89,7 @@ if __name__ == '__main__':
             '%slides_with_no_foci_annotations': len(slides_with_no_foci_annotations)/len(slide_ids),
             'focus_extends_across_cuts': focus_extends_across_cuts,
             'foci_per_slide': foci_per_slide,
+            '%stains': dict(Counter(foci_stains.values())),
             '%slides_with_at_least_1_focus': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 1])/len(slide_ids),
             '%slides_with_at_least_2_foci': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 2])/len(slide_ids),
             '%slides_with_at_least_3_foci': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 3])/len(slide_ids),

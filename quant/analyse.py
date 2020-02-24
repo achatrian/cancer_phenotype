@@ -55,8 +55,8 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
         with open(feature_dir/'data'/('data_' + slide_id + '.json'), 'w') as data_file:
             json.dump(data, data_file)
         (feature_dir/'relational').mkdir(exist_ok=True, parents=True)
-        with open(feature_dir/'relational'/args.experiment_name/('dist_' + slide_id + '.txt'), 'w') as dist_file:
-            np.savetxt(dist_file, dist)
+        with open(feature_dir/'relational'/args.experiment_name/('dist_' + slide_id + '.json'), 'w') as dist_file:
+            dist.to_json(dist_file)
             processing_time = time.time() - start_processing_time
             logger.info(f"{slide_id} was processed. Processing time: {processing_time:.2f}s")
     except Exception:

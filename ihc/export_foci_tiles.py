@@ -37,7 +37,7 @@ if __name__ == '__main__':
                                             partial_id_match=False, set_mpp=args.set_mpp)
             for focus_label in foci_labels:
                 exporter.export_tiles(focus_label, args.data_dir / 'data' / args.save_dirname,
-                                      min_read_size=args.min_read_size, min_mask_fill=args.min_mask_fill)
+                                      min_read_size=args.min_read_size, min_mask_fill=args.min_mask_fill, smoothing=10)
         except OpenSlideError as err:
             print(f"Image {slide_id} cannot be read with openslide, it may be corrupted - err: {err}")
             return {
@@ -45,6 +45,13 @@ if __name__ == '__main__':
                 'error_message': str(err)
             }
         except ValueError as err:
+            print(err)
+            return {
+                'slide_id': slide_id,
+                'error_message': str(err)
+            }
+        except FileNotFoundError as err:
+            print(f"No image file for id '{slide_id}'")
             print(err)
             return {
                 'slide_id': slide_id,
