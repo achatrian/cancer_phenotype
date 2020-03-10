@@ -10,6 +10,9 @@ from annotation.annotation_path_merger import AnnotationPathMerger
 from base.utils import utils
 
 
+################## OBSOLETE ######################
+
+
 class TileSegDeployer(BaseDeployer):
 
     def __init__(self, opt):
@@ -55,7 +58,7 @@ class TileSegDeployer(BaseDeployer):
         # end patch
         i, num_images = 0, 0
         if opt.save_masks:
-            save_path = Path(opt.data_dir) / 'data' / 'network_outputs' / opt.slide_id
+            save_path = Path(opt.data_dir)/'data'/'network_outputs'/opt.slide_id
             save_path.mkdir(exist_ok=True)
         while True:
             data = input_queue.get(timeout=opt.sync_timeout)

@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from base.models.base_model import BaseModel
 import base.models.networks as network_utils
-from .networks import UNet
+from .networks import UNet, UNetOld
 
 
 class UNetModel(BaseModel):
@@ -12,8 +12,15 @@ class UNetModel(BaseModel):
         super(UNetModel, self).__init__(opt)
         self.opt = opt
         self.module_names = ['']
-        self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size, opt.max_multiple,
-                        multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
+        if self.opt.unet_type == 'normal':
+            self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size, opt.max_multiple,
+                            multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None,
+                            gaussian_layer=self.opt.gaussian_layer)
+        elif self.opt.unet_type == 'skip':
+            self.net = UNetOld(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size,
+                            opt.max_multiple, multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
+        else:
+            raise ValueError(f"Uknown UNet type '{self.opt.unet_type}'")
         self.loss_names = ['ce', 'reg'] if self.opt.regularizer_coeff else ['ce']
         self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.reg = network_utils.RegularizationLoss()
@@ -43,6 +50,8 @@ class UNetModel(BaseModel):
         parser.add_argument("--max_multiple", type=int, default=32, help="max multiple of the given base number of filter in networks")
         parser.add_argument("--filter_multiples", type=str, default='', help="OR give multiples yourself as comma separated numbers e.g. '1,2,4' (need depth + 1 numbers)")
         parser.add_argument("--regularizer_coeff", type=float, default=0)
+        parser.add_argument("--unet_type", type=str, choices=['normal', 'skip'], default='normal')
+        parser.add_argument("--gaussian_layer", action='store_true', help="adds a gaussian layer before the final convolution")
         return parser
 
     def name(self):
@@ -76,7 +85,7 @@ class UNetModel(BaseModel):
         self.optimizers[0].step()
 
     def optimize_parameters(self):
-        self.set_requires_grad(self.net, requires_grad=True)
+        self.set_requires_grad(self.net, requires_grad=True, exclude=(''))
         self.forward()
         self.backward()
 

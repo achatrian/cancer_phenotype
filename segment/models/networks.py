@@ -5,6 +5,7 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import scipy.ndimage
 from torch.optim import lr_scheduler, Optimizer
 from torch.nn import init
 
@@ -29,6 +30,25 @@ else:
 # networks
 
 
+class GaussianLayer(torch.nn.Module):
+
+    def __init__(self, input_channels, output_channels, kernel_size):
+        super().__init__()
+        assert kernel_size % 2 == 1, "kernel must be odd shaped"
+        self.input_channels, self.output_channels, self.kernel_size = input_channels, output_channels, kernel_size
+        self.weights_init()
+
+    def forward(self, x):
+        return F.conv2d(x, self.k, padding=0, bias=None)
+
+    def weights_init(self):
+        n = np.zeros((self.kernel_size, self.kernel_size))
+        n[self.kernel_size//2, self.kernel_size//2] = 1
+        k = torch.Tensor(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)\
+            .copy_(torch.from_numpy(scipy.ndimage.gaussian_filter(n, sigma=3)))
+        self.register_buffer('k', k)
+
+
 class _EncoderBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(_EncoderBlock, self).__init__()
@@ -51,7 +71,7 @@ class _EncoderBlock(torch.nn.Module):
 
 class _DecoderBlock(torch.nn.Module):
     def __init__(self, in_channels, middle_channels, out_channels, upsample=True):
-        """
+        r"""
         :param in_channels:
         :param middle_channels:
         :param out_channels:
@@ -145,8 +165,85 @@ class UNet4(torch.nn.Module):
 
 class UNet(torch.nn.Module):
 
-    def __init__(self, depth, num_classes, num_input_channels=3, num_filters=10, tile_size=512, max_multiple=32, multiples=None):
+    def __init__(self, depth, num_classes, num_input_channels=3, num_filters=10, tile_size=512, max_multiple=32, multiples=None,
+                 gaussian_layer=False):
         super(UNet, self).__init__()
+
+        self.depth = depth  # number of downsamplings / max depth of encoder network
+        self.tile_size = tile_size
+        self.gaussian_layer = gaussian_layer
+
+        self.input_block = self.dec1 = torch.nn.Sequential(
+            torch.nn.Conv2d(num_input_channels, num_filters, kernel_size=3, padding=1),
+            torch.nn.InstanceNorm2d(num_filters),
+            torch.nn.LeakyReLU(inplace=True),
+            torch.nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1),
+            torch.nn.InstanceNorm2d(num_filters),
+            torch.nn.LeakyReLU(inplace=True)
+        )
+
+        if not multiples:
+            # standard multiples
+            ndouble = min(round(math.log2(max_multiple)), depth)
+            multiples = [1] * (depth - ndouble) + [2 ** d for d in range(0, ndouble + 1)]  # |multiples| = depth + 1
+            # encoder multiples - first ascending decoder has max_multiple * 2 input dimension
+        else:
+            if len(multiples) != depth + 1:
+                raise ValueError("Given multiples are less than desired # of layers ({} != {})".format(
+                    len(multiples), depth + 1
+                ))
+        self.multiples = multiples
+
+        for d in range(depth):
+            # Build encoders
+            enc = _EncoderBlock(multiples[d] * num_filters, multiples[d + 1] * num_filters)
+            setattr(self, 'enc{}'.format(d), enc)
+            dec = _DecoderBlock(2 * multiples[d + 1] * num_filters, 2 * multiples[d + 1] * num_filters,
+                                multiples[d] * num_filters)
+            setattr(self, 'dec{}'.format(d), dec)
+
+        self.dec0.upsample = False  # center upsamples input - so output decoder must not (or output will be too large)
+        self.center = _DecoderBlock(multiples[depth] * num_filters, multiples[depth] * num_filters,
+                                    multiples[depth] * num_filters)
+
+        self.output_block = torch.nn.Sequential(
+            torch.nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1),
+            torch.nn.InstanceNorm2d(num_filters),
+            torch.nn.LeakyReLU(inplace=True),
+            torch.nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1),
+            torch.nn.InstanceNorm2d(num_filters),
+            torch.nn.LeakyReLU(inplace=True)
+        )
+
+        if self.gaussian_layer:
+            self.gaussian_layer = GaussianLayer(num_filters, num_filters, 15)
+
+        self.final_conv = torch.nn.Conv2d(2*num_filters, num_classes, kernel_size=1)
+
+    def forward(self, x):
+        x = self.input_block(x)
+        input_x = x.clone()
+        encoded = []
+        for d in range(self.depth):
+            enc = getattr(self, 'enc{}'.format(d))
+            encoded.append(enc(x))
+            x = encoded[-1]
+        x = self.center(x)
+        for d in range(self.depth - 1, -1, -1):
+            dec = getattr(self, 'dec{}'.format(d))
+            x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
+            x = dec(x)
+        x = F.interpolate(self.output_block(x), (self.tile_size,) * 2, mode='bilinear')
+        if self.gaussian_layer:
+            x = F.interpolate(self.gaussian_layer(x), (self.tile_size,) * 2, mode='bilinear')
+        y = self.final_conv(torch.cat([x, input_x], 1))
+        return y
+
+
+class UNetOld(torch.nn.Module):
+
+    def __init__(self, depth, num_classes, num_input_channels=3, num_filters=10, tile_size=512, max_multiple=32, multiples=None):
+        super().__init__()
 
         self.depth = depth  # number of downsamplings / max depth of encoder network
         self.tile_size = tile_size
@@ -193,23 +290,24 @@ class UNet(torch.nn.Module):
             torch.nn.LeakyReLU(inplace=True)
         )
 
-        self.final_conv = torch.nn.Conv2d(2*num_filters, num_classes, kernel_size=1)
+        self.final_conv = torch.nn.Conv2d(num_filters, num_classes, kernel_size=1)
 
     def forward(self, x):
         x = self.input_block(x)
-        input_x = x.clone()
         encoded = []
         for d in range(self.depth):
             enc = getattr(self, 'enc{}'.format(d))
             encoded.append(enc(x))
             x = encoded[-1]
         x = self.center(x)
-        for d in range(self.depth - 1, -1, -1):
+
+        for d in range(self.depth-1, -1, -1):
             dec = getattr(self, 'dec{}'.format(d))
             x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
             x = dec(x)
+
         x = F.interpolate(self.output_block(x), (self.tile_size,) * 2, mode='bilinear')
-        y = self.final_conv(torch.cat([x, input_x], 1))
+        y = self.final_conv(x)
         return y
 
 

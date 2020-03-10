@@ -10,15 +10,18 @@ import numpy as np
 import pandas as pd
 import cv2
 from tqdm import tqdm
+from imageio import imread
 from sklearn.utils import shuffle
 import h5py
 import joblib as jl
+from staintools import StainNormalizer
 from data.images.wsi_reader import WSIReader
 from data.contours import read_annotations, annotations_summary, check_point_overlap
 from data.contours.instance_masker import InstanceMasker
 from utils.contour_processor import ContourProcessor
-from features import region_properties, gray_haralick, gray_cooccurrence
+from features import region_properties, gray_haralick, gray_cooccurrence, nuclear_features
 from base.utils.utils import bytes2human
+
 
 r"""Script with tasks to transform and crunch data"""
 
@@ -34,10 +37,17 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
     logger.info(f"Processing {slide_id} ...")
     reader = WSIReader(slide_path, opt)
     start_processing_time = time.time()
+    macenko_normalizer = StainNormalizer(method='macenko')
+    reference_image = imread(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                                  args.experiment_name, 'references', f'{args.reference_slide}.png'))
+    macenko_normalizer.fit(reference_image)
+    slide_stain_matrix = np.load(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                                      args.experiment_name, f'{args.reference_slide}.npy'))
     masker = InstanceMasker(contour_struct[slide_id], args.outer_label, label_values)
     processor = ContourProcessor(masker, reader,
                                  features=[
                                      region_properties,
+                                     nuclear_features,
                                      #red_haralick,
                                      #green_haralick,
                                      #blue_haralick,
@@ -45,7 +55,9 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
                                      #surf_points,
                                      gray_cooccurrence,
                                      #orb_descriptor
-                                 ])
+                                 ],
+                                 stain_normalizer=macenko_normalizer,
+                                 stain_matrix=slide_stain_matrix)
     try:
         x, data, dist = processor.get_features()
         # below: 'index' yields larger files than 'split', but then the dict with extra custom fields can be loaded
@@ -55,7 +67,7 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
         with open(feature_dir/'data'/('data_' + slide_id + '.json'), 'w') as data_file:
             json.dump(data, data_file)
         (feature_dir/'relational').mkdir(exist_ok=True, parents=True)
-        with open(feature_dir/'relational'/args.experiment_name/('dist_' + slide_id + '.json'), 'w') as dist_file:
+        with open(feature_dir/'relational'/('dist_' + slide_id + '.json'), 'w') as dist_file:
             dist.to_json(dist_file)
             processing_time = time.time() - start_processing_time
             logger.info(f"{slide_id} was processed. Processing time: {processing_time:.2f}s")
@@ -79,7 +91,7 @@ def quantify(args):
     fh.setFormatter(formatter), ch.setFormatter(formatter)
     logger.addHandler(fh)
     logger.addHandler(ch)
-    label_values = {'epithelium': 200, 'lumen': 250}
+    label_values = {'epithelium': 200, 'lumen': 250, 'nuclei': 50}
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
     feature_dir.mkdir(exist_ok=True, parents=True)  # for features
     (feature_dir/'data').mkdir(exist_ok=True)  # for other data
@@ -105,6 +117,8 @@ def quantify(args):
         j += 1
     if args.shuffle_annotations:
         annotation_paths, slide_paths = shuffle(annotation_paths, slide_paths)
+    if args.reference_slide is None:
+        args.reference_slide = slide_paths[0].with_suffix('').name
     logger.info(f"Processing {len(annotation_paths)} annotations (overwrite = {args.overwrite}) ...")
     if annotation_paths:
         if args.workers > 0:
@@ -221,10 +235,9 @@ def add_quantify_args(parser_quantify):
     parser_quantify.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
     parser_quantify.add_argument('--experiment_name', type=str, required=True,
                                  help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
-    parser_quantify.add_argument('--slide_format', type=str, default='.ndpi',
-                                 help="Format of file to extract images data from   (with openslide)")
     parser_quantify.add_argument('--outer_label', type=str, default='epithelium',
                                  help="Label whose instances are of interest for feature quantification")
+    parser_quantify.add_argument('--reference_slide', type=str, default=None)
     parser_quantify.add_argument('--workers', type=int, default=4,
                                  help="Number of processes used in parallelized tasks")
     parser_quantify.add_argument('--shuffle_annotations', action='store_true',

@@ -40,5 +40,5 @@ if __name__ == '__main__':
     with open(args.old_annotation_file, 'r') as old_annotation_file:
         old_annotation = pd.read_csv(old_annotation_file)
     all_annotations = pd.concat((ihc_annotation, control_annotation, old_annotation))
-    all_annotations.to_csv(args.target_dir/f'annotations_{str(datetime.now())[:10]}.csv')
+    all_annotations.to_csv(args.target_dir/f'annotations_{str(datetime.now())[:10]}.csv', index=False)
     print(f"Saved annotation data for {len(all_annotations)} cases in {args.target_dir}")

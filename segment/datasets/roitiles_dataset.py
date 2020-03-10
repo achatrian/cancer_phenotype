@@ -1,7 +1,5 @@
 from pathlib import Path
 import json
-from collections import OrderedDict
-import operator
 import imageio
 import torch
 import numpy as np
@@ -90,7 +88,7 @@ class ROITilesDataset(BaseDataset):
         target_mpp, read_mpp = self.opt.mpp, self.resolution_data['mpp']
         if not np.isclose(target_mpp, read_mpp, rtol=0.01, atol=0.1):  # total tolerance = rtol*read_mpp + atol
             # if asymmetrical, crop images
-            resize_factor = target_mpp / read_mpp
+            resize_factor = read_mpp / target_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
             if gt is not None:
                 gt = cv2.resize(gt, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)

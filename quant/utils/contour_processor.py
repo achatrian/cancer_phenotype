@@ -6,7 +6,7 @@ from scipy.spatial import distance
 from skimage import color
 import cv2
 from tqdm import tqdm
-
+from staintools import StainNormalizer
 from data.contours.instance_masker import InstanceMasker
 from quant.features import Feature
 from data.images.wsi_reader import WSIReader
@@ -18,7 +18,7 @@ class ContourProcessor:
     r"""Use this class to iterate over all contours in one annotation"""
 
     def __init__(self, instance_masker: InstanceMasker, reader: Union[WSIReader, DZIIO], features: Sequence[Feature],
-                 contour_size_threshold=2000):
+                 contour_size_threshold=2000, stain_normalizer: StainNormalizer = None, stain_matrix=None):
         self.masker = instance_masker
         self.reader = reader
         # check that features have at least one of the input types
@@ -31,6 +31,8 @@ class ContourProcessor:
         self.description = description  # what features does the processor output
         self.features = features
         self.contour_size_threshold = contour_size_threshold
+        self.stain_normalizer = stain_normalizer
+        self.stain_matrix = stain_matrix
 
     def __len__(self):
         return len(self.masker)
@@ -39,6 +41,8 @@ class ContourProcessor:
         mask, components = self.masker[index]
         outer_contour, label = components['parent_contour'], components['parent_label']
         image = get_contour_image(outer_contour, self.reader)
+        if self.stain_normalizer is not None:
+            image = self.stain_normalizer.transform(image, self.stain_matrix)
         if cv2.contourArea(outer_contour) < self.contour_size_threshold:
             return None, None, None
         if not self.reader.is_HnE(image, small_obj_size_factor=1/6):
@@ -95,9 +99,4 @@ class ContourProcessor:
                          index=tuple(f'{c[0]}_{c[1]}' for c in centroids),
                          columns=tuple(f'{c[0]}_{c[1]}' for c in centroids))
         return df, data, dist
-
-
-
-
-
 

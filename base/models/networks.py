@@ -86,7 +86,7 @@ def get_scheduler(optimizer, opt):
         scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=opt.nepoch, eta_min=0)
     elif opt.lr_policy == 'cyclic':
         scheduler = CyclicLR(optimizer, base_lr=opt.learning_rate / 10, max_lr=opt.learning_rate,
-                             step_size=opt.nepoch_decay, mode='triangular2')
+                             step_size=opt.lr_decay_iters, mode='triangular2')
     else:
         return NotImplementedError('learning rate policy [%s] is not implemented', opt.lr_policy)
     return scheduler

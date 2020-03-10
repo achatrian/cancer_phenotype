@@ -81,3 +81,9 @@ class ResNet(torch.nn.Module):
     def forward(self, x):
         x = self.net(x)
         return x
+
+
+
+#### residual attention network
+from .residual_attention_network.residual_attention_network import ResidualAttentionModel_448input
+from .residual_attention_network.residual_attention_network import ResidualAttentionModel_56

@@ -12,6 +12,9 @@ from base.utils import utils
 #     #from base.datasets.wsi_reader import WSIReader
 
 
+################## OBSOLETE ######################
+
+
 class AnnConvertDeployer(BaseDeployer):
 
     def __init__(self, opt):

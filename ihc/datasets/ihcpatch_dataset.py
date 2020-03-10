@@ -2,6 +2,7 @@ from pathlib import Path
 import pandas as pd
 import json
 import random
+import warnings
 from datetime import datetime
 import numpy as np
 import cv2
@@ -18,7 +19,7 @@ class IHCPatchDataset(BaseDataset):
         self.opt = opt
         self.opt.data_dir = Path(self.opt.data_dir)
         # read file describing what type of stains the images are
-        self.slide_data = pd.read_csv(self.opt.ihc_data_file)
+        self.slides_data = pd.read_csv(self.opt.ihc_data_file)
         # assume data organization is dd/data/tiles/Focus#/slide_id
         self.tiles_dir = self.opt.data_dir/'data'/self.opt.tiles_dirname
         self.all_paths = []  # store both H&E and CK5 images
@@ -34,9 +35,9 @@ class IHCPatchDataset(BaseDataset):
         # separate tile paths of H&E slides and CK5 slides into different containers
         self.paths, self.ck5_paths, self.focus_areas_paths, self.ck5_focus_areas_paths = [], [], [], []
         self.labels, self.ck5_labels = [], []  # ambiguous (IHC request) = 1, unambiguous (No IHC request) 0
-        for i, slide_row in self.slide_data.iterrows():
+        for i, slide_row in self.slides_data.iterrows():
             slide_id, staining_type, case_type = slide_row['Image'], slide_row['Staining code'], slide_row['Case type']
-            if staining_type is np.nan:
+            if staining_type is np.nan and not any(slide_id.endswith(stain) for stain in ('34B12', 'CK5', 'CKAE13', 'PGM1')):
                 slide_paths = [path for path in self.all_paths if path.parent.name == slide_id
                                and path.name.endswith('_image.png')]
                 self.paths += slide_paths
@@ -44,7 +45,7 @@ class IHCPatchDataset(BaseDataset):
                 self.labels += [1 if case_type == 'Real' else 0] * len(slide_paths)
                 self.focus_areas_paths += [path for path in self.all_focus_areas_paths if path.parent.name == slide_id
                                            and path.name.endswith('_mask.png')]
-            elif staining_type == 'CK5':
+            elif staining_type == 'CK5' or any(slide_id.endswith(stain) for stain in ('CK5', 'CKAE13')):
                 slide_paths = [path for path in self.all_paths if path.parent.name == slide_id
                                and path.name.endswith('_image.png')]
                 self.ck5_paths += slide_paths
@@ -52,7 +53,7 @@ class IHCPatchDataset(BaseDataset):
                 self.ck5_focus_areas_paths += [path for path in self.all_focus_areas_paths if
                                                path.parent.name == slide_id
                                                and path.name.endswith('_mask.png')]
-            elif staining_type in {'panCK', 'Other', 'Staining code', '34BE12'}:
+            elif staining_type in {'panCK', 'Other', 'Staining code', '34BE12', np.nan}:
                 continue  # TODO decide how to deal with panCK slides and other stains
             else:
                 raise ValueError(f"Unknown staining type: {staining_type}")
@@ -89,7 +90,7 @@ class IHCPatchDataset(BaseDataset):
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--ihc_data_file', type=Path,
-                            default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_12_12_19.csv')
+                            default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-02-24.csv')
         parser.add_argument('--tiles_dirname', type=str, default='tiles', help="Name of folder containing the loaded tiles")
         parser.add_argument('--stain', type=str, default='HE', choices=['HE', 'CK5'], help="What stain data to use")
         parser.add_argument('--train_fraction', type=float, default=0.6, help="Fraction of samples used for training")
@@ -97,6 +98,8 @@ class IHCPatchDataset(BaseDataset):
                             help="Whether not to load the focus area")  # TODO this needed?
         parser.add_argument('--mpp', type=float, default=0.25, help="Resolution to load the slides at")
         parser.add_argument('--overwrite_split', action='store_true', help="Write split file")
+        parser.add_argument('--split_path', type=Path, default=None)
+        parser.add_argument('--soft_split_check', action='store_true', help="Raises a warning instead of an error if dataset does not contain all the paths in the split")
         return parser
 
     def get_sampler(self):
@@ -170,7 +173,7 @@ class IHCPatchDataset(BaseDataset):
             if not (isinstance(ground_truth, np.ndarray) and ground_truth.ndim > 0):
                 raise ValueError("{} is not valid".format(ground_truth_path))
         image, ground_truth = self.rescale(image, ground_truth=ground_truth,
-                                           dataset_mpp=self.tiles_info['mpp'] if self.tiles_info is not None else 0.25)
+                                           dataset_mpp=self.tiles_info['mpp'])
         # im aug
         if self.opt.augment_level:
             seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
@@ -204,9 +207,11 @@ class IHCPatchDataset(BaseDataset):
     def make_train_test_split(self):
         from sklearn.model_selection import train_test_split
         assert self.opt.train_fraction <= 0.99
-        # split file is in the experiment folder
-        split_path = Path(self.opt.checkpoints_dir)/self.opt.experiment_name/'train_test_split.json'
         try:
+            if self.opt.split_path is not None and self.opt.overwrite_split:
+                raise ValueError("If a split_path is given, split cannot be overwritten")
+            split_path = self.opt.split_path if self.opt.split_path is not None else \
+                Path(self.opt.checkpoints_dir) / self.opt.experiment_name / 'train_test_split.json'  # split file is in the experiment folder
             if self.opt.overwrite_split:
                 raise FileNotFoundError("Overwrite")
             with split_path.open('r') as split_file:
@@ -217,11 +222,20 @@ class IHCPatchDataset(BaseDataset):
             self.train_test_split['test_ck5_paths'] = [Path(s) for s in self.train_test_split['test_ck5_paths']]
             if self.train_test_split['train_fraction'] != self.opt.train_fraction:
                 raise FileNotFoundError('Train fraction is different from the required value')
-            if not set(self.train_test_split['train_paths']) <= set(self.paths) or \
+            split_check = not set(self.train_test_split['train_paths']) <= set(self.paths) or \
                     not set(self.train_test_split['test_paths']) <= set(self.paths) or \
                     not set(self.train_test_split['train_ck5_paths']) <= set(self.ck5_paths) or \
-                    not set(self.train_test_split['test_ck5_paths']) <= set(self.ck5_paths):
-                raise ValueError(f"Mismatch between read paths and paths in split file: {split_path}")
+                    not set(self.train_test_split['test_ck5_paths']) <= set(self.ck5_paths)
+            if split_check:
+                if not self.opt.soft_split_check:
+                    raise ValueError(f"Mismatch between read paths and paths in split file: {split_path}")
+                else:
+                    warnings.warn(f"""
+                    Dataset is missing {len(set(self.train_test_split['train_paths']) - set(self.paths))} 
+                    training paths, {len(set(self.train_test_split['test_paths']) - set(self.paths))} test paths,
+                    {len(set(self.train_test_split['train_ck5_paths']) - set(self.paths))} train ck5 paths, amd
+                    {len(set(self.train_test_split['test_ck5_paths']) - set(self.paths))} test ck5 paths from split
+                    """)
         except (FileNotFoundError, json.JSONDecodeError):
             train_paths, test_paths, train_labels, test_labels = train_test_split(self.paths, self.labels,
                                                                                   train_size=self.opt.train_fraction)
@@ -240,6 +254,7 @@ class IHCPatchDataset(BaseDataset):
                 'train_fraction': self.opt.train_fraction,
                 'date': str(datetime.now())[:10]
             }
+            split_path = Path(self.opt.checkpoints_dir)/self.opt.experiment_name/'train_test_split.json'
             with open(split_path, 'w') as split_file:
                 json.dump(self.train_test_split, split_file)
 

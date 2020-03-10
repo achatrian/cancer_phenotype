@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 import csv
-from tempfile import SpooledTemporaryFile
 import multiprocessing as mp
 import numpy as np
 import h5py

@@ -48,12 +48,18 @@ class IHCVisualizer(BaseVisualizer):
                     prediction_html += f'<tr>{prediction_html_row}</tr>'
                     target_html += f'<tr>{target_html_row}</tr>'
                     path_html_row += f'<tr>{path_html_row}</tr>'
+                # append attention maps if present
+                if 'attention0_image' in visuals:
+                    images.extend([visuals['attention0_image'], visuals['attention1_image'], visuals['attention2_image']])
+                    attention_html_row = f'<tr><td>attention0</td><td>attention1</td><td>attention2</td></tr>'  # NB ONLY WORKS WITH 3 IMAGES VISUALISED!
+                else:
+                    attention_html_row = ''
                 # pane col = images row
                 assert all([images[0].shape == image.shape for image in images]), "Ensure all images have same shape"
                 try:
                     self.vis.images(images, nrow=ncols, win=self.display_id + 2,
                                     padding=2, opts=dict(title=title + ' images'))
-                    label_html = f'<table>{prediction_html}{target_html}{path_html}</table>'
+                    label_html = f'<table>{prediction_html}{target_html}{path_html}{attention_html_row}</table>'
                     self.vis.text(table_css + label_html, win=self.display_id + 3,
                                   opts=dict(title=title + ' labels'))  # uses text to input table html
                 except VisdomExceptionBase:

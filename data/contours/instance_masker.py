@@ -1,8 +1,8 @@
 from functools import partial
 from typing import Union
 import warnings
+import json
 import numpy as np
-import cv2
 from base.utils import debug
 from data.contours import contour_to_mask, find_overlap
 

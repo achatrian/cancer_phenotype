@@ -46,6 +46,7 @@ class Feature:
     def __init__(self, function, returns, enable_checks=True):
         self.function = function
         type_ = set(getfullargspec(function).args)
+        type_ = type_.intersection({'contour', 'mask', 'image', 'gray_image'})
         assert type_ >= {'contour'} or type_ >= {'mask'} or type_ >= {'image'} or type_ >= {'gray_image'}
         self.type_ = type_
         self.returns = returns
@@ -76,7 +77,7 @@ class Feature:
             raise ValueError(f"The following features produced invalid outputs:\n {invalid_features_names[0:20]}\n ... {len(invalid_features_names)} invalid features in total")
         self.call_time = (time.time() - start_time - self.call_time) / (self.n_calls + 1) + self.call_time
         if len(output) != len(self.returns):
-            raise ValueError(f"Feature description has different length from feature output ({len(self.returns)} ≠ {len(output)})")
+            raise ValueError(f"[{self.name}] Feature description has different length from feature output ({len(self.returns)} ≠ {len(output)})")
         return output
 
 
@@ -109,11 +110,17 @@ class MakeFeature:
         'inner_inertia_eigenval0',
         'inner_inertia_eigenval1'
     ])
-def region_properties(mask, image):
+def region_properties(mask, image, map_values=((50, 200),)):
     r"""Region props, returns 2 regions max (outer and inner), the biggest by area
     """
     if image.shape[2] == 3:  # assume RGB
         image = color.rgb2gray(image)
+    if map_values is not None:
+        mask = mask.copy()
+        # any labels in the image that shouldn't be considered as a region can be incorporated in another region through
+        # the map_ parameter
+        for from_val, to_val in map_values:
+            mask[mask == from_val] = to_val
     all_rp = measure.regionprops(mask.astype(np.int32), intensity_image=image)  # NB: rc coordinates from version >=0.16
     if len(all_rp) == 2:
         outer_rp, inner_rp = all_rp
@@ -232,7 +239,7 @@ def orb_descriptor(gray_image):
 
 # nuclear features  TODO test !!!
 
-rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + list(f'outer_weighted_hu_moment{i}' for i in range(7)) + [
+rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + [
         'outer_eccentricity',
         'outer_solidity',
         'outer_extent',
@@ -240,28 +247,37 @@ rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + list(f'outer_weighted
         'outer_inertia_eigenval1'
     ]
 
-# TODO test
+
 @MakeFeature(['nuclear_' + rp_name for rp_name in rp_names] + ['nuclear_density'])
-def nuclear_features(nuclear_mask, nuclear_image, mask):
-    assert nuclear_mask.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
-    nuclear_mask[mask == 0] = 0  # zero out all nuclei that aren't contained within glands
-    nuclear_image[mask == 0] = 0
-    nuclear_rps = measure.regionprops(nuclear_mask, nuclear_image)
-    features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigenvals': []}
+def nuclear_features(mask, image, map_values=((250, 0), (200, 0))):
+    if image.shape[2] == 3:  # assume RGB
+        image = color.rgb2gray(image)
+    if map_values is not None:
+        mask = mask.copy()  # need to copy mask as we're modifying it
+        for from_val, to_val in map_values:
+            mask[mask == from_val] = to_val
+    assert mask.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
+    label_mask = measure.label(mask.astype(np.int32))
+    nuclear_rps = measure.regionprops(label_mask, intensity_image=image)
+    if len(nuclear_rps) == 0:
+        return (0,)*12
+    features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigvals': []}
     nuclear_perimeter, previous_nuclear_rp = 0, None  # compute distance connecting all nuclei in an image
     for nuclear_rp in nuclear_rps:
         for feature_name, feature_values in features.items():
             feature_values.append(getattr(nuclear_rp, feature_name))
         if previous_nuclear_rp is not None:
-            nuclear_perimeter += np.linalg.norm(nuclear_rp.centroid - previous_nuclear_rp.centroid, ord=2)
+            # nuclei are not labelled strictly anticlockwise
+            nuclear_perimeter += np.linalg.norm(np.array(nuclear_rp.centroid) -
+                                                np.array(previous_nuclear_rp.centroid), ord=2)
         previous_nuclear_rp = nuclear_rp
     mean_features = {}
     for name, values in features.items():
         if isinstance(values[0], Real):
             mean_features[name] = sum(values)/len(values)
-        elif isinstance(values[0], (tuple, list)):
+        elif isinstance(values[0], (tuple, list, np.ndarray)):
             values = np.array(values)
-            for index, value in enumerate(values):
+            for index in range(values.shape[1]):
                 mean_features[f'{name}{index}'] = np.mean(values[:, index])
     nuclear_density = nuclear_perimeter / len(nuclear_rps)
     return tuple(mean_features.values()) + (nuclear_density,)

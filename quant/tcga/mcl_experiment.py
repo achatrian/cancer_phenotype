@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score, \
-    adjusted_mutual_info_score, adjusted_rand_score
+    adjusted_mutual_info_score, adjusted_rand_score, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectPercentile
@@ -301,6 +301,7 @@ class MCLExperiment(BaseExperiment):
             histograms[slide_id] = np.histogram(assignments, bins=num_clusters, range=(0, num_clusters), density=True)[
                 0]
         histograms = pd.DataFrame(histograms).T  # slide ids will be index values instead of columns
+        histograms.to_csv(self.run_results_dir / 'histograms.csv')
         # read gleason file
         gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])
         # construct labels for the histogram data-points
@@ -319,14 +320,17 @@ class MCLExperiment(BaseExperiment):
                 labels.append('high')
         # train to predict gleason from clusters
         labels_rfc = [{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels]
-        scores, rfc_importances = [], []
+        scores, rfc_importances, confusion_matrices = [], [], []
         for i in range(100):
             x_train, x_test, y_train, y_test = train_test_split(histograms, labels_rfc, train_size=0.5)
             rfc = RandomForestClassifier(n_estimators=100)
             rfc.fit(x_train, y_train)
+            y_pred = rfc.predict(x_test)
+            confusion_matrices.append(confusion_matrix(y_test, y_pred))  # compute the confusion matrix
             scores.append(rfc.score(x_test, y_test))
             rfc_importances.append(rfc.feature_importances_)
         average_score = np.mean(scores)
+        average_confusion_matrix = np.mean(np.stack(confusion_matrices, axis=0), axis=0)
         feature_importances = list(float(f) for f in np.array(rfc_importances).mean(axis=0))
         # cluster in K means space to assess feature space separation
         selected = SelectPercentile(lambda X, y: RandomForestClassifier(n_estimators=100).fit(X, y).feature_importances_,
@@ -338,7 +342,8 @@ class MCLExperiment(BaseExperiment):
             'rf_average_gleason_prediction_score': average_score,
             'feature_importances': feature_importances,
             'adjusted_mutual_information_score': adjusted_mutual_info_score(labels_rfc, comparison_labels),
-            'adjusted_rand_score': adjusted_rand_score(labels_rfc, comparison_labels)
+            'adjusted_rand_score': adjusted_rand_score(labels_rfc, comparison_labels),
+            'average_confusion_matrix': average_confusion_matrix.tolist()
         })
         with open(self.run_results_dir / 'evaluation_results.json', 'w') as evaluation_results_file:
             json.dump(results, evaluation_results_file)
@@ -484,6 +489,7 @@ class MCLExperiment(BaseExperiment):
             histograms[slide_id] = np.histogram(assignments, bins=num_clusters, range=(0, num_clusters), density=True)[
                 0]
         histograms = pd.DataFrame(histograms).T  # slide ids will be index values instead of columns
+        histograms.to_csv(dataset_savedir / 'histograms.csv')
         # read gleason file
         gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])
         # construct labels for the histogram data-points
@@ -501,14 +507,17 @@ class MCLExperiment(BaseExperiment):
                 labels.append('high')
         # train to predict gleason from clusters
         labels_rfc = [{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels]
-        scores, rfc_importances = [], []
+        scores, rfc_importances, confusion_matrices = [], [], []
         for i in range(100):
             x_train, x_test, y_train, y_test = train_test_split(histograms, labels_rfc, train_size=0.5)
             rfc = RandomForestClassifier(n_estimators=100)
             rfc.fit(x_train, y_train)
+            y_pred = rfc.predict(x_test)
+            confusion_matrices.append(confusion_matrix(y_test, y_pred))  # compute the confusion matrix
             scores.append(rfc.score(x_test, y_test))
             rfc_importances.append(rfc.feature_importances_)
         average_score = np.mean(scores)
+        average_confusion_matrix = np.mean(np.stack(confusion_matrices, axis=0), axis=0)
         feature_importances = list(float(f) for f in np.array(rfc_importances).mean(axis=0))
         # cluster in K means space to assess feature space separation
         selected = SelectPercentile(

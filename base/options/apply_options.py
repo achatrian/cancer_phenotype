@@ -12,7 +12,7 @@ class ApplyOptions(BaseOptions):
         parser.add_argument('--gatherer', type=str2bool, default=True, help="Spawn gatherer process")
         parser.add_argument('--metadata_dir', type=str, default="/well/rittscher/projects/TCGA_prostate/TCGA/data/datacopy", help='Folder where spreadsheets containing metadata are')
         parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing applying results on console')
-        parser.add_argument('--make_subset', type=str2bool, default='y', help="Use make_subset method to select only part of dataset")
+        parser.add_argument('--make_subset', action='store_true', help="Use make_subset method to select only part of dataset")
         parser.add_argument('--slide_id', type=str, default='', help="If given, it restricts processing to only one slide")
         parser.set_defaults(load_size=parser.get_default('fine_size'))  # To avoid cropping, the loadSize should be the same as fineSize
         self.is_train = False

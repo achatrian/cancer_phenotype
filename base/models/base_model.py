@@ -106,6 +106,8 @@ class BaseModel:
         # add meters to compute average of performance measures
         for name in chain(self.loss_names, self.metric_names):
             self.meters[name] = utils.AverageMeter()
+        # checks
+        assert len(self.visual_names) == len(self.visual_types), "there must be one visual type per name"
         print("network setup complete")
 
     # make models eval mode during test time
@@ -193,12 +195,12 @@ class BaseModel:
             setattr(self, visual_name + "_val", visual_val)
         self.is_val = False  # begin working with training measures again
 
-    # update learning rate (called once every epoch)
+    # update learning rate (called once every batch with per_batch=True and once every epoch with per_batch=False)
     def update_learning_rate(self, per_batch=False):
         for scheduler in self.schedulers:
             if per_batch and hasattr(scheduler, 'batch_step'):
                 scheduler.batch_step()
-            else:
+            elif hasattr(scheduler, 'step'):
                 scheduler.step()
         if not per_batch:
             lr = self.optimizers[0].param_groups[0]['lr']
@@ -309,13 +311,14 @@ class BaseModel:
         print('-----------------------------------------------')
 
     # set requies_grad=False to avoid computation
-    def set_requires_grad(self, nets, requires_grad=False):
+    def set_requires_grad(self, nets, requires_grad=False, exclude=()):
         if not isinstance(nets, list):
             nets = [nets]
         for net in nets:
             if net is not None:
-                for param in net.parameters():
-                    param.requires_grad = requires_grad
+                for name, param in net.named_parameters():
+                    if name not in exclude:
+                        param.requires_grad = requires_grad
 
     # shares modules memory, so that models can be used in multiprocessing
     def share_memory(self):

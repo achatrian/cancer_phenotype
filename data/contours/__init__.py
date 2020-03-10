@@ -7,6 +7,8 @@ import numpy as np
 import cv2
 from skimage import color
 from openslide import OpenSlideError
+from tqdm import tqdm
+from rtree import index
 from annotation.annotation_builder import AnnotationBuilder
 from data.images.wsi_reader import WSIReader
 from data.images.dzi_io import DZI_IO
@@ -66,6 +68,8 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
         contour_struct[annotation_id] = dict()
         for layer_name in annotation.layer_names:
             contour_struct[annotation_id][layer_name], _ = annotation.get_layer_points(layer_name, contour_format=True)
+    if len(annotation_paths) == 0 and len(slide_ids) > 1:
+        warnings.warn(f"No annotation matched ids: {slide_ids}")
     return contour_struct
 
 
@@ -168,34 +172,31 @@ def find_overlap_(slide_contours: dict, different_labels=True):
     return overlap_struct, contours, contour_bbs, labels
 
 
-def find_overlap(slide_contours: dict, different_labels=True):
+def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None):
     r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
     :param slide_contours:
     :param different_labels: whether overlap is reported only for contours of different classes
     :return: SPARSE overlap vectors (integers)
     """
+
     contours, labels = [], []
     for layer_name, layer_contours in slide_contours.items():  # merge all layers into one list of contours
         indices = tuple(i for i, contour in enumerate(layer_contours) if contour.size > 2)
         contours.extend(layer_contours[i] for i in indices)
         labels.extend([layer_name] * len(indices))
-    contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
+    contour_bbs = [cv2.boundingRect(contour) for contour in contours]
+    idx = index.Index()
+    for i, (x, y, w, h) in enumerate(contour_bbs):
+        idx.insert(i, (x, y, x + w, y + h))
     overlap_struct = []
-    for parent_bb, parent_label in zip(contour_bbs, labels):
-        # Find out each contour's children (overlapping); if a parent is encountered, no relationship is recorded
-        overlap_vector = []
-        for child_index, (child_bb, child_label) in enumerate(zip(contour_bbs, labels)):
-            if different_labels and parent_label == child_label:
-                continue  # contours of the same class are not classified as overlapping
-            position, origin_bb, bb_areas = check_relative_rect_positions(parent_bb, child_bb, eps=0)
-            if parent_bb == child_bb:  # don't do anything for same box
-                pass
-            elif position == 'contained' and origin_bb == 0:  # flag contour when parent contains child
-                overlap_vector.append(child_index)
-            elif position == 'overlap':  # flag contour when parent and child overlap to some extent
-                overlap_vector.append(child_index)
-            else:
-                pass
+    for parent_bb, parent_label in tqdm(zip(contour_bbs, labels), total=len(contour_bbs),
+                                        desc="Discovering overlapping contours ..."):
+        if selected_labels is not None and parent_label not in selected_labels:
+            overlap_struct.append([])
+            continue
+        x, y, w, h = parent_bb
+        all_overlaps = list(idx.intersection((x, y, x + w, y + h)))  # query for overlapping bbs among the tree nodes
+        overlap_vector = [i for i in all_overlaps if labels[i] != parent_label] if different_labels else all_overlaps
         overlap_struct.append(overlap_vector)
     return overlap_struct, contours, contour_bbs, labels
 

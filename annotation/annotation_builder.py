@@ -38,6 +38,8 @@ class AnnotationBuilder:
             obj['layer_names'] if 'layer_names' in obj else [layer['name'] for layer in obj['layers']]
         )
         instance._obj = obj
+        for layer in instance._obj['layers']:
+            instance.layers[layer['name']] = layer
         try:
             instance.metadata = obj['metadata']
         except KeyError:
@@ -56,6 +58,8 @@ class AnnotationBuilder:
         self.layer_names = []
         # store additional info on segments for processing
         self.last_added_item = None
+        # store references to layers
+        self.layers = {}
         # point comparison
         for layer_name in layers:
             self.add_layer(layer_name)  # this also updates self.layer_names with references to layers names
@@ -126,6 +130,7 @@ class AnnotationBuilder:
         }
         self._obj['layers'].append(new_layer)
         self.layer_names.append(self._obj['layers'][-1]['name'])
+        self.layers[layer_name] = self._obj['layers'][-1]
         return self
 
     def add_item(self, layer_idx, type_, class_=None, points=None, filled=False, color=None, rectangle=None):
@@ -458,6 +463,7 @@ class AnnotationBuilder:
             raise NotImplementedError(f"Unrecognized item type '{item['type']}'")
 
     def filter(self, layer_idx, functions, contour_format=True, workers=4, **kwargs):
+        layer_name = layer_idx  # strings are immutable!
         if isinstance(layer_idx, str):
             layer_idx = self.get_layer_idx(layer_idx)
         layers = self._obj['layers']
@@ -471,13 +477,13 @@ class AnnotationBuilder:
                 points = self.item_points(item)
             if any(function(points, **kwargs) for function in functions):
                 return True
-        with mp.Pool(workers) as pool:
-            to_keep = pool.starmap(check_item, layer['items'])
-        for index, keep_flag in enumerate(to_keep):
-            if keep_flag:
+
+        to_keep = [check_item(item) for item in layer['items']]
+        for index, keep_flag in reversed(list(zip(range(len(to_keep)), to_keep))):
+            if not keep_flag:
                 del layer['items'][index]
         new_num_items = len(layer['items'])
-        print(f"{num_items - new_num_items} were deleted from layer '{layer_idx}'")
+        print(f"{num_items - new_num_items} were deleted from layer '{layer_name}'")
 
     @staticmethod
     def check_relative_rect_positions(tile_rect0, tile_rect1, eps=0):
@@ -559,6 +565,38 @@ class AnnotationBuilder:
                     # keep from and to attributes for backward compatibility
                     num_changed_items += 1
         print(f"{num_changed_items} items were updated")
+
+    def new_to_old(self):
+        for layer in self._obj['layers']:
+            for item in layer['items']:
+                if item['type'] == 'path' and isinstance(item['segments'][0], list):
+                    item['segments'] = [{
+                        'point': {'x': point[0], 'y': point[1]}
+                    } for point in item['segments']]
+
+    def clear(self):
+        for layer in self.layers.values():
+            layer['items'] = []
+
+    def scale(self, scale_factor):
+        for layer in self.layers.values():
+            scaled_layer = {
+                'name': layer['name'],
+                'items': []
+            }
+            for item in layer['items']:
+                points = self.item_points(item)
+                scaled_item = copy.deepcopy(item)
+                if item['type'] == 'path':
+                    scaled_item['segments'] = [
+                        [int(point[0]*scale_factor), int(point[1]*scale_factor)]
+                        for point in points
+                    ]
+                else:
+                    raise NotImplementedError("Scaling only implemented for paths")
+                scaled_layer['items'].append(scaled_item)
+            self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
+        print(f"Layers were scaled by {scale_factor}")
 
 
 def pairwise(iterable):

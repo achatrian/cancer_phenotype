@@ -1,6 +1,7 @@
 import socket
 from pathlib import Path
 import json
+from numbers import Real
 import torch
 from tqdm import tqdm
 import numpy as np
@@ -8,6 +9,7 @@ from sklearn.metrics import roc_auc_score
 from base.options.test_options import TestOptions
 from base.datasets import create_dataset, create_dataloader
 from base.models import create_model
+from ihc.datasets.ihcpatch_dataset import IHCPatchDataset
 r"Test script for network, aggregates results over whole validation dataset"
 
 
@@ -18,6 +20,7 @@ if __name__ == '__main__':
     opt.serial_batches = True  # no shuffle
     opt.no_flip = True    # no flip
     opt.display_id = -1   # no visdom display
+    opt.overwrite_split = False
     dataset = create_dataset(opt)
     # dataloader uses a reference to dataset, and random sampler recomputes the number of samples each time, so changing the dataset to the dataloader should work
     # https://discuss.pytorch.org/t/solved-will-change-in-dataset-be-reflected-on-dataloader-automatically/10206/2
@@ -32,13 +35,14 @@ if __name__ == '__main__':
     foci_results = all_results['results'] = []
     test_errors = all_results['test_errors'] = []
     all_targets, all_outputs = [], []
-    dataset = create_dataset(opt, print_dataset_info=False)
+    dataset: IHCPatchDataset = create_dataset(opt, print_dataset_info=False)
+    slides_data = dataset.slides_data
     for focus_path in tqdm(foci_paths, desc='focus'):
         if not focus_path.is_dir():
             continue
         slides_paths = tuple(focus_path.iterdir())
         for slide_path in tqdm(slides_paths, desc='slide'):
-            # only select test images in this subfolder
+            # only select test images in this sub-folder
             try:
                 focus_dataset = dataset.make_subset(selector=str(slide_path), deepcopy=True)  # TODO TEST if changing reference works
             except ValueError as err:
@@ -71,8 +75,8 @@ if __name__ == '__main__':
             focus_class_prob = np.mean(class_predictions)
             losses, metrics = model.get_current_metrics(), model.get_current_losses()
             focus_results = dict(
-                focus=focus_path.name, slide_id=slide_path.name, target=int(targets[0]), num_tiles=len(dataloader),
-                class_prob=focus_class_prob, prediction_acc=float(np.mean(class_predictions == targets)),
+                focus=focus_path.name, slide_id=slide_path.with_suffix('').name, target=int(targets[0]), num_tiles=len(dataloader),
+                class_prob=focus_class_prob, prediction_acc=float(np.mean(np.round(class_predictions) == targets)),
                                  )
             focus_results.update(**dict(losses, **metrics))  # merge
             print(f"Results for {slide_path.name}, {focus_path.name}:")
@@ -83,7 +87,26 @@ if __name__ == '__main__':
         [focus_result['target'] for focus_result in foci_results],
         [focus_result['class_prob'] for focus_result in foci_results]
     )
-    all_results['accuracy'] = float(np.mean([focus_result['prediction_acc'] for focus_result in foci_results]))
+    all_results['accuracy'] = float(np.mean([focus_result['acc'] for focus_result in foci_results]))
+    # break down results by ihc reason + no ihc
+    results_by_ihc_reason = {}
+    for focus_result in foci_results:
+        slide_data = slides_data.loc[
+            (slides_data['Image'] == focus_result['slide_id']) &
+            (slides_data['Focus number'] == int(focus_result['focus'][-1]))
+            ]
+        assert len(slide_data) == 1, "Focus entry in data file should be unique"
+        ihc_reason = int(slide_data['IHC reason'].item()) if not np.isnan(slide_data['IHC reason'].item()) else -1
+        if ihc_reason not in results_by_ihc_reason:
+            results_by_ihc_reason[ihc_reason] = {
+                name: [] for name, value in focus_result.items() if isinstance(value, Real)
+            }
+        for name, value in focus_result.items():
+            results_by_ihc_reason[ihc_reason][name].append(value)
+    for ihc_reason in results_by_ihc_reason:
+        for name in results_by_ihc_reason[ihc_reason]:
+            results_by_ihc_reason[ihc_reason][name] = np.mean(results_by_ihc_reason[ihc_reason][name])
+    all_results['ihc_reason_breakdown'] = results_by_ihc_reason
     with open(Path(opt.checkpoints_dir)/opt.experiment_name/f'foci_test_results_e:{opt.load_epoch}.json', 'w') as foci_results_file:
         json.dump(all_results, foci_results_file)
     print("Done !")
