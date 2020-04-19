@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="achatrian@localhost:5000">
+    <serverData>
+      <paths name="achatrian@localhost:5000">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/well/rittscher/users/achatrian/cancer_phenotype" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
