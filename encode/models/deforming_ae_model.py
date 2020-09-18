@@ -44,6 +44,7 @@ class DeformingAEModel(BaseModel):
         parser.add_argument('--warp_grid_dim', type=int, default=128, help="dimensionality of warping grid (deformation field) latent code")
         parser.add_argument('--texture_dim', type=int, default=16, help="dimensionality of texture latent code")
         parser.add_argument('--num_gen_filters', type=int, default=32, help="number of filters in generator")
+        parser.add_argument('--use_dense', action='store_true')
         parser.set_defaults(num_filters=32)  # set number of filters in discriminator
         # defaults are for patch size = 64 (Korsuk used default parameters) # TODO scale up
         return parser
@@ -65,7 +66,7 @@ class DeformingAEModel(BaseModel):
     def forward(self):
         dp0_img = utils.parseSampledDataPoint(self.input, self.opt.nc)
         baseg = utils.getBaseGrid(N=self.opt.imgSize, getbatch=True, batchSize=dp0_img.size()[0])
-        zero_warp = torch.cuda.FloatTensor(1, 2, self.opt.imgSize, self.opt.imgSize).fill_(0)
+        zero_warp = torch.cuda.FloatTensor(1, 2, self.opt.patch_size, self.opt.patch_size).fill_(0)
         if self.opt.gpu_ids:
             dp0_img, baseg, zero_warp = utils.setCuda(dp0_img, baseg, zero_warp)
         baseg, zero_warp = baseg.requires_grad_(False), zero_warp.requires_grad_(False)

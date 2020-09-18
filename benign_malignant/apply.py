@@ -13,6 +13,7 @@ from datasets import create_dataset, create_dataloader
 
 
 if __name__ == '__main__':
+    n_examples_per_slide = 5
     opt = ApplyOptions().parse()
     print(f"Starting at {str(datetime.now())}")
     print(f"Running on host: '{socket.gethostname()}'")
@@ -36,15 +37,12 @@ if __name__ == '__main__':
     save_dir = Path(opt.data_dir)/'data'/'experiments'/'benign_malignant'
     save_dir.mkdir(exist_ok=True, parents=True)
     results = {}
-    with model.start_validation() as update_validation_meters:
-        for i, data in enumerate(tqdm(dataloader)):
-            model.set_input(data)
-            model.test()
-            model.evaluate_parameters()
-            update_validation_meters()
-            outputs = model.output.detach.cpu().numpy()
-            targets = model.target.detach.cpu().numpy()
-            for output, target in zip(outputs, targets):
-                output = float(output)
-                target = int(target)
+    for i, data in enumerate(tqdm(dataloader)):
+        model.set_input(data)
+        model.test()
+        outputs = model.output.detach.cpu().numpy()
+        targets = model.target.detach.cpu().numpy()
+        for output, target in zip(outputs, targets):
+            output = float(output)
+            target = int(target)
 

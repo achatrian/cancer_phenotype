@@ -1,0 +1,69 @@
+----------------- Options ---------------
+         area_based_input: False                         
+              augment_dir:                               
+            augment_level: 4                             	[default: 0]
+               batch_size: 10                            	[default: 16]
+                    beta1: 0.5                           
+          checkpoints_dir: ~/Documents/Temp              	[default: ]
+            cna_tablefile:                               
+           continue_train: False                         
+           coords_pattern: (\w{1,6})_(\w{1,6}).png       
+                 data_dir: /mnt/rescomp/projects/TCGA_prostate/TCGA	[default: /well/rittscher/projects/TCGA_prostate/TCGA]
+              data_fields: case_submitter_id,sample_id,case_id,sample_submitter_id,is_ffpe,sample_type,state,oct_embedded
+             dataset_name: tilepheno                     
+              display_env: main                          
+             display_freq: 400                           
+               display_id: 1                             
+            display_ncols: 3                             
+             display_port: 8097                          
+           display_server: http://localhost              
+          display_winsize: 256                           
+              epoch_count: 0                             
+                     eval: False                         
+          experiment_name: test                          	[default: experiment_name]
+          field_datatypes: text,text,text,text,text,text,text,text
+                fine_size: 512                           
+           fork_processes: False                         
+                  gpu_ids: -1                            	[default: 0]
+       image_glob_pattern: *_*.png                       
+                init_gain: 0.02                          
+                init_type: normal                        
+           input_channels: 3                             
+                 is_apply: None                          
+                 is_train: True                          	[default: None]
+            learning_rate: 0.0001                        
+   learning_rate_patience: 50                            
+               load_epoch: latest                        
+                load_iter: 0                             
+              loss_weight: None                          
+                 losstype: ce                            
+                       lr: 0.0002                        
+           lr_decay_iters: 50                            
+                lr_policy: lambda                        
+                    model: inception                     	[default: Inception]
+                      mpp: 0.5                           
+                   nepoch: 100                           
+             nepoch_decay: 100                           
+                  no_html: False                         
+                num_class: 2                             
+       num_display_images: 3                             
+              num_filters: 15                            
+               patch_size: 1024                          
+                    phase: test                          	[default: train]
+               print_freq: 100                           
+               reg_weight: 0.0005                        
+             sample_index: sample_submitter_id           
+             save_by_iter: False                         
+          save_epoch_freq: 50                            
+         save_latest_freq: 5000                          
+      set_visible_devices: True                          	[default: y]
+               split_file: /mnt/rescomp/projects/TCGA_prostate/TCGA/data/CVsplits/split0.json	[default: split0.json]
+                     task: phenotype                     	[default: segment]
+         update_html_freq: 1000                          
+           val_batch_size: 20                            
+           val_epoch_freq: 10                            
+                  verbose: False                         
+             weight_decay: 0.0005                        
+                  workers: 0                             	[default: 4]
+            wsi_tablefile:                               
+----------------- End -------------------
