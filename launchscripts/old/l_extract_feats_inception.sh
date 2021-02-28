@@ -17,8 +17,8 @@ AUG=$2
 CKM=$3
 
 
-module load cuda/9.0
-module load cudnn/7.0-9.0
+
+
 source /users/rittscher/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
 cd /users/rittscher/achatrian/ProstateCancer/phenotyping
 echo "Start"

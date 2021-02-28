@@ -8,6 +8,7 @@ import numpy as np
 from scipy.stats import kurtosis
 import pandas as pd
 from sklearn.decomposition import IncrementalPCA
+from sklearn.cluster import KMeans
 from xgboost import XGBClassifier
 from sklearn.metrics import roc_auc_score, plot_roc_curve
 from matplotlib.pyplot import figure, axes
@@ -53,6 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--load_epoch', type=str, default='latest')
     parser.add_argument('--classifier_experiment', default=None)
     parser.add_argument('--num_components', type=int, default=25)
+    parser.add_argument('--num_clusters', type=int, default=10)
     parser.add_argument('--ihc_data_file', type=Path,
                         default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-04-21.csv')
     parser.add_argument('--data_split', type=Path, default='/well/rittscher/projects/IHC_Request/data/cross_validate/3-split2.json')
@@ -123,6 +125,18 @@ if __name__ == '__main__':
     with open((args.data_dir/'data'/'classifications'/(f'pca_{args.experiment_name}_{args.load_epoch}.joblib')), 'wb') \
             as pca_file:
         joblib.dump(pca, pca_file)
+    # train clustering
+    clustering = KMeans(args.num_clusters)
+    all_features = []
+    for slide_id in tqdm(slides_vectors, desc='building signatures ...'):
+        tiles_results = slides_vectors[slide_id]
+        ambiguous_features = np.array([tile_result['features'] for tile_result in tiles_results['ambiguous_tiles']])
+        ambiguous_features = pca.transform(ambiguous_features)
+        certain_features = np.array([tile_result['features'] for tile_result in tiles_results['certain_tiles']])
+        certain_features = pca.transform(certain_features)
+        all_features.extend(ambiguous_features)
+        all_features.extend(certain_features)
+    clustering.fit(np.array(all_features))
     # build data
     if args.classifier_experiment is not None:
         with open((args.data_dir / 'data' / 'classifications' / (
@@ -137,25 +151,20 @@ if __name__ == '__main__':
     for slide_id in tqdm(slides_vectors, desc='building signatures ...'):
         tiles_results = slides_vectors[slide_id]
         ambiguous_features = np.array([tile_result['features'] for tile_result in tiles_results['ambiguous_tiles']])
-        ambiguous_features = pca.transform(ambiguous_features)
+        ambiguous_cluster_memberships = clustering.predict(pca.transform(ambiguous_features))
+        ambiguous_histogram = np.histogram(ambiguous_cluster_memberships)
         certain_features = np.array([tile_result['features'] for tile_result in tiles_results['certain_tiles']])
-        certain_features = pca.transform(certain_features)
+        certain_cluster_memberships = clustering.predict(pca.transform(certain_features))
+        certain_histogram = np.histogram(certain_cluster_memberships)
         statistics = [
-            np.median(ambiguous_features, axis=0),
-            np.mean(ambiguous_features, axis=0),
-            np.std(ambiguous_features, axis=0),
-            kurtosis(ambiguous_features),
-            np.median(certain_features, axis=0),
-            np.mean(certain_features, axis=0),
-            np.std(certain_features, axis=0),
-            kurtosis(certain_features),
-            [np.median([tile_result['variance'] for tile_result in tiles_results['ambiguous_tiles']])],
-            [np.median([tile_result['variance'] for tile_result in tiles_results['certain_tiles']])],
-            [np.median([tile_result['loss_variance'] for tile_result in tiles_results['ambiguous_tiles']])],
-            [np.median([tile_result['loss_variance'] for tile_result in tiles_results['certain_tiles']])],
-            [len(ambiguous_features), len(certain_features)],
+            np.median([tile_result['variance'] for tile_result in tiles_results['ambiguous_tiles']]),
+            np.median([tile_result['variance'] for tile_result in tiles_results['certain_tiles']]),
+            np.median([tile_result['loss_variance'] for tile_result in tiles_results['ambiguous_tiles']]),
+            np.median([tile_result['loss_variance'] for tile_result in tiles_results['certain_tiles']]),
+            len(ambiguous_features),
+            len(certain_features)
         ]
-        signature = np.concatenate(statistics)
+        signature = np.concatenate((ambiguous_histogram, certain_histogram, signature))
         if slide_id in train_split:
             train_signatures.append(signature)
             train_labels.append(labels[slide_id])
@@ -165,7 +174,7 @@ if __name__ == '__main__':
     # classify
     train_signatures, test_signatures, train_labels, test_labels = np.array(train_signatures), np.array(test_signatures), \
                                                   np.array(train_labels), np.array(test_labels)
-    with open(args.data_dir / 'data' / 'classifications' / f'signatures_{args.classifier_experiment}_{args.load_epoch}.json', 'w') as signatures_file:
+    with open(args.data_dir / 'data' / 'classifications' / f'signatures_{args.experiment_name}_{args.load_epoch}.json', 'w') as signatures_file:
         json.dump({
             'train_signatures': train_signatures.tolist(), 'test_signatures': test_signatures.tolist(),
             'train_labels': train_labels.tolist(), 'test_labels': test_labels.tolist()

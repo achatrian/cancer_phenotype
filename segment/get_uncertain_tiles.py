@@ -63,7 +63,7 @@ if __name__ == '__main__':
         # find locations with highest uncertainty
         for x, y in tqdm(tissue_slide.tissue_locations):
             try:
-                tile = np.array(uncertainty_map.read_region((x, y), tissue_slide.read_level, (args.patch_size,)*2))
+                tile = np.array(uncertainty_map.read_region((x, y), tissue_slide.read_level, (args.patch_size,) * 2))
             except OpenSlideError:
                 break
             tile_peaks = peak_local_max(tile)

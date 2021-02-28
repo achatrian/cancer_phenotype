@@ -20,14 +20,13 @@ class TileSegDataset(BaseDataset):
     """
 
     def __init__(self, opt):
-        super(TileSegDataset, self).__init__()
-        self.opt = opt
+        super(TileSegDataset, self).__init__(opt)
         self.paths = []
-        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'CVsplits' / (
+        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'cross_validate' / (
                     re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
         split_tiles_path = str(split_tiles_path)
         # read resolution data - requires global tcga_resolution.json file
-        with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / 'tcga_resolution.json', 'r') as resolution_file:
+        with open(Path(self.opt.data_dir) / 'data' / 'cross_validate' / 'tcga_resolution.json', 'r') as resolution_file:
             self.resolutions = json.load(resolution_file)
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
@@ -174,11 +173,7 @@ class TileSegDataset(BaseDataset):
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
-            if self.opt.augment_level:
-                seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
-                image = seq_det.augment_image(image)
-                gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-                gt = gt[..., 0]
+            image, gt = self.augment_image(image, gt)
             if not self.opt.segment_lumen:
                 gt[gt < 255] = 0
                 gt[gt != 0] = 1

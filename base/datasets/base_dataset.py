@@ -9,9 +9,12 @@ from imgaug import augmenters as iaa
 
 
 class BaseDataset(data.Dataset):
-    def __init__(self):
+    def __init__(self, opt):
         super().__init__()
+        self.opt = opt
         self.paths = []  # store data in paths for make_subset to work, or give different store_name
+        if self.opt.is_train:
+            self.aug_seq = get_augment_seq(self.opt.augment_level)
 
     def name(self):
         return 'BaseDataset'
@@ -71,6 +74,22 @@ class BaseDataset(data.Dataset):
     def setup(self):
         pass
 
+    def augment_image(self, image, ground_truth=None):
+        r"""
+        Augment image and ground truth using desired augmentation sequence
+        :param image:
+        :param ground_truth:
+        :return:
+        """
+        if self.opt.augment_level:
+            seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
+            image = seq_det.augment_image(image)
+            if ground_truth is not None:
+                ground_truth = np.squeeze(seq_det.augment_image(np.tile(ground_truth[..., np.newaxis], (1, 1, 3)),
+                                                                ground_truth=True))
+                ground_truth = ground_truth[..., 0]
+        return image, ground_truth
+
 # Transforms
 
 
@@ -84,11 +103,10 @@ class AugSeq:
         if ground_truth:
             return self.seq_geom.augment_image(image)
         else:
-            return self.seq_geom.augment_image(
-                self.seq_full.augment_image(image)
-            )
+            return self.seq_geom.augment_image(self.seq_full.augment_image(image))
 
     def to_deterministic(self, geom=True, full=False):
+        r"""Return an augmentation sequence that always performs the same geometric transforms"""
         return AugSeq(
             self.seq_geom.to_deterministic() if geom else self.seq_geom,
             self.seq_full if full else self.seq_full
@@ -381,6 +399,7 @@ class RandomCrop(object):
         self.last_crop = (x1, y1)
         return img
 
+
 #####
 class Compose(object):
     "Apply set of transforms to images"
@@ -392,6 +411,7 @@ class Compose(object):
         for t in self.transforms:
             img, mask = t(img, mask)
         return img, mask
+
 
 class Scale(object):
     """Rescales the input np.ndarray to the given 'size'.
@@ -418,6 +438,7 @@ class Scale(object):
         return cv2.resize(img, dsize=(ow, oh),
                           interpolation=self.interpolation)
 
+
 class Downsample(object):
     """Downsamples the input by a given factor
     interpolation: Default: cv.INTER_CUBIC
@@ -441,6 +462,7 @@ class Downsample(object):
                           interpolation=self.interpolation)
         if c == 1: outimg = outimg[:,:,np.newaxis]
         return outimg
+
 
 class CenterCrop(object):
     """Crops the given np.ndarray at the center to have a region of
@@ -488,6 +510,7 @@ class RandomHorizontalFlip(object):
             mask = cv2.flip(img, 1).reshape(mask.shape)
         return img, mask
 
+
 class RandomVerticalFlip(object):
     """Randomly vertically flips the given np.ndarray with a probability of 0.5
     """
@@ -497,6 +520,7 @@ class RandomVerticalFlip(object):
             mask = cv2.flip(img, 0).reshape(mask.shape)
         return img, mask
 
+
 class RandomTransposeFlip(object):
     """Randomly horizontally and vertically flips the given np.ndarray with a probability of 0.5
     """
@@ -505,6 +529,7 @@ class RandomTransposeFlip(object):
             img = cv2.flip(img, -1).reshape(img.shape)
             mask = cv2.flip(img, -1).reshape(mask.shape)
         return img, mask
+
 
 class RandomBlur(object):
     def __call__(self, img, mask):

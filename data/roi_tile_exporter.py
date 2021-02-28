@@ -163,8 +163,8 @@ class ROITileExporter:
             for value_binary_mask, value in zip(value_binary_masks, value_hier):
                 mask[value_binary_mask > 0] = value
             mask = np.array(mask, dtype=np.uint8)
-            tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=(self.tile_size,)*2),
-                                                   dtype=np.uint8)
+            tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=),
+                            dtype=np.uint8)
             if tile.shape[-1] == 4:  # assume tile is in RGBA format
                 tile = (rgba2rgb(tile)*255).astype(np.uint8)
             # resize mask according to mpp difference

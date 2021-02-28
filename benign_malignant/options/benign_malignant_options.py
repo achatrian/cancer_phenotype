@@ -8,5 +8,6 @@ class BenignMalignantOptions(TaskOptions):
         self.parser.add_argument('--num_display_images', type=int, default=3, help="Number of input images to be shown with labels in visualizer")
         self.parser.add_argument('--num_class', type=int, default=2)
         self.parser.add_argument('--model', type=str, default='inception')
-        self.parser.add_argument('--dataset_name', type=str, default='gland')
+        self.parser.add_argument('--dataset_name', type=str, default='benign_malignant')
+        self.parser.add_argument('--set_mpp', type=float, default=0.25)
         pass

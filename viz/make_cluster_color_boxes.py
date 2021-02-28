@@ -7,6 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 from annotation.annotation_builder import AnnotationBuilder
 
+
 r"""Given a certain clustering of objects belonging to a slide set, 
 create an AIDA annotation with coloured bounding boxes over those slides"""
 

@@ -4,7 +4,7 @@ from datetime import datetime
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from base.options.base_options import BaseOptions
-from benign_malignant.datasets.gland_dataset import GlandDataset
+from benign_malignant.datasets.benign_malignant_dataset import BenignMalignantDataset
 
 
 "Split dataset by keeping ratio of slides with more benign glands over those with more malignant glands constant"
@@ -19,7 +19,7 @@ if __name__ == '__main__':
     for i in range(n_splits):  # remove existing splits or dataset could break because of paths mismatch
         (cv_path/f'{n_splits}-split{i}.json').unlink()
     skf = StratifiedKFold(n_splits=n_splits, random_state=None, shuffle=True)
-    dataset = GlandDataset(opt)
+    dataset = BenignMalignantDataset(opt)
     assert dataset.paths
     slide_ids = set(tile_path.parent.name for tile_path in dataset.paths)
     mean_labels, slide_labels = {}, {}
@@ -27,7 +27,7 @@ if __name__ == '__main__':
         mean_label = sum(dataset.labels[i] for i, path in enumerate(dataset.paths) if path.parent.name == slide_id) / \
                      sum(1 for path in dataset.paths if path.parent.name == slide_id)
         mean_labels[slide_id] = mean_label
-        slide_labels[slide_id] = int(mean_label >= 0.5)
+        slide_labels[slide_id] = round(mean_label >= 0.5)
     slides = np.array(list(slide_ids))
     labels = np.array([slide_labels[slide] for slide in slides])
     for i, (train_index, test_index) in enumerate(skf.split(slides, labels)):

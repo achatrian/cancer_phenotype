@@ -76,7 +76,7 @@ if __name__ == '__main__':
                 break
         else:
             raise ValueError("There are no points in the tumour area")
-        tile = slide.read_region(point, slide.read_level, (opt.patch_size,)*2)
+        tile = slide.read_region(point, slide.read_level, (opt.patch_size,) * 2)
         model.set_input({'input': image_to_tensor(tile), 'input_path': str(image_path)})
         model.test()
         visuals = model.get_current_visuals()

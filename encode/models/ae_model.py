@@ -6,36 +6,32 @@ from base.models.base_model import BaseModel
 from base.utils import debug
 
 
-class AEGANModel(BaseModel):
+class AEModel(BaseModel):
 
     def __init__(self, opt):
         super().__init__(opt)
         self.module_names = ['ae', 'discr']
-        self.loss_names = ['l1', 'dis', 'rec']
-        self.metric_names = ['d_x', 'd_g_z', 'd_g_zp', 'train_dec', 'train_dis']
+        self.loss_names = ['rec', 'l1', 'dis']
+        self.metric_names = ['d_x', 'd_g', 'train_dis']  # need at least 1 metric
         self.netae = AE(opt.patch_size, len(opt.gpu_ids), opt.num_filt_gen, opt.num_lat_dim)
-        self.netdiscr = Discriminator(opt.patch_size, len(opt.gpu_ids), opt.num_filt_discr)
+        self.netdiscr = Discriminator(opt.num_lat_dim)
         self.l1 = L1Loss()
         self.dis = BCELoss()
         self.rec = MSELoss()
-        self.visual_names = ['input', 'output', 'generated']
-        self.visual_types = ['image', 'image', 'image']
-        opt_dis = torch.optim.Adam(self.netdiscr.parameters(), lr=opt.learning_rate)
-        opt_enc = torch.optim.Adam(self.netae.encoder.parameters(), lr=opt.learning_rate)
-        opt_dec = torch.optim.Adam(self.netae.decoder.parameters(), lr=opt.learning_rate)
+        self.visual_names = ['input', 'output']
+        self.visual_types = ['image', 'image']
         opt_ae = torch.optim.Adam(self.netae.parameters(), lr=opt.learning_rate)
-        self.optimizers = [opt_dis, opt_enc, opt_dec, opt_ae]
-        self.equilibrium = 0.55
+        self.optimizers = [opt_ae]
+        self.equilibrium = 0.5
         self.margin = 0.4
 
     def name(self):
-        return "AEGANModel"
+        return "AEModel"
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--num_filt_gen', type=int, default=32)
         parser.add_argument('--num_lat_dim', type=int, default=32)
-        parser.add_argument('--num_filt_discr', type=int, default=32)
         return parser
 
     def set_input(self, data):
@@ -45,23 +41,16 @@ class AEGANModel(BaseModel):
     def forward(self):
         self.netae.zero_grad()
         self.encoded, self.output, self.generated = self.netae(self.input)  # self.generated does not depend on inputs
-        # reconstruction loss
-        self.loss_rec = 0.3*self.rec(self.input, self.output) + 0.7*self.l1(self.input, self.output)
-        # l1 loss between discriminator layers for output and real input
-        l_rec0, l_rec1 = self.netdiscr(self.output, output_layer=True)
+        self.loss_rec = 0.3 * self.rec(self.input, self.output) + 0.7 * self.l1(self.input, self.output)
         with torch.no_grad():
             # push output activations to those generated when input (and not vice versa)
-            l_real0, l_real1 = self.netdiscr(self.input, output_layer=True)
-        self.loss_l1 = torch.clamp(self.l1(l_rec0, l_real0), max=1e15) + torch.clamp(self.l1(l_rec1, l_real1), max=1e15)
-        # GAN loss:
-        self.d_x = self.netdiscr(self.input)
-        self.d_g_z = self.netdiscr(self.output)
-        self.d_g_zp = self.netdiscr(self.generated)
+            self.d_g, features_generated = self.netdiscr(self.generated)
+        self.d_x, features_real = self.netdiscr(self.encoded)
+        self.loss_l1 = torch.clamp(self.l1(features_generated, features_real), max=1e15)
         # Smooth labels
-        outputs_dis = torch.cat((self.d_x, self.d_g_z, self.d_g_zp), dim=0)
-        targets = torch.cat((torch.rand(self.d_x.shape[0]) * 0.19 + 0.8,
-                             torch.rand(self.d_g_z.shape[0] + self.d_g_zp.shape[0]) * 0.2),
-                            dim=0)
+        outputs_dis = torch.cat((self.d_x, self.d_g), dim=0)
+        targets = torch.cat((torch.rand_like(self.d_x) * 0.19 + 0.8,
+                             torch.rand_like(self.d_g) * 0.2), dim=0)
         if torch.cuda.is_available():
             outputs_dis = outputs_dis.cuda()
             targets = targets.cuda()
@@ -70,44 +59,28 @@ class AEGANModel(BaseModel):
         # Disable training of either decoder or discriminator if optimization becomes unbalanced
         # (as measured by comparing to some predefined bounds) (as in https://github.com/lucabergamini/VAEGAN-PYTORCH/blob/master/main.py)
         if torch.mean(self.d_x).data.item() > self.equilibrium + self.margin and \
-                torch.mean(self.d_g_z) < self.equilibrium - self.margin and torch.mean(self.d_g_zp) < self.equilibrium + self.margin:
+                torch.mean(self.d_g) < self.equilibrium - self.margin:
             self.train_dis = False
         else:
             self.train_dis = True
-        if torch.mean(self.d_x).data.item() < self.equilibrium - self.margin and \
-                torch.mean(self.d_g_z) > self.equilibrium + self.margin and torch.mean(self.d_g_zp) > self.equilibrium + self.margin:
-            self.train_dec = False
-        else:
-            self.train_dec = True
 
     def backward(self):
-        gamma = 1.0
         # Optimize:
         self.optimizers[1].zero_grad()
-        loss_enc = self.loss_l1
+        loss_enc = self.loss_l1 + self.loss_gen
         loss_enc.backward(retain_graph=True)  # since l1 loss is used again in decoder optimization
         self.optimizers[1].step()  # encoder
         # del self.loss_kld  # release graph on unneeded loss
-
-        loss_dec = gamma * self.loss_l1 - self.loss_dis
-        if self.train_dec:
-            self.optimizers[2].zero_grad()
-            loss_dec.backward(retain_graph=True)  # since gan loss is used again
-            self.optimizers[2].step()  # decoder
-            # del loss_enc, self.loss_l1  # release graph on unneeded loss
 
         if self.train_dis:
             self.optimizers[0].zero_grad()
             self.loss_dis.backward(retain_graph=True)
             self.optimizers[0].step()  # discriminator
 
-        # if train_dec: del loss_dec
-        # del self.loss_dis, self.generated, l_rec
-
         # Optimize encoder w.r. to l1 loss for reconstruction (calculated later to save gpu space)
-        self.optimizers[3].zero_grad()
+        self.optimizers[2].zero_grad()
         (self.loss_rec + loss_enc).backward()
-        self.optimizers[3].step()
+        self.optimizers[2].step()
 
     def optimize_parameters(self):
         self.forward()
@@ -124,9 +97,7 @@ class AEGANModel(BaseModel):
         self.u_('l1', self.loss_l1)
         self.u_('dis', self.loss_dis)
         self.u_('d_x', self.d_x.mean())
-        self.u_('d_g_z', self.d_g_z.mean())
-        self.u_('d_g_zp', self.d_g_zp.mean())
-        self.u_('train_dec', self.train_dec)
+        self.u_('d_g', self.d_g.mean())
         self.u_('train_dis', self.train_dis)
 
 
@@ -247,85 +218,39 @@ class AE(nn.Module):
         self.encoder = _Encoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
         self.decoder = _Decoder(image_size, num_filt_gen, num_lat_dim, num_channels=num_channels)
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor):
         # Reconstruct
         self.encoded = self.encoder(input)
         self.output = self.decoder(self.encoded)
-        N = self.encoded.size(0)
 
-        # Sample from prior
-        noise = torch.normal(0.0, 1.0, (N, self.nz * 2 // (8 * 8), 8, 8))  # feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
-        if self.iscuda:
-            noise = noise.cuda()
-        self.generated = self.decoder(noise)
+        output = self.output.clone().detach()  # feed output into encoder and train discriminator on latent representation
+        self.generated = self.encoder(output)
         return self.encoded, self.output, self.generated
 
 
-class Discriminator(nn.Module):
-    def __init__(self, image_size, ngpu, num_filt_discr, num_channels=3):
-        super(Discriminator, self).__init__()
-        self.ngpu = ngpu
-        self.iscuda = torch.cuda.is_available() and ngpu > 0
+class Discriminator(torch.nn.Module):
 
-        n = math.log2(image_size)
-        assert n == round(n), 'image_size must be a power of 2'
-        assert n >= 3, 'image_size must be at least 8'
-        n = int(n)
-        m = n - 4
-
-        # Main downsamples 3 times
-        self.main = nn.Sequential(nn.Conv2d(num_channels, num_filt_discr * 2 ** (0), 3, 1, 0))
-        self.main.add_module('input-relu', nn.LeakyReLU(inplace=False))
-
-        for i in range(m):
-            # Convolutions have stride 2 !
-            self.main.add_module('conv_{}'.format(i),
-                                 nn.Conv2d(num_filt_discr * 2 ** (i), num_filt_discr * 2 ** (i + 1), 3, 1, padding=1))
-            self.main.add_module('dropout_{}'.format(i), nn.Dropout(p=0.3))
-            self.main.add_module('norm_{}'.format(i), nn.InstanceNorm2d(num_filt_discr * 2 ** (i + 1), affine=False))
-            self.main.add_module('relu_{}'.format(i), nn.LeakyReLU(inplace=False))
-            self.main.add_module('pool{}'.format(i), nn.AvgPool2d(2, stride=2))
-
-        # Feature map used for style loss
-        self.features0 = nn.Sequential(
-            nn.Conv2d(num_filt_discr * 2 ** (m + 1 - 1), num_filt_discr * 2 ** (m + 2), 3),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 2), affine=False),
+    def __init__(self, num_lat_dim):
+        super().__init__()
+        num_lat_dim = max(num_lat_dim // (8 * 8), 1) * 8 * 8  # ensure multiple of 16
+        self.features = nn.Sequential(
+            nn.Linear(num_lat_dim*2, num_lat_dim),
+            nn.Dropout(0.2),
+            nn.LayerNorm(num_lat_dim),
             nn.LeakyReLU(inplace=False),
-            nn.AvgPool2d(2, stride=2)
-        )
-
-        # Feature map used for style loss
-        self.features1 = nn.Sequential(
-            nn.Conv2d(num_filt_discr * 2 ** (m + 2), num_filt_discr * 2 ** (m + 3), 3, padding=1),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 3), affine=False),
-            nn.LeakyReLU(inplace=False)
-        )
-
-        # TODO could use more than one layer and sum MSEs
-
-        self.end = nn.Sequential(
-            nn.AvgPool2d(2, stride=2),
-            nn.Conv2d(num_filt_discr * 2 ** (m + 3), num_filt_discr * 2 ** (m + 4), 3, padding=1),
-            nn.InstanceNorm2d(num_filt_discr * 2 ** (m + 4), affine=False),
+            nn.Linear(num_lat_dim, num_lat_dim//2),
+            nn.Dropout(0.2),
+            nn.LayerNorm(num_lat_dim//2),
             nn.LeakyReLU(inplace=False),
-            nn.AvgPool2d(2, stride=2)
-        )
-
-        # Classifier
-        self.classifier = nn.Sequential(
-            nn.Linear(num_filt_discr * 2 ** (m + 4) * 1 * 1, 300),  # padding issues
+            nn.Linear(num_lat_dim//2, num_lat_dim//4),
+            nn.Dropout(0.2),
+            nn.LayerNorm(num_lat_dim//4),
             nn.LeakyReLU(inplace=False),
-            nn.Linear(300, 1),
-            nn.Sigmoid()
         )
+        self.classifier = nn.Linear(num_lat_dim//4, 2)
 
-    def forward(self, input, output_layer=False):
-        output = self.main(input)
-        features0 = self.features0(output)
-        features1 = self.features1(features0)
-        if output_layer:
-            return features0, features1  # return layer activation
-        output = self.end(features1)
-        output = output.view(output.size(0), -1)  # reshape tensor
-        y = self.classifier(output)  # return class probability
-        return y
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+        features = self.features(x)
+        output = self.classifier(features)
+        return output, features

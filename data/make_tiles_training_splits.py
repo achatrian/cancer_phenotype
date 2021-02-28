@@ -17,8 +17,8 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"No tiles directory in {str(args.data_dir)}")
     slide_ids = tuple(path.name for path in tiles_dir.iterdir() if path.is_dir())
     splits = tuple(KFold(n_splits=args.n_splits).split(slide_ids))
-    (args.data_dir/'data'/'CVsplits').mkdir(exist_ok=True)
-    with open(args.data_dir/'data'/'CVsplits'/'tiles_split.json', 'w') as tiles_split_file:
+    (args.data_dir/'data'/'cross_validate').mkdir(exist_ok=True)
+    with open(args.data_dir/'data'/'cross_validate'/'tiles_split.json', 'w') as tiles_split_file:
         tile_splits = {
             'date': str(datetime.now()),
             'n_splits': args.n_splits,

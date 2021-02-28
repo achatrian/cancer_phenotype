@@ -13,9 +13,7 @@ ia.seed(1)
 class NuclearDataset(BaseDataset):
 
     def __init__(self, opt):
-        super(NuclearDataset, self).__init__()
-        self.opt = opt
-
+        super(NuclearDataset, self).__init__(opt)
         self.image_files = []
         self.label = []
 

@@ -15,11 +15,10 @@ class ROITilesDataset(BaseDataset):
     """
 
     def __init__(self, opt):
-        super(ROITilesDataset, self).__init__()
-        self.opt = opt
+        super(ROITilesDataset, self).__init__(opt)
         self.paths = []
         self.opt.data_dir = Path(self.opt.data_dir)
-        tiles_splits_path = self.opt.data_dir/'data'/'CVsplits'/'tiles_split.json'  # what if I had wanted to use a different layer? TODO make roi_layer an option field
+        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split.json'  # what if I had wanted to use a different layer? TODO make roi_layer an option field
         with open(tiles_splits_path, 'r') as tiles_splits_file:
             tiles_splits = json.load(tiles_splits_file)
         assert tiles_splits['n_splits'] > 0, "Nonzero number of splits"
@@ -36,8 +35,8 @@ class ROITilesDataset(BaseDataset):
         self.randomcrop = RandomCrop(self.opt.patch_size)
         if self.opt.augment_level:
             self.aug_seq = get_augment_seq(opt.augment_level)
-        if self.opt.label_file is not None:
-            with open(self.opt.label_file, 'r') as label_file:
+        if self.opt.skip_labels is not None:
+            with open(self.opt.skip_labels, 'r') as label_file:
                 label_data = json.load(label_file)
             self.label_interval_map = label_data['interval_map']
             self.label_value_map = label_data['value_map']
@@ -45,7 +44,7 @@ class ROITilesDataset(BaseDataset):
             self.label_interval_map = {
                 'background': (0, 30),
                 'epithelium': (31, 225),
-                'lumen': (225, 250)
+                'lumen': (225, 255)
             }
             self.label_value_map = {
                 'background': 0,
@@ -140,11 +139,7 @@ class ROITilesDataset(BaseDataset):
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
-            if self.opt.augment_level:
-                seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
-                image = seq_det.augment_image(image)
-                gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-                gt = gt[..., 0]
+            image, gt = self.augment_image(image, gt)
             # TODO test below !!!
             # paint labels in
             for i, (label, interval) in enumerate(self.label_interval_map.items()):

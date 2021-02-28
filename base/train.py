@@ -104,5 +104,4 @@ if __name__ == '__main__':
 
         with open(Path(opt.checkpoints_dir, opt.experiment_name, 'results.json'), 'w') as results_file:
             json.dump(all_results, results_file)
-
     print("Done!")

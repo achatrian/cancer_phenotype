@@ -38,7 +38,7 @@ class InstanceMasker:
             warnings.warn(f"Pixel value for {tuple(set(self.labels) - set(label_values.keys()))} is unspecified, ignoring these labels.")
         # outer label specifies the contours the interface gives access to
         self.outer_contours_indices = tuple(i for i, label in enumerate(self.labels) if label == outer_label)
-        self.overlap_struct, self.contours, self.bounding_boxes, self.labels = find_overlap(slide_contours)
+        self.overlap_struct, self.contours, self.bounding_boxes, self.labels = find_overlap(slide_contours, verbose=True)
 
     def __len__(self):
         return len(self.outer_contours_indices)

@@ -47,7 +47,8 @@ class InceptionModel(BaseModel):
         if self.input is None:
             raise ValueError("Input not set for {}".format(self.name()))
         self.output = self.net(self.input)
-        self.loss_bce = self.bce(self.output, self.target)
+        if self.target is not None:
+            self.loss_bce = self.bce(self.output, self.target)
 
     def backward(self):
         self.optimizers[0].zero_grad()

@@ -100,9 +100,12 @@ class AnnotationBuilder:
         return 0 if not self.num_layers() else sum(len(layer['items']) for layer in self._obj['layers'])
 
     def rename_layer(self, old_name, new_name):
-        layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
-        layer = self._obj['layers'][layer_idx]
-        layer['name'] = new_name
+        try:
+            layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
+            layer = self._obj['layers'][layer_idx]
+            layer['name'] = new_name
+        except ValueError:
+            pass
 
     def layer_has_items(self, layer_idx):
         if type(layer_idx) is str:
@@ -363,7 +366,7 @@ class AnnotationBuilder:
             roi_contour = max((contour for contour in roi_contours if contour.size > 0), key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(roi_contour)
             if w > h:
-                split_rects = [(x + i*int(w/num_splits), y, int(w/num_splits), h) for i in range(num_splits)]
+                split_rects = [(x + i*round(w/num_splits), y, round(w/num_splits), h) for i in range(num_splits)]
             else:
                 split_rects = [(x, y + i*int(h/num_splits), w, int(h/num_splits)) for i in range(num_splits)]
             for i, layer in enumerate(self._obj['layers']):
@@ -611,6 +614,28 @@ class AnnotationBuilder:
                 scaled_layer['items'].append(scaled_item)
             self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
         print(f"Layers were scaled by {scale_factor}")
+        return self
+
+    def shift(self, x, y):
+        x, y = int(x), int(y)
+        for layer in self.layers.values():
+            scaled_layer = {
+                'name': layer['name'],
+                'items': []
+            }
+            for item in layer['items']:
+                points = self.item_points(item)
+                scaled_item = copy.deepcopy(item)
+                if item['type'] == 'path':
+                    scaled_item['segments'] = [
+                        [point[0] + x, point[1] + y]
+                        for point in points
+                    ]
+                else:
+                    raise NotImplementedError("Scaling only implemented for paths")
+                scaled_layer['items'].append(scaled_item)
+            self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
+        print(f"Layers were shifted by {(x, y)}")
         return self
 
 

@@ -38,7 +38,7 @@ else:
     sys.path.append(os.path.expanduser('~') + '/Documents/Repositories/cancer_phenotype')
 
 from repo_old.phenotyping import GlandPatchDataset, GlandDataset
-from repo_old.phenotyping import VAE, Discriminator, weights_init
+from repo_old.phenotyping.models import VAE, Discriminator, weights_init
 from segment.utils import get_time_stamp, check_mkdir, str2bool, AverageMeter
 from repo_old.clr import CyclicLR
 

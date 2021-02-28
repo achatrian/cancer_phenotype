@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import cv2
 from skimage.color import rgba2rgb
+from skimage.color import rgb2gray
 import imgaug as ia
 import warnings
 from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
@@ -17,31 +18,24 @@ class InstanceTilesDataset(BaseDataset):
     r"""Same as TilePheno except instead of outputing the class label of the tile it outputs its ground truth"""
 
     def __init__(self, opt):
-        super(InstanceTilesDataset, self).__init__()
-        self.opt = opt
+        super(InstanceTilesDataset, self).__init__(opt)
         self.paths = []
         self.opt.data_dir = Path(self.opt.data_dir)
-        tiles_splits_path = self.opt.data_dir/'data'/'CVsplits'/'tiles_split.json'  # what if I had wanted to use a different layer?
+        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split.json'  # what if I had wanted to use a different layer?
         with open(tiles_splits_path, 'r') as tiles_splits_file:
             tiles_splits = json.load(tiles_splits_file)
         assert tiles_splits['n_splits'] > 0, "Nonzero number of splits"
         phase = 'test' if self.opt.phase == 'val' else self.opt.phase
-        if self.opt.label_file is not None:
-            with open(self.opt.label_file, 'r') as label_file:
-                label_data = json.load(label_file)
-            self.label_interval_map = label_data['interval_map']
-            self.label_value_map = label_data['value_map']
-        else:
-            self.label_interval_map = {
-                'background': (0, 30),
-                'epithelium': (31, 225),
-                'lumen': (225, 250)
-            }
-            self.label_value_map = {
-                'background': 0,
-                'epithelium': 200,
-                'lumen': 250
-            }
+        self.label_interval_map = {
+            'background': (0, 30),
+            'epithelium': (31, 225),
+            'lumen': (225, 255)
+        }
+        self.label_value_map = {
+            'background': 0,
+            'epithelium': 200,
+            'lumen': 250
+        }
         self.label_interval_map = OrderedDict(sorted(self.label_interval_map.items(), key=operator.itemgetter(1)))
         self.label_value_map = OrderedDict(sorted(self.label_value_map.items(), key=operator.itemgetter(1)))
         slide_ids = tiles_splits[phase][self.opt.split_num]
@@ -53,7 +47,7 @@ class InstanceTilesDataset(BaseDataset):
         with open(self.opt.data_dir/'data'/'tiles'/tiles_splits['roi_layer']/'logs'/(slides_tiles_dirs[0].name + '_tiles.json'), 'r') as tile_export_info_file:  # assume every slide has same info (?)
             self.resolution_data = json.load(tile_export_info_file)  # will be the same for all slides
         assert self.paths, "Cannot be empty"
-        if not self.opt.no_ground_truth:
+        if self.opt.load_ground_truth:
             self.gt_paths = [Path(str(path).replace('_image', '_mask')) for path in self.paths]
         self.randomcrop = RandomCrop(self.opt.patch_size)
         if self.opt.augment_level:
@@ -71,7 +65,7 @@ class InstanceTilesDataset(BaseDataset):
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--mpp', type=float, default=0.4, help="Resolution to read tiles at")
-        parser.add_argument('--no_ground_truth', action='store_true', help="Whether to attemp to load ground truth masks for the tiles")
+        parser.add_argument('--load_ground_truth', action='store_true', help="Whether to attemp to load ground truth masks for the tiles")
         parser.add_argument('--one_class', action='store_true', help="Whether the dataset should merge all the labels into a background vs objects problem")
         parser.add_argument('--split_num', type=int, default=0, help="Which split to use")
         parser.add_argument('--image_glob_pattern', type=str, default='*_*.png', help='Pattern used to find images in each WSI / region folder')
@@ -127,7 +121,7 @@ class InstanceTilesDataset(BaseDataset):
         if image.shape[-1] == 4:  # assume this means rgba
             image = (rgba2rgb(image) * 255).astype(np.uint8)  # skimage funcs output image in RGB [0, 1] range
         assert image.ndim == 3 and image.shape[-1] == 3, "Check image format"
-        if not self.opt.no_ground_truth:  # FIXME are all these options really needed ? Code is hard to read
+        if self.opt.load_ground_truth:
             # process images and ground truth together to keep spatial correspondence
             gt_path = self.gt_paths[idx]
             gt = imageio.imread(gt_path)
@@ -138,11 +132,7 @@ class InstanceTilesDataset(BaseDataset):
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
-            if self.opt.augment_level:
-                seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
-                image = seq_det.augment_image(image)
-                gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-                gt = gt[..., 0]
+            image, gt = self.augment_image(image, gt)
             # paint labels in
             for i, (label, interval) in enumerate(self.label_interval_map.items()):
                 gt[np.logical_and(gt >= interval[0], gt <= interval[1])] = i
@@ -151,12 +141,16 @@ class InstanceTilesDataset(BaseDataset):
             gt = torch.from_numpy(gt.copy()).long()  # change to FloatTensor for BCE
         else:
             image, _ = self.rescale(image)  # gt is none here
+        # convert to grayscale
+        # image = rgb2gray(image)[..., np.newaxis]
+        # blur for ease of reconstruction
+        image = cv2.GaussianBlur(image, (3, 3), 1)
         # scale between 0 and 1
         image = image/255.0
         # normalised images between -1 and 1
         image = (image - 0.5)/0.5
         # convert to torch tensor
-        assert(image.shape[-1] == 3)
+        assert image.ndim == 3
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
         # get coords info of tile wrt WSI
@@ -167,7 +161,7 @@ class InstanceTilesDataset(BaseDataset):
             x_offset=int(coords[1]),  # different from roitiles
             y_offset=int(coords[2])
         )
-        if not self.opt.no_ground_truth:
+        if self.opt.load_ground_truth:
             data['target'] = gt
             data['target_path'] = str(gt_path)
         return data

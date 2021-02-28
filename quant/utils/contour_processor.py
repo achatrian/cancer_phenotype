@@ -18,7 +18,8 @@ class ContourProcessor:
     r"""Use this class to iterate over all contours in one annotation"""
 
     def __init__(self, instance_masker: InstanceMasker, reader: Union[WSIReader, DZIIO], features: Sequence[Feature],
-                 contour_size_threshold=2000, stain_normalizer: StainNormalizer = None, stain_matrix=None):
+                 contour_size_threshold=2000, stain_normalizer: StainNormalizer = None, stain_matrix=None,
+                 skip_labels=None):
         self.masker = instance_masker
         self.reader = reader
         # check that features have at least one of the input types

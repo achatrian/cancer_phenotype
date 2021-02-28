@@ -6,8 +6,7 @@ class MNISTDataset(BaseDataset):
 
     def __init__(self, opt):
         r"""Wrapper around MNIST dataset - Try out algorithms with this dataset"""
-        super().__init__()
-        self.opt = opt
+        super().__init__(opt)
         self.mnist = datasets.MNIST(self.opt.data_dir, train=(self.opt.phase == 'train'), download=True,
                                     transform=transforms.Compose([
                                         transforms.Resize((self.opt.patch_size,) * 2, interpolation=0),

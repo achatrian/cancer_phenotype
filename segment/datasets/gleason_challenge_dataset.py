@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import re
 from imageio import imread
 import numpy as np
 import cv2
@@ -16,8 +17,7 @@ class GleasonChallengeDataset(BaseDataset):
     r""""""
 
     def __init__(self, opt):
-        super().__init__()
-        self.opt = opt
+        super().__init__(opt)
         self.paths = []
         self.opt.data_dir = Path(self.opt.data_dir)
         with open(self.opt.data_dir/'data'/'splits.json', 'r') as split_file:
@@ -100,7 +100,7 @@ class GleasonChallengeDataset(BaseDataset):
                     image = cv2.copyMakeBorder(image, 0, delta_h, 0, delta_w, cv2.BORDER_CONSTANT)
                     if mask is not None:
                         mask = cv2.copyMakeBorder(mask, 0, delta_h, 0, delta_w, cv2.BORDER_CONSTANT)
-            else:
+            if image.shape[0] >= self.opt.patch_size or image.shape[1] >= self.opt.patch_size:
                 cat = np.concatenate((image, mask[..., np.newaxis]), axis=2) if mask is not None else image
                 if self.opt.phase == 'train':
                     cat = self.random_crop(cat)
@@ -110,12 +110,7 @@ class GleasonChallengeDataset(BaseDataset):
                     origin = self.center_crop.last_crop
                 image, mask = cat[..., :3], cat[..., 3].squeeze() if mask is not None else None
         assert image.shape[0:2] == (self.opt.patch_size,) * 2, "image shaped must be changed to desired shape"
-        if self.opt.augment_level:
-            seq_det = self.aug_seq.to_deterministic()
-            image = seq_det.augment_image(image)
-            if mask is not None:
-                mask = np.squeeze(seq_det.augment_image(np.tile(mask[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-                mask = mask[..., 0]
+        image, mask = self.augment_image(image, mask)
         # scale between 0 and 1
         image = image / 255.0
         # normalised images between -1 and 1
@@ -124,6 +119,8 @@ class GleasonChallengeDataset(BaseDataset):
         assert (image.shape[-1] == 3)
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
+        # coordinates
+        x, y = re.search('slide\d+_core\d+_(\d+)_(\d+)', path.name).groups()
         if mask is not None:
             mask = torch.from_numpy(mask.copy()).long()
         return {
@@ -131,13 +128,13 @@ class GleasonChallengeDataset(BaseDataset):
             'gleason_mask': mask,
             'input_path': str(path),
             'mask_path': str(mask_path),
-            'x_offset': origin[0],
-            'y_offset': origin[1]
+            'x_offset': int(x) + origin[0],
+            'y_offset': int(y) + origin[1]
         } if mask is not None else {
             'input': image,
             'input_path': str(path),
-            'x_offset': origin[0],
-            'y_offset': origin[1]
+            'x_offset': int(x) + origin[0],
+            'y_offset': int(y) + origin[1]
         }
 
 

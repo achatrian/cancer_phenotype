@@ -8,14 +8,31 @@ from datetime import datetime
 import cv2
 import torch
 import numpy as np
-from openslide.lowlevel import OpenSlideError
-from options.process_openslide_options import ProcessOpenSlideOptions
-from models import create_model
+import pandas as pd
+from openslide.lowlevel import OpenSlideError, OpenSlideUnsupportedFormatError
+from skimage.morphology import remove_small_objects, remove_small_holes
+from base.options.process_openslide_options import ProcessOpenSlideOptions
+from base.models import create_model
 from data.images.wsi_reader import WSIReader
 from inference.wsi_processor import WSIProcessor
 from annotation.annotation_builder import AnnotationBuilder
 from annotation.mask_converter import MaskConverter
-from base.utils import debug
+
+
+def tissue_mask(image, min_size=100, area_threshold=400):
+    # FIXME not working
+    if image.shape[-1] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
+    # saturation check
+    empirical = hsv_image.prod(axis=2)  # found by Ka Ho to work
+    empirical = empirical / np.max(empirical) * 255  # found by Ka Ho to work
+    kernel = np.ones((20, 20), np.uint8)
+    ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    mask = remove_small_objects(mask.astype(bool), min_size=min_size)
+    mask = remove_small_holes(mask.astype(bool), area_threshold=area_threshold, connectivity=3)
+    return mask.astype(np.uint8)
 
 
 def process_image(images, input_path, model):
@@ -28,6 +45,8 @@ def process_image(images, input_path, model):
     images = np.stack(images, axis=3)
     if images.shape[-2] == 4:
         images = images[:, :, :3, :]
+    if model.opt.tissue_mask:
+        tissue_masks = [tissue_mask(image)[..., np.newaxis] for image in np.moveaxis(images, 3, 0)]
     # scale between 0 and 1
     images = images / 255.0
     # normalised images between -1 and 1
@@ -44,6 +63,12 @@ def process_image(images, input_path, model):
     output = torch.nn.functional.softmax(output_logits, dim=1)
     output = output.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255  # creates image
     output = np.around(output).astype(np.uint8)  # conversion with uint8 without around
+    if model.opt.tissue_mask:
+        outputs = []
+        for output_, tissue_mask_ in zip(output, tissue_masks):
+            output_[tissue_mask_.squeeze() > 0, :] = np.array([255, 0, 0])
+            outputs.append(output_)
+        output = np.stack(outputs, axis=0)
     if output.shape[0] == 1:
         return output[0]
     else:
@@ -57,6 +82,14 @@ if __name__ == '__main__':
     model = create_model(opt)
     model.setup()
     model.eval()
+    slides_data = pd.read_csv('/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-04-21.csv')
+    slide_labels, slide_stains = {}, {}
+    for i, slide_row in slides_data.iterrows():
+        slide_id, staining_type, case_type = slide_row['Image'], slide_row['Staining code'], slide_row['Case type']
+        slide_labels[slide_id] = 1 if case_type == 'Real' else 0
+        slide_stains[slide_id] = staining_type
+    hne_slides = set(slide_id for slide_id, stain in slide_stains.items() if stain is np.nan)
+    print(f"{len(hne_slides)} hne slides to process")
     image_paths = list()
     image_paths += list(path for path in Path(opt.data_dir).glob('*.ndpi'))
     image_paths += list(path for path in Path(opt.data_dir).glob('*.svs'))
@@ -74,6 +107,8 @@ if __name__ == '__main__':
         if mask_path.exists():
             continue
         slide_id = re.sub(r'\.(ndpi|svs|tiff)', '', image_path.name)
+        if slide_id not in hne_slides:
+            continue
         print(f"Processing slide: {slide_id} (extension: {image_path.suffix})")
         process_image_with_model = partial(process_image, input_path=image_path, model=model)
         try:
@@ -81,7 +116,7 @@ if __name__ == '__main__':
             success = processor.apply(process_image_with_model, np.uint8, Path(opt.data_dir)/'data'/opt.mask_dirname)
         except (RuntimeError, ValueError, KeyError) as err:
             raise
-        except (FileNotFoundError) as err:
+        except (FileNotFoundError, OpenSlideError, OpenSlideUnsupportedFormatError) as err:
             print(err)
             failure_log.append({
                 'file': str(image_path),
@@ -169,4 +204,3 @@ if __name__ == '__main__':
     with open(logs_dir/f'failures_process_openslide_many_{str(datetime.now())[:10]}', 'w') as failures_log_file:
         json.dump(failure_log, failures_log_file)
     print("Done!")
-

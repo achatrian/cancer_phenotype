@@ -12,8 +12,7 @@ from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 class BenignMalignantDataset(BaseDataset):
 
     def __init__(self, opt):
-        super().__init__()
-        self.opt = opt
+        super().__init__(opt)
         self.opt.data_dir = Path(self.opt.data_dir)
         self.labels, self.ground_truth_paths = [], []
         # read in benign and malignant tile paths

@@ -33,7 +33,7 @@ class TrainOptions(BaseOptions):
         self.parser = parser
         self.is_train = True
 
-    def parse(self):
+    def parse(self, unknown_arg_error=True):
         super().parse()
         if self.opt.message:
             expr_dir = Path(self.opt.checkpoints_dir) / self.opt.experiment_name

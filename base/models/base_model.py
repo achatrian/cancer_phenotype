@@ -14,7 +14,7 @@ class BaseModel:
     """
     Philosophy: a model is different from a pytorch module, as a model may contain
     multiple networks that have a forward method that is not sequential
-    (thing about VAE-GAN)
+    (e.g. VAE-GAN)
 
     call method is forward() -- as in Module
 
@@ -85,14 +85,16 @@ class BaseModel:
         :return:
         """
         if self.gpu_ids:  # push networks and losses modules to gpus if needed
-            for module_name in self.module_names:
+            for i, module_name in enumerate(self.module_names):
                 net = getattr(self, "net" + module_name)
                 net.train()
                 setattr(self, "net" + module_name, networks.init_net(net, self.opt.init_type, self.opt.init_gain,
                                          self.opt.gpu_ids))  # takes care of pushing net to cuda
             assert torch.cuda.is_available(), f"Cuda must be available for gpu option: {str(self.gpu_ids)}"
             for loss_name in self.loss_names:
-                loss = getattr(self, loss_name).cuda(device=self.device)
+                loss = getattr(self, loss_name)
+                if loss is not None:
+                    loss = loss.cuda(device=self.device)
                 setattr(self, loss_name, loss)
         if self.is_train:  # make schedulers
             self.schedulers = [networks.get_scheduler(optimizer, self.opt) for optimizer in self.optimizers]
@@ -139,13 +141,13 @@ class BaseModel:
         r"""
         Updates loss or metric. If model is in validation, validation values are updated
         """
-        n_samples = n_samples or self.output.shape[0]
+        n_samples = n_samples or self.input.shape[0]
         if name in self.loss_names:
             prefix = 'loss_'
         elif name in self.metric_names:
             prefix = 'metric_'
         else:
-            raise ValueError(f"Attempted update of unknown measure {name} - add to loss_names or metric_names")
+            raise ValueError(f"Attempted update of unknown measure '{name}'. Append name to loss_names or metric_names")
         if self.is_val:
             setattr(self, prefix + name + '_val', value.item() if isinstance(value, torch.Tensor) else value)
         else:

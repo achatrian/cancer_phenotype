@@ -2,6 +2,7 @@ from pathlib import Path
 import argparse
 import json
 from math import inf
+from random import shuffle
 import multiprocessing as mp
 from instance_tile_exporter import InstanceTileExporter
 
@@ -20,17 +21,16 @@ if __name__ == '__main__':
     parser.add_argument('--max_instances_per_slide', type=int, default=inf)
     parser.add_argument('--tiles_dirname', type=str, default='tiles')
     parser.add_argument('--stop_overwrite', action='store_true')
+    parser.add_argument('--shuffle_slides', action='store_true')
     args = parser.parse_args()
-    try:
-        # get label directory
-        dir_path = next(path for path in (args.data_dir/'data'/args.tiles_dirname).iterdir()
-                        if path.is_dir() and args.outer_label in path.name)
-    except (FileNotFoundError, StopIteration):
-        dir_path = None
 
     def run_exporter(slide_id):
         try:
-            if args.stop_overwrite and dir_path is not None and not (dir_path/slide_id).is_dir():
+            try:
+                images_paths = list(Path(args.data_dir, 'data', args.tiles_dirname, args.outer_label, 'slide_id').iterdir())
+            except FileNotFoundError:
+                images_paths = []
+            if args.stop_overwrite and len(images_paths) > 0:
                 return
             exporter = InstanceTileExporter(args.data_dir,
                                             slide_id,
@@ -49,6 +49,8 @@ if __name__ == '__main__':
                  for annotation_path in (args.data_dir/'data'/args.annotations_dirname/args.experiment_name).iterdir()
                  if annotation_path.suffix == '.json']
 
+    if args.shuffle_slides:
+        shuffle(slide_ids)
     if args.workers:
         with mp.Pool(args.workers) as pool:
             pool.map(run_exporter, slide_ids)

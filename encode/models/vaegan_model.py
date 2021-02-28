@@ -1,77 +1,92 @@
 import math
-
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.nn import L1Loss, BCELoss
 from base.models.base_model import BaseModel
+from base.utils import debug
 
 
-class VAEModel(BaseModel):
+class VAEGANModel(BaseModel):
 
     def __init__(self, opt):
-        super(VAEModel, self).__init__(opt)
-        self.module_names = ['self.netvae', 'self.netdiscr']
-        self.loss_names = ['bce', 'l1']
-        self.netvae = self.netvae(opt.patch_size, opt.gpu_ids, opt.num_filt_gen, opt.num_lat_dim)
-        self.netdiscr = Discriminator(opt.patch_size, opt.gpu_ids, opt.num_filt_discr)
+        super().__init__(opt)
+        self.module_names = ['vae', 'discr']
+        self.loss_names = ['l1', 'vae', 'kld', 'dis']
+        self.metric_names = ['d_x', 'd_g_z', 'd_g_zp', 'train_dec', 'train_dis']
+        self.netvae = VAE(opt.patch_size, len(opt.gpu_ids), opt.num_filt_gen, opt.num_lat_dim)
+        self.netdiscr = Discriminator(opt.patch_size, len(opt.gpu_ids), opt.num_filt_discr)
         self.l1 = L1Loss()  # TODO no reduction for gt weighting
-        self.bce = BCELoss()
+        self.dis = BCELoss()
+        self.gen, self.vae, self.kld = (None,)*3
+        self.visual_names = ['input', 'output', 'generated']
+        self.visual_types = ['image', 'image', 'image']
         opt_dis = torch.optim.Adam(self.netdiscr.parameters(), lr=opt.learning_rate)
         opt_enc = torch.optim.Adam(self.netvae.encoder.parameters(), lr=opt.learning_rate)
         opt_dec = torch.optim.Adam(self.netvae.decoder.parameters(), lr=opt.learning_rate)
         opt_vae = torch.optim.Adam(self.netvae.parameters(), lr=opt.learning_rate)
-        self.optimizers = {'opt_dis': opt_dis, 'opt_enc': opt_enc, 'opt_dec': opt_dec, 'opt_vae': opt_vae}
+        self.optimizers = [opt_dis, opt_enc, opt_dec, opt_vae]
+        self.equilibrium = 0.55
+        self.margin = 0.4
+
+    def name(self):
+        return "VAEGANModel "
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--num_filt_gen', type=int, default=32)
         parser.add_argument('--num_lat_dim', type=int, default=32)
-        parser.add_argument('--num_filt_discr', type=int, default=32)
+        parser.add_argument('--num_filt_discr', type=int, default=16)
+        return parser
+
+    def set_input(self, data):
+        super().set_input(data)
+        self.visual_paths['generated'] = ['']*len(data['input'])
 
     def forward(self):
-        equilibrium = 0.5
-        margin = 0.3
         self.netvae.zero_grad()
-        self.encoded, self.reconstructed, self.generated = self.netvae(self.input)  # self.generated does not depend on inputs
+        self.encoded, self.output, self.generated = self.netvae(self.input)  # self.generated does not depend on inputs
         mu = self.encoded[0]
         logvar = self.encoded[1]  # !!! log of sigma^2
         # Prior loss (KL div between recognition model and prior)#######
         kld_elements = (mu.pow(2) + logvar.exp() - 1 - logvar) / 2  # log of variance learned by network (why??)
         self.loss_kld = torch.clamp(torch.mean(kld_elements), max=1e15)
 
-        # self.l1 loss between discriminator layers for self.reconstructed and real input
-        self.rec0_loss, self.rec1_loss = self.netdiscr(self.reconstructed, output_layer=True)
-        l_real0, l_real1 = self.netdiscr(self.input, output_layer=True)
-        l_real0.requires_grad(False)
-        l_real1.requires_grad(False)
-        self.loss_l1 = torch.clamp(self.l1(self.rec0_loss, l_real0), max=1e15) + torch.clamp(self.l1(self.rec1_loss, l_real1), max=1e15)
+        # self.l1 loss between discriminator layers for self.output and real input
+        l_rec0, l_rec1 = self.netdiscr(self.output, output_layer=True)
+        with torch.no_grad():  # TODO this right?
+            # push output activations to those generated when input (and not vice versa)
+            l_real0, l_real1 = self.netdiscr(self.input, output_layer=True)
+        self.loss_l1 = torch.clamp(self.l1(l_rec0, l_real0), max=1e15) + \
+                       torch.clamp(self.l1(l_rec1, l_real1), max=1e15)
+        # rec loss
+        loss_rec = self.l1(self.output, self.input)  # TODO this wasn't reduced in code
+        self.loss_vae = loss_rec + self.loss_l1  # I added l1 loss here ...
 
         # GAN loss:
-        d_x = self.netdiscr(self.input)
-        d_g_z = self.netdiscr(self.reconstructed)
-        d_g_zp = self.netdiscr(self.generated)
+        self.d_x = self.netdiscr(self.input)
+        self.d_g_z = self.netdiscr(self.output)
+        self.d_g_zp = self.netdiscr(self.generated)
         # Smooth labels
-        outputs_dis = torch.cat((d_x, d_g_z, d_g_zp), dim=0)
-        targets = torch.cat((torch.rand(d_x.shape[0]) * 0.19 + 0.8,
-                             torch.rand(d_g_z.shape[0] + d_g_zp.shape[0]) * 0.2), dim=0)
+        outputs_dis = torch.cat((self.d_x, self.d_g_z, self.d_g_zp), dim=0)
+        targets = torch.cat((torch.rand(self.d_x.shape[0]) * 0.19 + 0.8,
+                             torch.rand(self.d_g_z.shape[0] + self.d_g_zp.shape[0]) * 0.2), dim=0)
         if torch.cuda.is_available():
             outputs_dis = outputs_dis.cuda()
             targets = targets.cuda()
-        self.loss_dis = self.bce(outputs_dis, targets)
+        self.loss_dis = self.dis(outputs_dis, targets)
         self.loss_gen = - self.loss_dis
 
         # Disable training of either decoder or discriminator if optimization becomes unbalanced
         # (as measured by comparing to some predefined bounds) (as in https://github.com/lucabergamini/VAEGAN-PYTORCH/blob/master/main.py)
-
-        if torch.mean(d_x).data.item() > equilibrium + margin and \
-                torch.mean(d_g_z) < equilibrium - margin and torch.mean(d_g_zp) < equilibrium + margin:
+        if torch.mean(self.d_x).data.item() > self.equilibrium + self.margin and \
+                torch.mean(self.d_g_z) < self.equilibrium - self.margin and torch.mean(self.d_g_zp) < self.equilibrium + self.margin:
             self.train_dis = False
         else:
             self.train_dis = True
 
-        if torch.mean(d_x).data.item() < equilibrium - margin and \
-                torch.mean(d_g_z) > equilibrium + margin and torch.mean(d_g_zp) > equilibrium + margin:
+        if torch.mean(self.d_x).data.item() < self.equilibrium - self.margin and \
+                torch.mean(self.d_g_z) > self.equilibrium + self.margin and torch.mean(self.d_g_zp) > self.equilibrium + self.margin:
             self.train_dec = False
         else:
             self.train_dec = True
@@ -79,37 +94,53 @@ class VAEModel(BaseModel):
     def backward(self):
         gamma = 1.0
         # Optimize:
-        self.optimizers['opt_enc'].zero_grad()
+        self.optimizers[1].zero_grad()
         loss_enc = self.loss_kld + self.loss_l1
-        loss_enc.backward(keep_graph=True)  # since l1 loss is used again in decoder optimization
-        self.optimizers['opt_enc'].step()  # encoder
+        loss_enc.backward(retain_graph=True)  # since l1 loss is used again in decoder optimization
+        self.optimizers[1].step()  # encoder
         # del self.loss_kld  # release graph on unneeded loss
 
         loss_dec = gamma * self.loss_l1 + self.loss_gen
         if self.train_dec:
-            self.optimizers['opt_dec'].zero_grad()
+            self.optimizers[2].zero_grad()
             loss_dec.backward(retain_graph=True)  # since gan loss is used again
-            self.optimizers['opt_dec'].step()  # decoder
-
+            self.optimizers[2].step()  # decoder
             # del loss_enc, self.loss_l1  # release graph on unneeded loss
 
         if self.train_dis:
-            self.optimizers['opt_dis'].zero_grad()
+            self.optimizers[0].zero_grad()
             self.loss_dis.backward(retain_graph=True)
-            self.optimizers['opt_dis'].step()  # discriminator
+            self.optimizers[0].step()  # discriminator
 
         # if train_dec: del loss_dec
         # del self.loss_dis, self.generated, l_rec
 
         # Optimize encoder w.r. to l1 loss for reconstruction (calculated later to save gpu space)
+        self.optimizers[3].zero_grad()
+        self.loss_vae.backward()
+        self.optimizers[3].step()
 
-        self.optimizers['opt_vae'].zero_grad()
-        rec_loss = torch.sum(l1_rec(self.reconstructed, inputs) * gts_weight)
-        vae_loss = rec_loss + self.loss_l1  # I added l1 loss here ...
-        vae_loss.backward()
-        self.optimizers['opt_vae'].step()
+    def optimize_parameters(self):
+        self.forward()
+        self.backward()
+        for scheduler in self.schedulers:
+            # step for schedulers that update after each iteration
+            try:
+                scheduler.batch_step()
+            except AttributeError:
+                pass
+
+    def evaluate_parameters(self):
+        self.u_('kld', self.loss_kld)
+        self.u_('vae', self.loss_vae)
+        self.u_('l1', self.loss_l1)
+        self.u_('dis', self.loss_dis)
+        self.u_('d_x', self.d_x.mean())
+        self.u_('d_g_z', self.d_g_z.mean())
+        self.u_('d_g_zp', self.d_g_zp.mean())
+        self.u_('train_dec', self.train_dec)
+        self.u_('train_dis', self.train_dis)
         
-
 
 ########## NETWORKS ###########
 # custom weights initialization called on netG and netD
@@ -145,9 +176,9 @@ class _Encoder(nn.Module):
 
         n = math.log2(image_size)
 
-        assert n==round(n),'image_size must be a power of 2'
-        assert n>=3,'image_size must be at least 8'
-        n=int(n)
+        assert n == round(n),'image_size must be a power of 2'
+        assert n >= 3,'image_size must be at least 8'
+        n = int(n)
 
         num_lat_dim = max(num_lat_dim // (8*8), 1) * 8 * 8 #ensure multiple of 16
 
@@ -177,7 +208,7 @@ class _Encoder(nn.Module):
         self.varn = nn.Linear(num_lat_dim, num_lat_dim * 2)
 
     def forward(self, input):
-        output = nn.functional.interpolate(self.encoder(input), (8,8))
+        output = nn.functional.interpolate(self.encoder(input), (8, 8))
         inter0 = self.relu(self.instnorm(self.intermediate0(output.view(output.size(0), -1))))
         mu = self.means(inter0)
         sig = self.varn(inter0)
@@ -197,15 +228,15 @@ class _Decoder(nn.Module):
         num_lat_dim = max(num_lat_dim // (8*8), 1) * 8 * 8 #ensure multiple of 16
 
         self.input_block = nn.Sequential(
-            nn.Upsample(size=(16, 16), mode="bilinear"),
-            nn.Conv2d(num_lat_dim * 2 // (8 * 8), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
-            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
-            nn.LeakyReLU(inplace=True),
-            nn.Dropout(p=0.3),
-            nn.Conv2d(num_filt_gen * 2 ** (n - 4), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
-            nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
-            nn.LeakyReLU(inplace=True),
-            nn.Dropout(p=0.3)
+                nn.Upsample(size=(16, 16), mode="bilinear"),
+                nn.Conv2d(num_lat_dim * 2 // (8 * 8), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
+                nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
+                nn.LeakyReLU(inplace=True),
+                nn.Dropout(p=0.3),
+                nn.Conv2d(num_filt_gen * 2 ** (n - 4), num_filt_gen * 2 ** (n - 4), 3, 1, padding=1),
+                nn.InstanceNorm2d(num_filt_gen * 2 ** (n - 4), affine=False),
+                nn.LeakyReLU(inplace=True),
+                nn.Dropout(p=0.3)
             )
 
         self.upscale = nn.Sequential(nn.Upsample(size=(16, 16), mode="bilinear"))
@@ -239,7 +270,7 @@ class _Decoder(nn.Module):
 
 class VAE(nn.Module):
     def __init__(self, image_size, ngpu, num_filt_gen, num_lat_dim, num_channels=3):
-        super(self.netvae, self).__init__()
+        super().__init__()
         self.ngpu = ngpu
         self.sampler = _Sampler()
         self.iscuda = torch.cuda.is_available() and ngpu > 0
@@ -254,18 +285,19 @@ class VAE(nn.Module):
         self.encoded = self.encoder(input)
         sampled = self.sampler(self.encoded)
         N = self.encoded[0].size(0)
-        self.reconstructed = self.decoder(sampled)
+        self.output = self.decoder(sampled)
 
         # Sample from prior
-        noise = torch.normal(torch.zeros((N, self.nz * 2 // (8*8), 8, 8)), torch.ones((N, self.nz * 2 // (8*8), 8, 8))) #feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
-        if self.iscuda: noise = noise.cuda()
+        noise = torch.normal(0.0, 1.0, (N, self.nz * 2 // (8 * 8), 8, 8))  # feeding a random latent vector to decoder # does this encourage repr for glands away from z=0 ???
+        if self.iscuda:
+            noise = noise.cuda()
         self.generated = self.decoder(noise)
-        return self.encoded, self.reconstructed, self.generated
+        return self.encoded, self.output, self.generated
 
     def sample_from(self, mu, logvar):
         sampled = self.sampler((mu, logvar))
-        self.reconstructed = self.decoder(sampled)
-        return self.reconstructed, sampled
+        self.output = self.decoder(sampled)
+        return self.output, sampled
 
 
 class Discriminator(nn.Module):
@@ -275,9 +307,9 @@ class Discriminator(nn.Module):
         self.iscuda = torch.cuda.is_available() and ngpu > 0
 
         n = math.log2(image_size)
-        assert n==round(n),'image_size must be a power of 2'
-        assert n>=3,'image_size must be at least 8'
-        n=int(n)
+        assert n == round(n), 'image_size must be a power of 2'
+        assert n >= 3, 'image_size must be at least 8'
+        n = int(n)
         m = n - 4
 
         #Main downsamples 3 times
@@ -310,7 +342,6 @@ class Discriminator(nn.Module):
         )
 
         #TODO could use more than one layer and sum MSEs
-
         self.end = nn.Sequential(
             nn.AvgPool2d(2, stride=2),
             nn.Conv2d(num_filt_discr * 2 ** (m + 3), num_filt_discr * 2 ** (m + 4), 3, padding=1),
@@ -327,13 +358,6 @@ class Discriminator(nn.Module):
                         nn.Sigmoid()
                         )
 
-        self.aux_classifier = nn.Sequential(
-            nn.Linear(num_filt_discr * 2 ** (m + 4) * 1 * 1, 300),  # padding issues
-            nn.LeakyReLU(inplace=False),
-            nn.Linear(300, 1),
-            nn.Sigmoid()
-        )
-
     def forward(self, input, output_layer=False):
         output = self.main(input)
         features0 = self.features0(output)
@@ -343,5 +367,4 @@ class Discriminator(nn.Module):
         output = self.end(features1)
         output = output.view(output.size(0), -1)  #reshape tensor
         y = self.classifier(output)  #return class probability
-        c = self.aux_classifier(output)
-        return y, c
+        return y

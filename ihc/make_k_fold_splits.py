@@ -8,7 +8,7 @@ from ihc.datasets.ihcpatch_dataset import IHCPatchDataset
 
 
 if __name__ == '__main__':
-    n_splits = 5
+    n_splits = 3
     opt = BaseOptions().gather_options()
     assert opt.dataset_name == 'ihcpatch'
     dataset = IHCPatchDataset(opt)
@@ -36,8 +36,4 @@ if __name__ == '__main__':
         with open(cv_path/f'{n_splits}-split{i}.json', 'w') as split_file:
             json.dump(split, split_file)
     print("Done!")
-
-
-
-
 

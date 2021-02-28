@@ -12,9 +12,22 @@ echo "Username: "`whoami`
 echo "Started at: "`date`
 echo "************************************************************************************"
 
-module load cuda/9.0
-module load cudnn/7.0-9.0
-source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
+# >>> conda initialize >>>
+# !! Contents within this block are managed by 'conda init' !!
+__conda_setup="$('/well/rittscher/projects/base/miniconda3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
+if [ $? -eq 0 ]; then
+    eval "$__conda_setup"
+else
+    if [ -f "/well/rittscher/projects/base/miniconda3/etc/profile.d/conda.sh" ]; then
+        . "/well/rittscher/projects/base/miniconda3/etc/profile.d/conda.sh"
+    else
+        export PATH="/well/rittscher/projects/base/miniconda3/bin:$PATH"
+    fi
+fi
+unset __conda_setup
+# <<< conda initialize <<<
+export CONDA_ENVS_PATH=/well/rittscher/users/achatrian/.conda/envs
+conda activate pyenvclone
 COMMANDS=$(tr ',' ' ' <<< $1)  # substitute commas with spaces
 echo -e "Train commands:\n ${COMMANDS}"
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"

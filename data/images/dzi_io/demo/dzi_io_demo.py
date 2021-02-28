@@ -38,12 +38,12 @@ def main():
     # Now try read_region()
     x0, y0 = int(dzi.width/2), int(dzi.height/2)
     if True:
-        img00 = dzi.read_region((0, 0), 1, (2048,2048), mode=1, border=0)    # Should return image with black borders.
-        img01 = dzi.read_region((dzi.width, dzi.height), 1, (2048, 2048), mode=1, border=255)  # Should return image with white borders.
-        img1 = dzi.read_region((x0, y0), 1, (512, 512), mode=1)
-        img2 = dzi.read_region((x0, y0), 2, (512, 512), mode=1)
-        img3 = dzi.read_region((x0, y0), 3, (512, 512), mode=1)
-        img4 = dzi.read_region((x0, y0), 4, (512, 512), mode=1)
+        img00 = dzi.read_region((0, 0), 1, (2048, 2048))  # Should return image with black borders.
+        img01 = dzi.read_region((dzi.width, dzi.height), 1, (2048, 2048))  # Should return image with white borders.
+        img1 = dzi.read_region((x0, y0), 1, (512, 512))
+        img2 = dzi.read_region((x0, y0), 2, (512, 512))
+        img3 = dzi.read_region((x0, y0), 3, (512, 512))
+        img4 = dzi.read_region((x0, y0), 4, (512, 512))
         utils.multiplot(img00, img01, img1, img2, img3, img4, dpi=200)
 
     # Now try processing the image

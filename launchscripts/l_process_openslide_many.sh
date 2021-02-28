@@ -27,7 +27,7 @@ fi
 unset __conda_setup
 # <<< conda initialize <<<
 export CONDA_ENVS_PATH=/well/rittscher/users/achatrian/.conda/envs
-conda activate pyenvclone
+conda activate pyenv
 COMMANDS=$(tr ',' ' ' <<< $1)  # substitute commas with spaces
 echo -e "Apply commands:\n ${COMMANDS}"
 export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"

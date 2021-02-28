@@ -20,8 +20,7 @@ class WSIDataset(BaseDataset):
         Simple dataset to read tiles from WSIs using WSIReader
         :param opt:
         """
-        super(WSIDataset, self).__init__()
-        self.opt = opt
+        super(WSIDataset, self).__init__(opt)
         self.files = []
         self.slides = []
         self.tiles_per_slide = []

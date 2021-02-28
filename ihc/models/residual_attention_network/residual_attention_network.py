@@ -44,6 +44,7 @@ class ResidualAttentionModel_448input(nn.Module):
         )
         self.fc = nn.Linear(2048, num_class)
         self.attention_maps = []
+        self.features = None
 
     def forward(self, x):
         self.attention_maps = []
@@ -70,8 +71,8 @@ class ResidualAttentionModel_448input(nn.Module):
         out = self.residual_block6(out)
         out = self.mpool2(out)
         out = out.view(out.size(0), -1)
+        self.features = out
         out = self.fc(out)
-
         return out
 
 
@@ -124,7 +125,6 @@ class ResidualAttentionModel_92(nn.Module):
         out = self.mpool2(out)
         out = out.view(out.size(0), -1)
         out = self.fc(out)
-
         return out
 
 

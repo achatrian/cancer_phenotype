@@ -35,9 +35,8 @@ if __name__ == '__main__':
         title_col = min(filtered_col, key=lambda s: len(s))
         plots_titles.add(title_col)
         filtered_col.remove('epoch_iters')  # for selecting y traces
-        figure = plt.figure()
         filtered_results.plot(x='epoch_iters', legend=True, title=f'{args.experiment_name}_{title_col}')
-        figure.savefig(save_dir/f'{args.experiment_name}_{title_col}.png')
+        plt.savefig(save_dir/f'{args.experiment_name}_{title_col}.png')
     print(f"Saved plots {plots_titles}")
 
 

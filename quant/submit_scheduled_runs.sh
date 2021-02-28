@@ -27,14 +27,14 @@ LOGDIR="/well/rittscher/users/achatrian/jobs_logs/run_experiments"
 RUNS_PARAMETERS_FILE=$1
 COMMON_PARAMETERS=$2
 echo -e "Shared run commands:\n ${COMMON_PARAMETERS}"
-cd ../launchscripts/quant
+cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts/quant || exit
 COUNTER=0
 while IFS="" read -r RUN_PARAMETERS || [ -n "$RUN_PARAMETERS" ]
 do
   RUN_COMMANDS="${COMMON_PARAMETERS},${RUN_PARAMETERS}"
   printf 'Submitting %s\n' "$RUN_COMMANDS"
   # FIXME logging file specification gives error: Unable to run job: ERROR! two files are specified for the same host.
-  qsub -o "${LOGDIR}/run_${COUNTER}.o" -e "${LOGDIR}/run_${COUNTER}.e" -P rittscher.prjc -q long.qc -pe shmem 4 ./l_run_mcl_experiment.sh "${RUN_COMMANDS}"
+  qsub -o "${LOGDIR}/run_${COUNTER}.o" -e "${LOGDIR}/run_${COUNTER}.e" -P rittscher.prjc -q long.qc -pe shmem 6 ./l_run_mcl_experiment.sh "${RUN_COMMANDS}"
   COUNTER=$((COUNTER+1))
 done < "${RUNS_PARAMETERS_FILE}"
 printf "\n"

@@ -981,7 +981,7 @@ class DZISequential(object):
 
                     location = (loc_main * scale).astype(np.int)
                     size = np.array([input_imgs[0].shape[1] * scale, input_imgs[0].shape[0] * scale]).astype(np.int)
-                    _input = Image.fromarray(input.read_region(location, 0, size, border=0)).resize(input_img.size)
+                    _input = Image.fromarray(input.read_region(location, 0, size)).resize(input_img.size)
                     input_imgs.append(np.array(_input).astype(np.float))
 
                 output = self.fn(*input_imgs).astype(np.uint8)

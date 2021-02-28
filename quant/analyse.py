@@ -18,7 +18,7 @@ from staintools import StainNormalizer
 from data.images.wsi_reader import WSIReader
 from data.contours import read_annotations, annotations_summary, check_point_overlap
 from data.contours.instance_masker import InstanceMasker
-from utils.contour_processor import ContourProcessor
+from quant.utils.contour_processor import ContourProcessor
 from features import region_properties, gray_haralick, gray_cooccurrence, nuclear_features
 from base.utils.utils import bytes2human
 
@@ -41,10 +41,10 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
     start_processing_time = time.time()
     macenko_normalizer = StainNormalizer(method='macenko')
     reference_image = imread(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                  args.experiment_name, 'references', f'{args.reference_slide}.png'))
+                                  'references', f'{args.reference_slide}.png'))
     macenko_normalizer.fit(reference_image)
     slide_stain_matrix = np.load(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                      args.experiment_name, f'{args.reference_slide}.npy'))
+                                      f'{args.reference_slide}.npy'))
     masker = InstanceMasker(contour_struct[slide_id], args.outer_label, label_values)
     processor = ContourProcessor(masker, reader,
                                  features=[
@@ -164,6 +164,8 @@ def dim_reduce(args):  # TODO test
     r"""Task: Reduce the size of compressed features, useful to reduce very large datasets in size"""
 
     from sklearn.decomposition import IncrementalPCA
+    from sklearn.preprocessing import StandardScaler
+    # FIXME should scale all features before computing PCA, but these should be all at once to get right sscaler parameters
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
     compressed_path, dim_reduce_path = feature_dir/'compressed.h5', feature_dir/'dim_reduced.h5'
     slide_ids = list(h5py.File(compressed_path, 'r').keys())  # read keys to access different stored frames
@@ -172,17 +174,20 @@ def dim_reduce(args):  # TODO test
     try:
         if args.overwrite_model:
             raise FileNotFoundError("")
-        ipca = jl.load(ipca, feature_dir / 'dim_reduce_ipca_model.joblib')
+        ipca = jl.load(feature_dir / 'dim_reduce_ipca_model.joblib')
     except FileNotFoundError:
         # fit loop
         for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Computing PCA incrementally for {len(slide_ids)} slides ...")):
             slide_features = pd.read_hdf(compressed_path, slide_id)
+            if len(slide_features) < args.n_components:
+                continue
             pre_dim_reduce_size += slide_features.memory_usage().sum()
             ipca = ipca.partial_fit(slide_features)
         jl.dump(ipca, feature_dir/'dim_reduce_ipca_model.joblib')
+    print(f"{ipca.explained_variance_ratio_}")
     # save loop
     for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Dimensionality reduction ...")):
-        slide_features = pd.read_hdf(dim_reduce_path, slide_id)
+        slide_features = pd.read_hdf(compressed_path, slide_id)
         slide_features = pd.DataFrame(data=ipca.transform(slide_features), index=slide_features.index)
         slide_features.to_hdf(dim_reduce_path, key=slide_id)
         post_dim_reduce_size += slide_features.memory_usage().sum()
@@ -240,9 +245,27 @@ def filter_(args):
         print(f"Only {args.subsample_fraction*100}% of the dataset was kept")
 
 
-def single_key(args):
+def select_label(args):  # TODO test
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
-    pass
+    compressed_path = feature_dir/'compressed.h5'
+    labelled_path = feature_dir/'labelled.h5'
+    slide_ids = list(h5py.File(compressed_path, 'r').keys())  # read keys to access different stored frames
+    labels = pd.read_csv(args.skip_labels)
+    original_n, final_n = 0, 0
+    pre_filter_size, post_filter_size = 0, 0
+    for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Selecting datapoints by label ...")):
+        slide_id_ = slide_id[:-1]  # FIXME ids in features file have a final undesired period
+        slide_features = pd.read_hdf(compressed_path, slide_id)
+        slide_labels = labels[labels['slide_id'] == slide_id_]
+        box_ids = set([box_id for box_id, label in zip(slide_labels['box_id'], slide_labels['label'])
+                       if label == args.label_num])
+        pre_filter_size += slide_features.memory_usage().sum()
+        original_n += len(slide_features)
+        slide_features = slide_features[slide_features.index.map(lambda box_id: box_id in box_ids)]
+        post_filter_size += slide_features.memory_usage().sum()
+        final_n += len(slide_features)
+        slide_features.to_hdf(labelled_path, key=slide_id)
+    print(f"Done! {original_n - final_n} contours were filtered out of feature file ({bytes2human(pre_filter_size)} --> {bytes2human(post_filter_size)}")
 
 
 # ########## subparser commands ############
@@ -270,7 +293,7 @@ def add_compress_args(parser_compress):
     parser_compress.add_argument('--experiment_name', type=str, required=True,
                                  help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
 
-#
+
 def add_dim_reduce_args(parser_dim_reduce):
     # not used
     parser_dim_reduce.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
@@ -288,9 +311,11 @@ def add_filter_args(parser_filter):
     parser_filter.add_argument('--subsample_fraction', type=float, default=1.0, help="Subsample the dataset further to keep only the important pieces")
 
 
-def add_single_key_args(parser_single_key):
+def add_select_label_args(parser_single_key):
     parser_single_key.add_argument('data_dir', type=Path)
     parser_single_key.add_argument('experiment_name', type=str)
+    parser_single_key.add_argument('label_file', type=Path)
+    parser_single_key.add_argument('--label_num', type=int, default=1)
 
 
 if __name__ == '__main__':
@@ -300,6 +325,7 @@ if __name__ == '__main__':
     add_compress_args(subparsers.add_parser('compress'))
     add_dim_reduce_args(subparsers.add_parser('dim_reduce'))
     add_filter_args(subparsers.add_parser('filter'))
+    add_select_label_args(subparsers.add_parser('select_label'))
     # general arguments
     args = parser.parse_args()
     if args.task is None:
@@ -313,5 +339,7 @@ if __name__ == '__main__':
         dim_reduce(args)
     elif args.task == 'filter':
         filter_(args)
+    elif args.task == 'select_label':
+        select_label(args)
     else:
         raise ValueError(f"Unknown task type {args.task}.")

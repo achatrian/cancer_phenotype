@@ -29,13 +29,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     def run_exporter(slide_id):
-        if args.stop_overwrite and all(Path(args.data_dir, 'data', args.save_dirname, focus_label).is_dir() for focus_label in foci_labels):
-            return None
         try:
             exporter = InstanceTileExporter(args.data_dir, slide_id, tile_size=args.tile_size, mpp=args.mpp,
                                             label_values=label_values, annotations_dirname=args.annotations_dirname,
                                             partial_id_match=False, set_mpp=args.set_mpp)
             for focus_label in foci_labels:
+                try:
+                    slide_tiles_dir = list(Path(args.data_dir, 'data', args.save_dirname, focus_label, slide_id).iterdir())
+                except FileNotFoundError:
+                    slide_tiles_dir = []
+                if args.stop_overwrite and len(slide_tiles_dir) > 0:
+                    print(f"Tiles for {slide_id} already exists")
+                    continue
                 exporter.export_tiles(focus_label, args.data_dir / 'data' / args.save_dirname,
                                       min_read_size=args.min_read_size, min_mask_fill=args.min_mask_fill, smoothing=10)
         except OpenSlideError as err:
@@ -60,10 +65,26 @@ if __name__ == '__main__':
         print(f"Focus tiles exported from {slide_id}")
         return None
 
-    slide_ids = [annotation_path.with_suffix('').name
-                 for annotation_path in
-                 (args.data_dir/'data'/(args.annotations_dirname if args.annotations_dirname is not None else 'annotations')).iterdir()
-                 if annotation_path.suffix == '.json']
+    annotations_dir = args.data_dir/'data'/(args.annotations_dirname
+                                            if args.annotations_dirname is not None else 'annotations')
+    slide_ids_ = [annotation_path.with_suffix('').name for annotation_path in annotations_dir.iterdir()
+                  if annotation_path.suffix == '.json']
+
+    if args.stop_overwrite:
+        slide_ids = []
+        for slide_id in slide_ids_:
+            tile_paths = []
+            for focus_label in foci_labels:
+                try:
+                    tile_paths = list(Path(args.data_dir, 'data', args.save_dirname, focus_label, slide_id).iterdir())
+                except FileNotFoundError:
+                    pass
+            if len(tile_paths) == 0:
+                slide_ids.append(slide_id)
+    else:
+        slide_ids = slide_ids_
+
+    print(f"Extracting foci from {len(slide_ids)} (stop_overwrite={args.stop_overwrite})")
 
     if args.debug_slide is not None:
         slide_ids = [slide_id for slide_id in slide_ids if slide_id in args.debug_slide]

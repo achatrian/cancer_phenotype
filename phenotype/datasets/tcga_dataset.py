@@ -8,8 +8,7 @@ from base.datasets.table_reader import TableReader
 class TCGADataset(BaseDataset):
 
     def __init__(self, opt):
-        super().__init__()
-        self.opt = opt
+        super().__init__(opt)
         # create datasets for whole slide images
         wsi_dataset = find_dataset_using_name('wsi', 'base')
         self.wsi_dataset = wsi_dataset(opt)

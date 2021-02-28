@@ -165,12 +165,11 @@ class UNet4(torch.nn.Module):
 
 class UNet(torch.nn.Module):
 
-    def __init__(self, depth, num_classes, num_input_channels=3, num_filters=10, tile_size=512, max_multiple=32, multiples=None,
+    def __init__(self, depth, num_classes, num_input_channels=3, num_filters=10, max_multiple=32, multiples=None,
                  gaussian_layer=False):
         super(UNet, self).__init__()
 
         self.depth = depth  # number of downsamplings / max depth of encoder network
-        self.tile_size = tile_size
         self.gaussian_layer = gaussian_layer
 
         self.input_block = self.dec1 = torch.nn.Sequential(
@@ -221,6 +220,7 @@ class UNet(torch.nn.Module):
         self.final_conv = torch.nn.Conv2d(2*num_filters, num_classes, kernel_size=1)
 
     def forward(self, x):
+        input_shape = x.size()
         x = self.input_block(x)
         input_x = x.clone()
         encoded = []
@@ -233,9 +233,9 @@ class UNet(torch.nn.Module):
             dec = getattr(self, 'dec{}'.format(d))
             x = torch.cat([x, F.interpolate(encoded[d], x.size()[2:], mode='bilinear')], 1)
             x = dec(x)
-        x = F.interpolate(self.output_block(x), (self.tile_size,) * 2, mode='bilinear')
+        x = F.interpolate(self.output_block(x), input_shape[2:], mode='bilinear')
         if self.gaussian_layer:
-            x = F.interpolate(self.gaussian_layer(x), (self.tile_size,) * 2, mode='bilinear')
+            x = F.interpolate(self.gaussian_layer(x), input_shape[2:], mode='bilinear')
         y = self.final_conv(torch.cat([x, input_x], 1))
         return y
 

@@ -3,12 +3,40 @@ import argparse
 import multiprocessing as mp
 import copy
 import json
+import re
 import torch
 from base import models
 from base import datasets
 from base import deploy
 from base.utils import utils
 from base.options.task_options import get_task_options
+
+
+def remove_args(parser, args):
+    for arg in args:
+        for action in parser._actions:
+            if vars(action)['option_strings'][0] == arg:
+                parser._handle_conflict_resolve(None, [(arg ,action)])
+                break
+
+
+def make_conflict_proof(option_setter):
+    r"""Option setter can add arguments to parser with existing actions with same argument string"""
+    def conflict_proof_option_setter(parser, is_train):
+        parser_ = copy.deepcopy(parser)
+        error = True
+        conflicting_arguments = []
+        while error:
+            try:
+                remove_args(parser_, conflicting_arguments)
+                parser_ = option_setter(parser_, is_train)
+                error = False
+            except argparse.ArgumentError as err:
+                conflict_arg = re.search(r'argument (--\w*)', str(err)).groups()[0]
+                conflicting_arguments.append(conflict_arg)
+        remove_args(parser, conflicting_arguments)
+        return option_setter(parser, is_train)
+    return conflict_proof_option_setter
 
 
 class BaseOptions:
@@ -64,6 +92,7 @@ class BaseOptions:
         model_name = opt.model
         if model_name and model_name != 'none':
             model_option_setter = models.get_option_setter(model_name, task_name)
+            model_option_setter = make_conflict_proof(model_option_setter)
             parser = model_option_setter(parser, self.is_train)
             opt, _ = parser.parse_known_args()  # parse again with the new defaults
 
@@ -71,11 +100,13 @@ class BaseOptions:
         dataset_name = opt.dataset_name
         if dataset_name and dataset_name != 'none':
             dataset_option_setter = datasets.get_option_setter(dataset_name, task_name)
+            dataset_option_setter = make_conflict_proof(dataset_option_setter)
             parser = dataset_option_setter(parser, self.is_train)
 
         if hasattr(opt, 'deployer_name'):
             # modify deployer-related parser options
             deployer_option_setter = deploy.get_option_setter(opt.deployer_name, task_name)
+            deployer_option_setter = make_conflict_proof(deployer_option_setter)
             parser = deployer_option_setter(parser, self.is_train)
 
         self.parser = parser

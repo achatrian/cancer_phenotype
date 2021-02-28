@@ -2,6 +2,7 @@ from pathlib import Path
 from functools import partial
 from typing import Union
 import warnings
+import time
 from random import sample
 import numpy as np
 import cv2
@@ -12,7 +13,9 @@ from rtree import index
 from annotation.annotation_builder import AnnotationBuilder
 from data.images.wsi_reader import WSIReader
 from data.images.dzi_io import DZI_IO
+from base.utils.timer import Timer
 from base.utils import debug
+
 
 r"""Functions to extract and order images and annotation data, for computing features and clustering"""
 
@@ -139,7 +142,7 @@ def check_point_overlap(parent_contour, child_contour, n_points=5):
     return all(cv2.pointPolygonTest(parent_contour, tuple(point), False) >= 0 for point in child_points)
 
 
-def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None):
+def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None, verbose=False):
     r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
     :param slide_contours:
     :param different_labels: whether overlap is reported only for contours of different classes
@@ -152,19 +155,24 @@ def find_overlap(slide_contours: dict, different_labels=True, selected_labels=No
         contours.extend(layer_contours[i] for i in indices)
         labels.extend([layer_name] * len(indices))
     contour_bbs = [cv2.boundingRect(contour) for contour in contours]
-    idx = index.Index()
-    for i, (x, y, w, h) in enumerate(contour_bbs):
-        idx.insert(i, (x, y, x + w, y + h))
+    start_time = time.time()
+    with Timer(None, "Time to construct rtree = {:0.4f}", logger=print if verbose else None):
+        idx = index.Index(((i, (x, y, x + w, y + h)) for i, (x, y, w, h) in enumerate(contour_bbs)))
     overlap_struct = []
-    for parent_bb, parent_label in tqdm(zip(contour_bbs, labels), total=len(contour_bbs),
-                                        desc="Discovering overlapping contours ..."):
-        if selected_labels is not None and parent_label not in selected_labels:
-            overlap_struct.append([])
-            continue
-        x, y, w, h = parent_bb
-        all_overlaps = list(idx.intersection((x, y, x + w, y + h)))  # query for overlapping bbs among the tree nodes
-        overlap_vector = [i for i in all_overlaps if labels[i] != parent_label] if different_labels else all_overlaps
-        overlap_struct.append(overlap_vector)
+    boxes_and_labels = zip(contour_bbs, labels)
+    if verbose:
+        boxes_and_labels = tqdm(boxes_and_labels, total=len(contour_bbs), desc="Discovering overlapping contours ...")
+    for parent_bb, parent_label in boxes_and_labels:
+        with Timer('overlap', "Time to compute overlap = {:0.4f}", print if verbose else None):
+            if selected_labels is not None and parent_label not in selected_labels:
+                overlap_struct.append([])
+                continue
+            x, y, w, h = parent_bb
+            all_overlaps = list(idx.intersection((x, y, x + w, y + h)))  # query for overlapping bbs among the tree nodes
+            overlap_vector = [i for i in all_overlaps if labels[i] != parent_label] if different_labels else all_overlaps
+            overlap_struct.append(overlap_vector)
+    if verbose:
+        print(f"Average time taken to find overlapping boxes = {Timer.averages['overlap']}")
     return overlap_struct, contours, contour_bbs, labels
 
 
@@ -179,7 +187,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
     :return:
     """
     assert type(contour) is np.ndarray and contour.size > 0, "Non-empty numpy array expected for contour"
-    #assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
+    # assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
     contour = contour.squeeze()
     contour_origin = contour.min(0)
     if mask_origin:
@@ -336,7 +344,7 @@ def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_s
     except OpenSlideError:
         raise
     if image.shape[2] == 4:
-        image = (color.rgba2rgb(image) * 255).astype(np.uint8)  # RGBA to RGB TODO this failed feature.is_image() test
+        image = image[..., :3]
     return image
 
 

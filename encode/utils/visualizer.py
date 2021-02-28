@@ -1,11 +1,12 @@
 import os
+from collections import OrderedDict
 import numpy as np
 import cv2
 from base.utils.base_visualizer import BaseVisualizer, VisdomExceptionBase
 from base.utils import utils, html_
 
 
-class SegmentVisualizer(BaseVisualizer):
+class EncodeVisualizer(BaseVisualizer):
 
     def __init__(self, opt):
         super().__init__(opt)
@@ -92,6 +93,25 @@ class SegmentVisualizer(BaseVisualizer):
                 webpage.add_images(ims, txts, links, width=self.win_size)
             webpage.save()
 
+    def print_current_losses_metrics(self, epoch, iters, losses, metrics, t=None, t_data=None):
+        if type(epoch) is str and epoch.isdigit():
+            epoch = int(epoch)
+        if iters:  # iter is not given in validation/testing (confusing?)
+            message = '(epoch: {:d}, iters: {:d}, time: {:.3f}, data: {:.3f}) '.format(epoch, iters, t, t_data)
+        else:
+            message = '(epoch: {}, validation) '.format(epoch)
+        for i, (k, v) in enumerate((OrderedDict(losses, **metrics)).items()):  # not displayed in correct order in python <3.6
+            if not iters:
+                k = '_'.join(k.split('_')[0:-1])
+            if len(k) > 10:
+                k = k[:10]  # shorten very long strings
+            message += '{}: {:.3E} '.format(k, v)  # losses are printed in scientific notation
+        print(message)
+        with open(self.log_name, "a") as log_file:
+            log_file.write(f'{message}\n')
+        self.log_losses_metrics_to_file(OrderedDict(losses, **metrics), epoch, iters)
+        return message
+
     # losses: dictionary of error labels and values
     def plot_current_losses_metrics(self, epoch, epoch_progress, losses, metrics):
         """
@@ -105,14 +125,14 @@ class SegmentVisualizer(BaseVisualizer):
         if not hasattr(self, 'loss_data'):
             losses_legend = list(losses.keys()) + [loss + "_val" for loss in losses.keys() if
                                                    not loss.endswith('_val')]
-            self.loss_data = {'X': [epoch - 0.05], 'Y': [[0] * len(losses_legend)], 'legend': losses_legend}
+            self.loss_data = {'X': [epoch - 0.000001], 'Y': [[0] * len(losses_legend)], 'legend': losses_legend}
         self.loss_data['X'].append(epoch + epoch_progress)
         # fill with latest value if loss is not given for update
         self.loss_data['Y'].append([losses[k] if k in losses.keys() else self.loss_data['Y'][-1][i]
                                     for i, k in enumerate(self.loss_data['legend'])])
         if not hasattr(self, 'metric_data'):
             metrics_legend = list(metrics.keys()) + [metric + "_val" for metric in metrics.keys()]
-            self.metric_data = {'X': [epoch - 0.05], 'Y': [[0] * len(metrics_legend)], 'legend': metrics_legend}
+            self.metric_data = {'X': [epoch - 0.000001], 'Y': [[0] * len(metrics_legend)], 'legend': metrics_legend}
         self.metric_data['X'].append(epoch + epoch_progress)
         self.metric_data['Y'].append([metrics[k] if k in metrics.keys() else self.metric_data['Y'][-1][j]
                                       for j, k in enumerate(self.metric_data['legend'])])

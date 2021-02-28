@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from options.compute_vat_uncertainty_options import ComputeVATUncertaintyOptions
 from models import create_model
-from inference.wsi_processor__ import WSIProcessor
+from inference.wsi_processor import WSIProcessor
 from annotation.annotation_builder import AnnotationBuilder
 
 

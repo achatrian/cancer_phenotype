@@ -5,14 +5,14 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from imageio import imwrite
-from base.options.salience_options import SalienceOptions
+from base.options.attribution_options import AttributionOptions
 from base.datasets import create_dataset, create_dataloader
 from base.models import create_model
 r"Test script for network, aggregates results over whole validation dataset"
 
 
 if __name__ == '__main__':
-    opt = SalienceOptions().parse()
+    opt = AttributionOptions().parse()
     print(f"Running on host: '{socket.gethostname()}'")
     # hard-code some parameters for test
     opt.sequential_samples = True  # no shuffle

@@ -5,6 +5,7 @@ import time
 import warnings
 from numbers import Real
 import numpy as np
+from scipy.stats import kurtosis
 from skimage import measure
 from skimage import color
 from skimage import feature
@@ -248,20 +249,24 @@ rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + [
     ]
 
 
-@MakeFeature(['nuclear_' + rp_name for rp_name in rp_names] + ['nuclear_density'])
-def nuclear_features(mask, image, map_values=((250, 0), (200, 0))):
+@MakeFeature(['nuclear_' + rp_name for rp_name in rp_names] + ['nuclear_std' + rp_name for rp_name in rp_names] +
+             ['nuclear_kurtosis' + rp_name for rp_name in rp_names] + ['nuclear_perimeter', 'num_nuclei', 'nuclei_to_tissue_ratio'])
+def nuclear_features(mask, image, tissue_value=200, map_values=((250, 0), (200, 0))):
     if image.shape[2] == 3:  # assume RGB
         image = color.rgb2gray(image)
+    tissue_extent = np.sum(mask[mask == tissue_value])  # store extent of tissue in mask
     if map_values is not None:
         mask = mask.copy()  # need to copy mask as we're modifying it
         for from_val, to_val in map_values:
             mask[mask == from_val] = to_val
+    nuclei_extent = np.sum(mask[mask > 0])
+    nuclei_to_tissue_ratio = nuclei_extent/tissue_extent  # normalizations by size of mask cancel out in fraction
     assert image.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
     assert mask.ndim == 2
     label_mask = measure.label(mask.astype(np.int32))
     nuclear_rps = measure.regionprops(label_mask, intensity_image=image)
     if len(nuclear_rps) == 0:
-        return (0,)*13
+        return (0,)*38
     features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigvals': []}
     nuclear_perimeter, previous_nuclear_rp = 0, None  # compute distance connecting all nuclei in an image
     for nuclear_rp in nuclear_rps:
@@ -272,14 +277,16 @@ def nuclear_features(mask, image, map_values=((250, 0), (200, 0))):
             nuclear_perimeter += np.linalg.norm(np.array(nuclear_rp.centroid) -
                                                 np.array(previous_nuclear_rp.centroid), ord=2)
         previous_nuclear_rp = nuclear_rp
-    mean_features = {}
+    mean_features, std_features, kurtosis_features = {}, {}, {}
     for name, values in features.items():
         if isinstance(values[0], Real):
-            mean_features[name] = sum(values)/len(values)
+            mean_features[name], std_features[name], kurtosis_features[name] = sum(values)/len(values), 0, 0
         elif isinstance(values[0], (tuple, list, np.ndarray)):
             values = np.array(values)
             for index in range(values.shape[1]):
                 mean_features[f'{name}{index}'] = np.mean(values[:, index])
-    nuclear_density = nuclear_perimeter / len(nuclear_rps)
-    return tuple(mean_features.values()) + (nuclear_density,)
+                std_features[f'{name}{index}'] = np.std(values[:, index])
+                kurtosis_features[f'{name}{index}'] = kurtosis(values[:, index])
+    return tuple(mean_features.values()) + tuple(std_features.values()) + tuple(kurtosis_features.values()) \
+           + (nuclear_perimeter, len(nuclear_rps), nuclei_to_tissue_ratio)
 

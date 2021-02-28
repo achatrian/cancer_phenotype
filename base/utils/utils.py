@@ -1,15 +1,21 @@
 from __future__ import print_function
 from pathlib import Path
+from PIL import Image
 import time
 import socket
 import re
 from collections import OrderedDict
 from torch import nn
+import torch
 from argparse import ArgumentTypeError
 import numpy as np
 import cv2
 from torchsummary import summary
+from matplotlib import cm
 # TODO remove unused functions and clean up existing and used ones !
+
+
+
 
 
 def str_is_int(s):
@@ -71,6 +77,18 @@ def bytes2human(n):
             value = float(n) / prefix[s]
             return '{:.2f}{}B'.format(value, s)
     return "{}B".format(n)
+
+
+def namespace_to_dict(namespace):
+    dict_ = {}
+    for k, v in vars(namespace).items():
+        if isinstance(v, Path):
+            v = str(v)
+        elif isinstance(v, np.ndarray):
+            v = v.tolist()
+        k = str(k)
+        dict_[k] = v
+    return dict_
 
 
 #### torch
@@ -284,223 +302,3 @@ def diagnose_network(net, name='network'):
 def save_image(image_numpy, image_path):
     image_pil = Image.fromarray(image_numpy)
     image_pil.save(image_path)
-
-# Saliency maps utils
-"""
-Created on Thu Oct 21 11:09:09 2017
-
-@author: Utku Ozbulak - github.com/utkuozbulak
-"""
-import os
-import copy
-import numpy as np
-from PIL import Image
-import matplotlib.cm as mpl_color_map
-
-import torch
-from torch.autograd import Variable
-from torchvision import models
-
-
-def convert_to_grayscale(im_as_arr):
-    """
-        Converts 3d images to grayscale
-
-    Args:
-        im_as_arr (numpy arr): RGB images with shape (D,W,H)
-
-    returns:
-        grayscale_im (numpy_arr): Grayscale images with shape (1,W,D)
-    """
-    grayscale_im = np.sum(np.abs(im_as_arr), axis=0)
-    im_max = np.percentile(grayscale_im, 99)
-    im_min = np.min(grayscale_im)
-    grayscale_im = (np.clip((grayscale_im - im_min) / (im_max - im_min), 0, 1))
-    grayscale_im = np.expand_dims(grayscale_im, axis=0)
-    return grayscale_im
-
-
-def save_gradient_images(gradient, file_path):
-    """
-        Exports the original gradient images
-
-    Args:
-        gradient (np arr): Numpy array of the gradient with shape (3, 224, 224)
-        file_name (str): File name to be exported
-        save_dir (str): path to saving location
-    """
-    # Normalize
-    gradient = gradient - gradient.min()
-    gradient /= gradient.max()
-    # Save images
-    file_path = Path(file_path).with_suffix('.png')
-    file_path.parent.mkdir(exist_ok=True)
-    save_image(gradient, file_path)
-
-
-def save_class_activation_images(org_img, activation_map, file_name):
-    """
-        Saves cam activation map and activation map on the original images
-
-    Args:
-        org_img (PIL example_grid): Original images
-        activation_map (numpy arr): Activation map (grayscale) 0-255
-        file_name (str): File name of the exported images
-    """
-    if not os.path.exists('../results'):
-        os.makedirs('../results')
-    # Grayscale activation map
-    heatmap, heatmap_on_image = apply_colormap_on_image(org_img, activation_map, 'hsv')
-    # Save colored heatmap
-    path_to_file = os.path.join('../results', file_name+'_Cam_Heatmap.png')
-    print(np.max(heatmap))
-    save_image(heatmap, path_to_file)
-    # Save heatmap on iamge
-    print()
-    print(np.max(heatmap_on_image))
-    path_to_file = os.path.join('../results', file_name+'_Cam_On_Image.png')
-    save_image(heatmap_on_image, path_to_file)
-    # Save grayscale heatmap
-    print()
-    print(np.max(activation_map))
-    path_to_file = os.path.join('../results', file_name+'_Cam_Grayscale.png')
-    save_image(activation_map, path_to_file)
-
-
-def apply_colormap_on_image(org_im, activation, colormap_name):
-    """
-        Apply heatmap on images
-    Args:
-        org_img (PIL example_grid): Original images
-        activation_map (numpy arr): Activation map (grayscale) 0-255
-        colormap_name (str): Name of the colormap
-    """
-    # Get colormap
-    color_map = mpl_color_map.get_cmap(colormap_name)
-    no_trans_heatmap = color_map(activation)
-    # Change alpha channel in colormap to make sure original images is displayed
-    heatmap = copy.copy(no_trans_heatmap)
-    heatmap[:, :, 3] = 0.4
-    heatmap = Image.fromarray((heatmap*255).astype(np.uint8))
-    no_trans_heatmap = Image.fromarray((no_trans_heatmap*255).astype(np.uint8))
-
-    # Apply heatmap on iamge
-    heatmap_on_image = Image.new("RGBA", org_im.size)
-    heatmap_on_image = Image.alpha_composite(heatmap_on_image, org_im.convert('RGBA'))
-    heatmap_on_image = Image.alpha_composite(heatmap_on_image, heatmap)
-    return no_trans_heatmap, heatmap_on_image
-
-
-def save_image(im, path):
-    """
-        Saves a numpy matrix of shape D(1 or 3) x W x H as an images
-    Args:
-        im_as_arr (Numpy array): Matrix of shape DxWxH
-        path (str): Path to the images
-
-    TODO: Streamline images saving, it is ugly.
-    """
-    if isinstance(im, np.ndarray):
-        if len(im.shape) == 2:
-            im = np.expand_dims(im, axis=0)
-            print('A')
-            print(im.shape)
-        if im.shape[0] == 1:
-            # Converting an images with depth = 1 to depth = 3, repeating the same values
-            # For some reason PIL complains when I want to save channel images as jpg without
-            # additional format in the .save()
-            print('B')
-            im = np.repeat(im, 3, axis=0)
-            print(im.shape)
-            # Convert to values to range 1-255 and W,H, D
-        # A bandaid fix to an issue with gradcam
-        if im.shape[0] == 3 and np.max(im) == 1:
-            im = im.transpose(1, 2, 0) * 255
-        elif im.shape[0] == 3 and np.max(im) > 1:
-            im = im.transpose(1, 2, 0)
-        elif im.shape[2] == 3:
-            if np.max(im) == 1:
-                im = im * 255
-        else:
-            raise ValueError(f"Invalid array dimensions {im.shape} for images data")
-        im = Image.fromarray(im.astype(np.uint8))
-    im.save(path)
-
-
-def preprocess_image(pil_im, resize_im=True):
-    """
-        Processes images for CNNs
-
-    Args:
-        PIL_img (PIL_img): Image to process
-        resize_im (bool): Resize to 224 or not
-    returns:
-        im_as_var (torch variable): Variable that contains processed float tensor
-    """
-    # mean and std list for channels (Imagenet)
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-    # Resize images
-    if resize_im:
-        pil_im.thumbnail((512, 512))
-    im_as_arr = np.float32(pil_im)
-    im_as_arr = im_as_arr.transpose(2, 0, 1)  # Convert array to D,W,H
-    # Normalize the channels
-    for channel, _ in enumerate(im_as_arr):
-        im_as_arr[channel] /= 255
-        im_as_arr[channel] -= mean[channel]
-        im_as_arr[channel] /= std[channel]
-    # Convert to float tensor
-    im_as_ten = torch.from_numpy(im_as_arr).float()
-    # Add one more channel to the beginning. Tensor shape = 1,3,224,224
-    im_as_ten.unsqueeze_(0)
-    # Convert to Pytorch variable
-    im_as_var = Variable(im_as_ten, requires_grad=True)
-    return im_as_var
-
-
-def recreate_image(im_as_var):
-    """
-        Recreates images from a torch variable, sort of reverse preprocessing
-    Args:
-        im_as_var (torch variable): Image to recreate
-    returns:
-        recreated_im (numpy arr): Recreated images in array
-    """
-    reverse_mean = [-0.485, -0.456, -0.406]
-    reverse_std = [1/0.229, 1/0.224, 1/0.225]
-    recreated_im = copy.copy(im_as_var.data.numpy()[0])
-    for c in range(3):
-        recreated_im[c] /= reverse_std[c]
-        recreated_im[c] -= reverse_mean[c]
-    recreated_im[recreated_im > 1] = 1
-    recreated_im[recreated_im < 0] = 0
-    recreated_im = np.round(recreated_im * 255)
-
-    recreated_im = np.uint8(recreated_im).transpose(1, 2, 0)
-    return recreated_im
-
-
-def get_positive_negative_saliency(gradient):
-    """
-        Generates positive and negative saliency maps based on the gradient
-    Args:
-        gradient (numpy arr): Gradient of the operation to visualize
-
-    returns:
-        pos_saliency ( )
-    """
-    pos_saliency = (np.maximum(0, gradient) / gradient.max())
-    neg_saliency = (np.maximum(0, -gradient) / -gradient.min())
-    return pos_saliency, neg_saliency
-
-
-def overlay_grids(example_grid, gradient_grid, threshold=0.1, weights=(0.75, 0.25)):
-    r"""overlay images and gradient grids by alpha blending"""
-    # https://docs.opencv.org/trunk/d0/d86/tutorial_py_image_arithmetics.html
-    # overlay two color grids, one of images and one of saliency maps
-    gradient_grid[gradient_grid < threshold] = 0.0
-    gradient_grid = gradient_grid * 255.0  # gradient grid goes from 0 to 1
-    example_grid = (example_grid + 1) / 2.0 * 255.0  # example grid goes from -1 to 1
-    return cv2.addWeighted(example_grid, weights[0], gradient_grid, weights[1], 0)
-

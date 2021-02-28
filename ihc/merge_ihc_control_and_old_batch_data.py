@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 
 
-r"""Step that needs to be carried out before extracting the foci area for ihc classification:
+r"""Step preceding foci area extraction for ihc classification:
 Merges slides' additional data for ihc and control cases
 """
 
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     old_batch = old_batch.drop('Benign/Malegnant', axis=1).rename({'Benign/Malignant': 'Diagnosis'})
     all_cases_data = pd.concat((ihc, control))
     all_cases_data.to_csv(args.target_dir/f'additional_data_{str(datetime.now())[:10]}.csv')
-    print(f"Saved additional data for {len(all_cases_data)} cases in {args.target_dir}")
+    print(f"Saved additional data for {len(all_cases_data)} foci in {args.target_dir}")
 
     with open(args.ihc_annotation_file, 'r') as ihc_annotation_file:
         ihc_annotation = pd.read_csv(ihc_annotation_file)

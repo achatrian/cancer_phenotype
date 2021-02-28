@@ -17,8 +17,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score, \
     adjusted_mutual_info_score, adjusted_rand_score, confusion_matrix
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from sklearn.feature_selection import SelectPercentile
+from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 import h5py
 import umap
@@ -78,11 +79,11 @@ class MCLExperiment(BaseExperiment):
         self.som = None
         self.run_key = None
         self.clustering, self.clusters, self.matrix = (None,) * 3
+        self.distributions = None
 
     def __del__(self):
         if self.h5_results_file is not None:
             self.h5_results_file.close()  # ensure hdf5 file gets closed, to prevent corruption of its data
-        # TODO CHECK: is this working during debugging?
 
     @staticmethod
     def name():
@@ -103,7 +104,9 @@ class MCLExperiment(BaseExperiment):
         parser.add_argument('--overwrite', action='store_true', help="Whether to discard old models and overwrite them")
         parser.add_argument('--gleason_file', type=Path,
                             default=r'/well/rittscher/projects/TCGA_prostate/TCGA/data/gdc_download_20190827_173135.969230/06efd272-a76f-4703-98b8-dfa751c0f019/nationwidechildrens.org_clinical_patient_prad.txt')
-        parser.add_argument('--train_fraction', type=float, default=0.5, help="fraction of dataset used to train rf for gleason prediction")
+        parser.add_argument('--train_fraction', type=float, default=0.7, help="fraction of dataset used to train rf for gleason prediction")
+        parser.add_argument('--full_histograms', action='store_true', help="whether to normalize cluster histograms before grade classification")
+        parser.add_argument('--labels_file', type=Path, default=None)
         return parser
 
     def read_data(self):
@@ -137,6 +140,19 @@ class MCLExperiment(BaseExperiment):
             features.to_hdf(features_file.parent/f'single_key_{self.args.features_filename[:-3]}.h5', 'features')
         print(f"Features were read (size: {bytes2human(features.memory_usage().sum())})")
         print(f"Data shape: {features.shape}")
+        # if self.args.labels_file:
+        #     original_features_len = len(features)
+        #     box_ids = features.index.get_level_values('bounding_box').tolist()
+        #     to_drop = []
+        #     labels = pd.read_csv(self.args.labels_file)
+        #     benign_labels = labels[labels['positive_probability'] < 0.5]
+        #     for _, row in benign_labels.iterrows():
+        #         try:
+        #             to_drop.append(box_ids.index(row['box_id']))  # FIXME superslow
+        #         except ValueError:
+        #             pass
+        #     features.drop(to_drop, inplace=True)
+        #     print(f"Removed {len(features) - original_features_len} benign glands")
         if self.args.debug:  # subsample features
             features = features.sample(n=1000)
         if self.args.isolation_contamination.isnumeric():
@@ -166,6 +182,17 @@ class MCLExperiment(BaseExperiment):
             self.log.update({'outlier_removal': False, 'num_removed_outliers': 0})
         h5_results_group.create_dataset('features', data=np.array(features))
         self.features = features
+        # read distance histograms
+        distances_dir = self.args.data_dir / 'data' / 'features' / self.args.segmentation_experiment / 'relational'
+        with open(distances_dir/'distance_distributions.json', 'r') as distributions_file:
+            self.distributions = pd.read_json(distributions_file)
+        self.distributions.index.rename('slide_id', inplace=True)
+        self.distributions.drop(
+            set(self.distributions.index.unique(level='slide_id')) - set(self.features.index.unique(level='slide_id')),
+            inplace=True
+        )  # drop distributions for slides that don't have features
+        print(f"Distributions were loaded: shape = {self.distributions.shape}")
+        assert len(self.distributions) == len(self.features.index.unique(level='slide_id')), f"Length of distributions differs from length of features {len(self.distributions)} ≠ {len(self.features.index.unique(level='slide_id'))}"
 
     def preprocess(self, parameters=None):
         if parameters is None:
@@ -227,19 +254,25 @@ class MCLExperiment(BaseExperiment):
             h5_iteration_group.create_dataset('clustering', data=self.clustering.toarray())
             jl.dump(self.clustering, self.run_results_dir / 'clustering.joblib')
             self.clusters = mc.get_clusters(self.clustering)
-            self.clusters = [list(c) for c in self.cluters]  # so that repeated elements can be removed below
+            self.clusters = self.trim_double_cluster_assignments(self.clusters, h5_iteration_group)
             assigned_nodes = set()  # get_clusters() can assign a node to two clusters
-            for i, cluster_nodes in enumerate(copy(self.clusters)):  # FIXME still crashing because of extra index?
-                for ci in cluster_nodes:
-                    if ci in assigned_nodes:
-                        self.clusters[i].remove(ci)
-                        cluster_nodes.remove(ci)
-                    assigned_nodes.add(ci)
-                cluster_nodes = [int(n) for n in cluster_nodes]
-                h5_iteration_group.create_dataset(f'cluster{i}', data=np.array(cluster_nodes))
             h5_iteration_group.create_dataset('num_clusters', data=len(self.clusters))
             with open(self.run_results_dir / 'clusters.json', 'w') as clusters_file:
                 json.dump(self.clusters, clusters_file)
+
+    def trim_double_cluster_assignments(self, clusters, h5_iteration_group=None):
+        r"""mc.get_clusters() assigns some codebooks to two clusters. Trim doubles away with this function"""
+        clusters = [list(c) for c in clusters]  # so that repeated elements can be removed below
+        assigned_nodes = set()  # get_clusters() can assign a node to two clusters
+        for i, cluster_nodes in enumerate(copy(clusters)):  # FIXME still crashing because of extra index?
+            for ci in cluster_nodes:
+                if ci in assigned_nodes:
+                    clusters[i].remove(ci)
+                assigned_nodes.add(ci)
+            cluster_nodes = [int(n) for n in clusters[i]]
+            if h5_iteration_group is not None:
+                h5_iteration_group.create_dataset(f'cluster{i}', data=np.array(cluster_nodes))
+        return clusters
 
     def set_run_properites(self, parameters):
         self.run_parameters = parameters
@@ -285,7 +318,7 @@ class MCLExperiment(BaseExperiment):
         distance, indices = nearest_neighbours.kneighbors(self.features)  # find nearest SOM codebook for each data-point
         distance = distance.ravel()
         indices = indices.ravel()
-        # assign each point to the markov cluster of his nearest codebook
+        # assign each point to the markov cluster of its nearest codebook
         cluster_assignment = pd.Series(data=[som_cluster_membership[idx] for idx in indices], index=self.features.index)
         membership_histogram = np.histogram(cluster_assignment, bins=num_clusters, range=(0, num_clusters))[0]
         # histogram of cluster membership
@@ -331,7 +364,7 @@ class MCLExperiment(BaseExperiment):
                           with_labels=False, edge_color="silver")
             fig.savefig(viz_path)
             plt.close()
-        
+
     def compute_per_slide_cluster_histograms(self, cluster_assignment, num_clusters, save_dir):
         # calculate cluster histograms per slide
         try:
@@ -340,19 +373,37 @@ class MCLExperiment(BaseExperiment):
             histograms = dict()
             for slide_id in np.unique(cluster_assignment.index.get_level_values('slide_id')):
                 assignments = cluster_assignment.loc[slide_id]
-                histograms[slide_id] = np.histogram(assignments, bins=num_clusters, range=(0, num_clusters), density=True)[
-                    0]
+                histograms[slide_id] = np.histogram(assignments, bins=num_clusters, range=(0, num_clusters),
+                                                    density=not self.args.full_histograms)[0]
             histograms = pd.DataFrame(histograms).T  # slide ids will be index values instead of columns
             histograms.to_csv(save_dir / 'histograms.csv')
         return histograms
 
-    def assess_gleason_predictiveness(self, slide_histograms, save_dir):
+    def make_prototype_features(self, cluster_assignment):
+        r"""Get representative features for every cluster"""
+        cluster_assignment.name = 'cluster'
+        clustered_features = pd.concat((self.features, cluster_assignment), axis=1)
+        clustered_features.set_index('cluster', append=True, inplace=True)
+        median_features = clustered_features.groupby(by=['slide_id', 'cluster']).median()
+        # create data-frames with one row per slide id and one row per cluster
+        clusters = np.unique(cluster_assignment)
+        median_features = pd.DataFrame(PCA(n_components=20).fit_transform(median_features), index=median_features.index)
+        median_features.sort_index(inplace=True)
+        for slide_id, cluster in pd.MultiIndex.from_product((median_features.index.levels[0], clusters)):
+            if (slide_id, cluster) not in median_features.index:
+                median_features.append(pd.DataFrame(data=[[0]*20], index=[np.array([slide_id]), np.array([cluster])]),
+                                       ignore_index=False)
+        median_features.sort_index(inplace=True)
+        median_features = median_features.unstack(level='cluster')
+        return median_features
+
+    def assess_gleason_predictiveness(self, slides_histograms, cluster_assignment, save_dir):
         tqdm.write("Assessing correlation between gleason score and clusters ...")
         # read gleason file
         gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])
         # construct labels for the histogram data-points
         labels = []
-        for slide_id, row in slide_histograms.iterrows():
+        for slide_id, row in slides_histograms.iterrows():
             subtable = gleason_table[gleason_table['bcr_patient_barcode'].str.startswith(slide_id[:12])]
             assert (len(subtable) == 1)
             if subtable['gleason_pattern_primary'].iloc[0] + subtable['gleason_pattern_secondary'].iloc[0] == 7:
@@ -366,9 +417,22 @@ class MCLExperiment(BaseExperiment):
                 labels.append('low')
             else:
                 labels.append('high')
+        prototype_features = self.make_prototype_features(cluster_assignment)
+        slide_features = pd.concat((slides_histograms, prototype_features, self.distributions), axis=1)  # TODO test
         # train to predict gleason from clusters
         # labels_rfc = [{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels]
-        labels_rfc = [{'low': 0, '7': 1, 'high': 2}[label] for label in labels]
+        labels_rfc = np.array([{'low': 0, '7': 1, 'high': 2}[label] for label in labels])
+        # save dim reduction of histograms:
+        dim_reduced = PCA(n_components=2).fit_transform(slides_histograms)
+        figure = plt.figure()
+        plt.scatter(dim_reduced[labels_rfc == 0][:, 0], dim_reduced[labels_rfc == 0][:, 1], c='r')
+        plt.scatter(dim_reduced[labels_rfc == 1][:, 0], dim_reduced[labels_rfc == 1][:, 1], c='b')
+        plt.scatter(dim_reduced[labels_rfc == 2][:, 0], dim_reduced[labels_rfc == 2][:, 1], c='g')
+        plt.title('PCA of histograms')
+        plt.xlabel('cluster #')
+        plt.ylabel('num glands')
+        plt.close()
+        figure.savefig(save_dir/'histograms_pca.png')
         scores, rfc_importances, confusion_matrices = [], [], []
         try:
             average_score = np.load(save_dir/'average_score.npy')
@@ -379,12 +443,12 @@ class MCLExperiment(BaseExperiment):
                 misclassified = json.load(misclassified_file)
         except FileNotFoundError:
             # default is -1 for predictions and -2 for ground truth, so train entries in each column arent't counted as equal
-            predictions, ground_truth = np.ones((len(slide_histograms), 100))*-1, np.ones((len(slide_histograms), 100))*-2
+            predictions, ground_truth = np.ones((len(slides_histograms), 100)) * -1, np.ones((len(slides_histograms), 100)) * -2
             for i in range(100):
-                x_train, x_test, y_train, y_test, idx_train, idx_test = train_test_split(slide_histograms, labels_rfc,
-                                                                    np.arange(len(slide_histograms)),
-                                                                    train_size=self.args.train_fraction)
-                rfc = RandomForestClassifier(n_estimators=100)
+                x_train, x_test, y_train, y_test, idx_train, idx_test = train_test_split(slide_features, labels_rfc,
+                                                                                         np.arange(len(slide_features)),
+                                                                                         train_size=self.args.train_fraction)
+                rfc = XGBClassifier(n_estimators=1000, max_depth=40, subsample=0.9)
                 rfc.fit(x_train, y_train)
                 y_pred = rfc.predict(x_test)
                 predictions[idx_test, i] = np.array(y_pred)
@@ -394,15 +458,18 @@ class MCLExperiment(BaseExperiment):
                 rfc_importances.append(rfc.feature_importances_)
             average_score = np.mean(scores)
             average_confusion_matrix = np.mean(np.stack(confusion_matrices, axis=0), axis=0)
+            print(f"Gleason classification score is {average_score}")
+            print(f"Confusion matrix is:")
+            print(average_confusion_matrix.tolist())  # TODO change to prettyprint once scripts have run
             feature_importances = np.array(list(float(f) for f in np.array(rfc_importances).mean(axis=0)))
             prediction_rates = ((predictions == ground_truth).sum(axis=-1) /
                       np.array([pred[pred != -1].sum() for pred in predictions]))
-            misclassified = [slide_id for slide_id, accuracy in zip(tuple(slide_histograms.index), prediction_rates) if accuracy > 0.5]
+            misclassified = [slide_id for slide_id, accuracy in zip(tuple(slides_histograms.index), prediction_rates) if accuracy > 0.5]
             # cluster in K means space to assess feature space separation
             comparison_labels, n = set(), 3
             selected = SelectPercentile(
-                lambda X, y: RandomForestClassifier(n_estimators=100).fit(X, y).feature_importances_,
-                percentile=5*n).fit_transform(slide_histograms, labels_rfc)
+                lambda X, y: XGBClassifier(n_estimators=100).fit(X, y).feature_importances_,
+                percentile=5*n).fit_transform(slides_histograms, labels_rfc)
             comparison_labels = KMeans(n_clusters=3).fit_predict(selected)
             assert set(labels_rfc) == set(comparison_labels)
             np.save(save_dir/'average_score.npy', average_score)
@@ -418,8 +485,11 @@ class MCLExperiment(BaseExperiment):
         # gather examples from each cluster (exclude very small clusters)
         membership_numbers = [np.sum(cluster_assignment == p) for p in np.unique(som_cluster_membership)]
         cluster_indices = list(p for p in np.unique(som_cluster_membership) if membership_numbers[p] > 10)
+        np.save(save_dir / 'som_cluster_membership.npy', som_cluster_membership)
         cluster_centers = tuple(self.som.codebook.matrix[np.where(som_cluster_membership == i)[0]]
                                 for i in cluster_indices)
+        with open(save_dir/'cluster_centers.joblib', 'wb') as cluster_centers_file:
+            jl.dump(cluster_centers, cluster_centers_file)  # TODO test
         examples = get_cluster_examples(self.features, cluster_assignment,
                                         image_dir=self.args.data_dir,
                                         cluster_centers=cluster_centers,
@@ -452,7 +522,7 @@ class MCLExperiment(BaseExperiment):
         # computer cluster membership histograms for each slide
         slide_histograms = self.compute_per_slide_cluster_histograms(cluster_assignment, num_clusters, self.run_results_dir)
         average_score, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
-            self.assess_gleason_predictiveness(slide_histograms, self.run_results_dir)
+            self.assess_gleason_predictiveness(slide_histograms, cluster_assignment, self.run_results_dir)
         # gather examples from each cluster
         results.update({
             'rf_average_gleason_prediction_score': float(average_score),
@@ -476,11 +546,11 @@ class MCLExperiment(BaseExperiment):
         # clear data
         self.som, self.matrix, self.clustering, self.clusters = (None,) * 4
         # select best based on modularity measure
-        parameters_values, modularities = [], []
+        parameters_values, rf_scores = [], []
         for parameters, results_values in results.items():
             parameters_values.append(parameters)
-            modularities.append(results_values['rf_average_gleason_prediction_score'])
-        return parameters_values[np.argmax(modularities)]
+            rf_scores.append(results_values['rf_average_gleason_prediction_score'])
+        return parameters_values[np.argmax(rf_scores)]
 
     def postprocess(self, best_parameters, best_result):
         tqdm.write("Evaluating best results ...")
@@ -527,6 +597,7 @@ class MCLExperiment(BaseExperiment):
         self.matrix = np.load(self.run_results_dir / 'simplicial_matrix.npy')
         with open(self.run_results_dir / 'clusters.json', 'r') as clusters_file:
             self.clusters = json.load(clusters_file)
+        self.clusters = self.trim_double_cluster_assignments(self.clusters)
         # load som
         best_som_path = self.save_dir / f'model_size:{parameters.map_size}_re:{parameters.rough_epochs}_fte{parameters.finetune_epochs}.joblib'
         self.som = jl.load(best_som_path)
@@ -545,7 +616,7 @@ class MCLExperiment(BaseExperiment):
         }
         slide_histograms = self.compute_per_slide_cluster_histograms(cluster_assignment, num_clusters, dataset_savedir)
         average_score, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
-            self.assess_gleason_predictiveness(slide_histograms, dataset_savedir)
+            self.assess_gleason_predictiveness(slide_histograms, cluster_assignment, dataset_savedir)
         # gather examples from each cluster
         results.update({
             'rf_average_gleason_prediction_score': float(average_score),
