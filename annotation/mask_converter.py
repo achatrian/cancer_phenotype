@@ -10,7 +10,7 @@ from scipy.stats import mode
 from scipy.ndimage import morphology
 import skimage.morphology
 import cv2
-from base.utils import utils
+from base.utils import utils, debug
 
 
 class MaskConverter:
@@ -18,7 +18,7 @@ class MaskConverter:
     Class used to convert ground truth annotation to paths / contours in different
     """
 
-    def __init__(self, value_hier=(0, (160, 200), 250), label_value_map=None,
+    def __init__(self, value_hier=((160, 200), 250), label_value_map=None,
                  label_interval_map=None, label_options=None, fix_ambiguity=True):
         """
         :param value_hier:
@@ -32,21 +32,25 @@ class MaskConverter:
                 'background': 0
             }
         self.label_interval_map = label_interval_map or {
-            'epithelium': (81, 225),
-            'lumen': (225, 250),
-            'background': (0, 80)
+            'epithelium': (71, 225),
+            'lumen': (225, 255),
+            'background': (0, 70)
         }
-        self.label_options = label_options or {
+        self.label_options = label_options or {  # regulated for masks at resolution=1.0mpp
             'epithelium': {
-                'small_object_size': 1024*0.4,
-                'dist_threshold': 0.05,
-                'final_closing_size': 20,
-                'final_dilation_size': 4
+                'initial_opening_size': 3,
+                'small_hole_size': 400,
+                'small_object_size': 20,
+                'dist_threshold': 0.0001,
+                'final_closing_size': 10,
+                'final_dilation_size': 5
             },
             'lumen': {
-                'small_object_size': 100,
-                'dist_threshold': 0.001,
-                'final_closing_size': 15,
+                'initial_opening_size': 1,
+                'small_hole_size': 400,
+                'small_object_size': 20,
+                'dist_threshold': 0.0001,
+                'final_closing_size': 10,
                 'final_dilation_size': 5
             }
         }
@@ -66,13 +70,11 @@ class MaskConverter:
         mask = utils.tensor2im(mask, segmap=True, num_classes=self.num_classes, visual=False)  # transforms tensors into mask label images
         if rescale_factor:
             mask = cv2.resize(mask.astype(np.uint8), dsize=None, fx=rescale_factor, fy=rescale_factor, interpolation=cv2.INTER_NEAREST)
-        if mask.ndim < 3:
-            mask = mask[..., 0]
         contours, labels = [], []
-        for label, value in self.label_value_map.items():
+        for label, interval in self.label_interval_map.items():
             if label == 'background':
                 continue  # don't extract contours for background
-            value_binary_mask = self.threshold_by_value(value, mask)
+            value_binary_mask = self.threshold_by_interval(mask, interval)
             if self.fix_ambiguity:
                 value_binary_mask = self.remove_ambiguity(value_binary_mask, **self.label_options[label])
             else:
@@ -82,6 +84,8 @@ class MaskConverter:
                 _, value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
             else:
                 value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+            value = self.label_value_map[label][1] if isinstance(self.label_value_map[label], (tuple, list)) \
+                else self.label_value_map[label]
             value_labels = [value] * len(value_contours)
             contours.extend(value_contours)
             labels.extend(value_labels)
@@ -101,32 +105,39 @@ class MaskConverter:
                 good_labels.append(self.value2label(labels[i]))
         return good_contours, good_labels, bounding_boxes
 
-    def threshold_by_value(self, value, mask):
+    def threshold_by_interval(self, mask, interval):
         r"""
         Use label hierarchy to threshold values
-        :param value:
+        :param interval:
         :return:
         """
         mask = mask.copy()
         for value_level in reversed(self.value_hier):
             try:
-                for v in value_level:
-                    mask[mask == v] = 1
-                if value == v:
-                    break
-            except TypeError:
-                mask[mask == value_level] = 1
-                if value == value_level:
-                    break
+                try:
+                    lower, upper = next((lower, upper) for lower, upper in self.label_interval_map.values()
+                                        if all(lower <= v <= upper for v in value_level))
+                    mask[np.logical_and(lower < mask, mask < upper)] = 1
+                    if all(interval[0] <= v < interval[1] for v in value_level):
+                        break
+                except TypeError:
+                    lower, upper = next((lower, upper) for lower, upper in self.label_interval_map.values()
+                                          if lower <= value_level <= upper)
+                    mask[np.logical_and(lower < mask, mask < upper)] = 1
+                    if interval[0] <= value_level < interval[1]:
+                        break
+            except StopIteration:
+                raise ValueError(f"Given intervals don't cover hierarchy value {value_level}")
         mask[mask != 1] = 0
         return mask
 
     @staticmethod
-    def remove_ambiguity(mask, dist_threshold=0.01, small_object_size=1024*0.4, final_closing_size=20,
+    def remove_ambiguity(mask, initial_opening_size=3, dist_threshold=0.01, small_hole_size=200, small_object_size=1024*0.4, final_closing_size=20,
                          final_dilation_size=2):
         r"""
         Morphologically removes noise in the images and returns solid contours
         :param mask: HxWx3 images with identical channels, or HxW images
+        :param initial_opening_size: size of initial opening done to remove noise
         :param dist_threshold: multiplied by mode of peaks in distance transform -- e,g, 0.1 is 1/10 of the average peak
         :param small_object_size: objects smaller than this threshold will be removed from mask
         :param final_closing_size: size of kernel used for closing of holes in large glands
@@ -139,10 +150,12 @@ class MaskConverter:
         else:
             mask_1c = mask
             mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
+        # debug.show_image(mask_1c, 'mask_1c')
         # noise removal
-        kernel = np.ones((3, 3), np.uint8)
+        kernel = np.ones((initial_opening_size, initial_opening_size), np.uint8)
         opening = cv2.morphologyEx(mask_1c, cv2.MORPH_OPEN, kernel, iterations=2)
         opening = opening.astype(np.uint8)
+        # debug.show_image(opening, 'opening')
         # refine -ve area (includes background)
         refined_bg = cv2.dilate(opening, kernel, iterations=3)
         # refine foreground area
@@ -160,21 +173,25 @@ class MaskConverter:
                                             dist_threshold * dist_transform.max()
                                         ),  # threshold
                                         255, cv2.THRESH_BINARY)
+        # debug.show_image(refined_fg, 'thresholded')
         refined_fg = np.uint8(refined_fg)
         # finding unknown region
         unknown = cv2.subtract(refined_bg, refined_fg)
+        # debug.show_image(unknown, 'unknown')
         # marker labelling
         ret, markers = cv2.connectedComponents(refined_fg)
         markers = markers + 1
         # mark the region of unknown with zero
-        markers[unknown == 250] = 0
+        markers[unknown > 0] = 0
         # watershed
         markers = cv2.watershed(mask.astype(np.uint8), markers)
         # threshold out boundaries and background (-    1 and 0 respectively)
         markers = cv2.morphologyEx(cv2.medianBlur(markers.astype(np.uint8), 3), cv2.MORPH_OPEN, kernel, iterations=2)
         unambiguous = np.uint8(cv2.medianBlur(markers.astype(np.uint8), 3) > 1) * 255
+        # debug.show_image(unambiguous, 'unambiguous')
         # filled holes if any in larger objects
-        unambiguous = morphology.binary_fill_holes(unambiguous)
+        unambiguous = skimage.morphology.remove_small_holes(unambiguous, small_hole_size)
+        # debug.show_image(unambiguous, 'filled')
         # remove small objects
         if small_object_size:
             unambiguous = skimage.morphology.remove_small_objects(unambiguous, min_size=small_object_size)

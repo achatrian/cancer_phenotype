@@ -3,12 +3,40 @@ import argparse
 import multiprocessing as mp
 import copy
 import json
+import re
 import torch
 from base import models
 from base import datasets
 from base import deploy
 from base.utils import utils
 from base.options.task_options import get_task_options
+
+
+def remove_args(parser, args):
+    for arg in args:
+        for action in parser._actions:
+            if vars(action)['option_strings'][0] == arg:
+                parser._handle_conflict_resolve(None, [(arg ,action)])
+                break
+
+
+def make_conflict_proof(option_setter):
+    r"""Option setter can add arguments to parser with existing actions with same argument string"""
+    def conflict_proof_option_setter(parser, is_train):
+        parser_ = copy.deepcopy(parser)
+        error = True
+        conflicting_arguments = []
+        while error:
+            try:
+                remove_args(parser_, conflicting_arguments)
+                parser_ = option_setter(parser_, is_train)
+                error = False
+            except argparse.ArgumentError as err:
+                conflict_arg = re.search(r'argument (--\w*)', str(err)).groups()[0]
+                conflicting_arguments.append(conflict_arg)
+        remove_args(parser, conflicting_arguments)
+        return option_setter(parser, is_train)
+    return conflict_proof_option_setter
 
 
 class BaseOptions:
@@ -44,12 +72,13 @@ class BaseOptions:
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--do_not_spawn', action='store_false', dest='spawn_processes', help="Set method to create dataloader child processes to fork instead of spawn (could take up more memory)")
         parser.add_argument('--augment_level', type=int, default=0, help='level of augmentation applied to input when training (my_opt)')
+        parser.add_argument('--sequential_samples', action='store_true', help="always iterates over data in the same order")
         self.parser = parser
         self.is_train = None
         self.is_apply = None
         self.opt = None
 
-    def gather_options(self):
+    def gather_options(self, unknown_arg_error=True):
         # get the basic options
         opt, _ = self.parser.parse_known_args()
 
@@ -63,6 +92,7 @@ class BaseOptions:
         model_name = opt.model
         if model_name and model_name != 'none':
             model_option_setter = models.get_option_setter(model_name, task_name)
+            model_option_setter = make_conflict_proof(model_option_setter)
             parser = model_option_setter(parser, self.is_train)
             opt, _ = parser.parse_known_args()  # parse again with the new defaults
 
@@ -70,17 +100,17 @@ class BaseOptions:
         dataset_name = opt.dataset_name
         if dataset_name and dataset_name != 'none':
             dataset_option_setter = datasets.get_option_setter(dataset_name, task_name)
+            dataset_option_setter = make_conflict_proof(dataset_option_setter)
             parser = dataset_option_setter(parser, self.is_train)
 
-        if self.is_apply:
+        if hasattr(opt, 'deployer_name'):
             # modify deployer-related parser options
-            deployer_name = opt.deployer_name
-            deployer_option_setter = deploy.get_option_setter(deployer_name, task_name)
+            deployer_option_setter = deploy.get_option_setter(opt.deployer_name, task_name)
+            deployer_option_setter = make_conflict_proof(deployer_option_setter)
             parser = deployer_option_setter(parser, self.is_train)
 
         self.parser = parser
-
-        return parser.parse_args()
+        return parser.parse_args() if unknown_arg_error else parser.parse_known_args()[0]
 
     def print_options(self, opt, return_only=False):
         message = ''
@@ -96,7 +126,7 @@ class BaseOptions:
             print(message)
 
         # save to the disk - only when training or will overwrite training information
-        if self.is_train:
+        if self.is_train and not opt.continue_train:
             expr_dir = Path(opt.checkpoints_dir)/opt.experiment_name
             expr_dir.mkdir(exist_ok=True, parents=True)
             file_name = Path(expr_dir)/'opt.txt'
@@ -105,8 +135,8 @@ class BaseOptions:
                 opt_file.write('\n')
         return message
 
-    def parse(self):
-        opt = self.gather_options()
+    def parse(self, unknown_arg_error=True):
+        opt = self.gather_options(unknown_arg_error)
         opt.is_train = self.is_train   # train or test
         opt.is_apply = self.is_apply
         # check options:
@@ -142,6 +172,8 @@ class BaseOptions:
             for opt_name in opt_to_save:  # cannot json serialize paths
                 if isinstance(opt_to_save[opt_name], Path):
                     opt_to_save[opt_name] = str(opt_to_save[opt_name])
+                elif isinstance(opt_to_save[opt_name], torch.Tensor):
+                    opt_to_save[opt_name] = opt_to_save[opt_name].detach().cpu().numpy().tolist()
             with open(options_path, 'w') as options_file:
                 json.dump(opt_to_save, options_file)
         return self.opt

@@ -10,7 +10,7 @@ import cv2
 import imageio
 from scipy.spatial.distance import cdist
 from experiment import BaseExperiment
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 
 # TODO adapt to BaseExperiment
 
@@ -84,7 +84,7 @@ class Clustering(BaseExperiment):
                     subset_path = next(path for path in image_paths if subset_id == path.with_suffix('').name)
                 except StopIteration:
                     raise FileNotFoundError(f"DataFrame key: {subset_id} does not match an image file")
-                reader = WSIReader(file_name=str(subset_path))
+                reader = make_wsi_reader(file_name=str(subset_path))
                 image = np.array(reader.read_region((x, y), 0, (w, h)))  # changed level from None to 0 !!!
                 if image.shape[2] == 4:  # assume 4 channels images are RGBA
                     image = color.rgba2rgb(image)
@@ -118,8 +118,8 @@ class Clustering(BaseExperiment):
                 except StopIteration:
                     raise ValueError(f"Data dir does not contain images for {subset_id}")
                 examples[i][subset_id] = []
-                opt = WSIReader.get_reader_options(include_path=False)
-                reader = WSIReader(subset_path, opt)
+                opt = get_reader_options(include_path=False)
+                reader = make_wsi_reader(subset_path, opt)
                 try:
                     x_subset = x_cluster.loc[subset_id]
                 except KeyError:

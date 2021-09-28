@@ -22,7 +22,7 @@ def process_image(image, input_path, model):
     Produce soft-maxed network mask that is also visually intelligible.
     Each channel contains the softmax probability of that pixel belonging to that class, mapped to [0-255] RGB values.
     """
-    # scale between 0 and 1
+    # scale betwesen 0 and 1
     image = image / 255.0
     # normalised images between -1 and 1
     image = (image - 0.5) / 0.5
@@ -41,7 +41,7 @@ def process_image(image, input_path, model):
         raise ValueError(f"Since segmentation has {output_logits.shape[0]} > 3 classes, unintelligible dzi images would be produced from combination.")
     output = torch.nn.functional.softmax(output_logits, dim=0)
     output = output.detach().cpu().numpy().transpose(1, 2, 0) * 255  # creates image
-    output = np.around(output).astype(np.uint8)  # conversion with uint8 without arouind
+    output = np.around(output).astype(np.uint8)  # conversion with uint8 without around
     return output
 
 
@@ -198,8 +198,6 @@ if __name__ == '__main__':
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
-        if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
         # read downsampled region corresponding to tumour area annotation and extract contours
         rescale_factor = mask_dzi.properties['mpp'] / original_dzi.properties['mpp']  # to original images
         x, y, w, h = cv2.boundingRect(area_contour)
@@ -222,7 +220,7 @@ if __name__ == '__main__':
             annotation.add_item(label, 'path')
             contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
             annotation.add_segments_to_last_item(contour)
-        if annotation.is_empty():
+        if len(annotation) == 0:
             warnings.warn(f"No contours were extracted for slide: {slide_id}")
         annotation.shrink_paths(0.1)
         annotation.add_data('experiment', opt.experiment_name)

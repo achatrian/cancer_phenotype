@@ -6,7 +6,7 @@ sys.path.extend(['/well/rittscher/users/achatrian/cancer_phenotype/base',
 from itertools import chain
 import multiprocessing as mp
 from pathlib import Path
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 
 
 r"Script to perform quality control on all the slides in a directory"
@@ -28,7 +28,7 @@ class SlidePreprocessor(mp.Process):
             if file is None:
                 self.queue.task_done()
                 break
-            slide = WSIReader(file, self.opt)
+            slide = make_wsi_reader(file, self.opt)
             print(f"[{self.process_id}] processing {os.path.basename(file)}")
             slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold)
             if self.export_tiles:
@@ -37,7 +37,7 @@ class SlidePreprocessor(mp.Process):
 
 
 def main():
-    opt = WSIReader.get_reader_options(include_path=False)
+    opt = get_reader_options(include_path=False)
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=Path, required=True)
     parser.add_argument('--workers', type=int, default=4)

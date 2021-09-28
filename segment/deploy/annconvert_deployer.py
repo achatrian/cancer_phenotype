@@ -9,7 +9,7 @@ from base.utils import utils
 #     from matplotlib import pyplot as plt
 #     import numpy as np
 #     import cv2
-#     #from base.datasets.wsi_reader import WSIReader
+#     #from base.datasets.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 
 
 ################## OBSOLETE ######################
@@ -42,7 +42,7 @@ class AnnConvertDeployer(BaseDeployer):
     @staticmethod
     def run_worker(process_id, opt, model, input_queue, output_queue=None):
         #if __debug__:
-            #slide = WSIReader(opt, opt.slide_file)
+            #slide = make_wsi_reader(opt, opt.slide_file)
         # cannot send to cuda outside process in pytorch < 0.4.1 -- patch (torch.multiprocessing issue)
         print("Process {} runs on gpus {}".format(process_id, opt.gpu_ids))
         converter = MaskConverter(
@@ -55,24 +55,10 @@ class AnnConvertDeployer(BaseDeployer):
                 input_queue.task_done()
                 break
             j = 0
-            for map_, slide_id, offset_x, offset_y in zip(
+            for map_, slide_id, x_offset, y_offset in zip(
                     data['target'], data['slide_id'], data['x_offset'], data['y_offset']):
-                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y,
+                contours, labels, boxes = converter.mask_to_contour(map_, x_offset, y_offset,
                                                                     rescale_factor=None if not opt.rescale_factor else opt.rescale_factor)
-                if __debug__:
-                    #tile = slide.read_region((int(offset_x), int(offset_y)), level=0, size=tuple(map_.shape))
-                    #tile = np.array(tile)
-                    shifted_contours = [contour - np.array((offset_x, offset_y)) for contour in contours]
-                    tile = utils.tensor2im(data['input'][j], False)
-                    cv2.drawContours(tile, shifted_contours, -1, (0, 255, 255), 60)
-                    fig, axes = plt.subplots(1, 2)
-                    #fig.suptitle(Path(data['input_path'][0]).name)
-                    #axes[0].imshow(utils.tensor2im(data['input'][j], False))
-                    axes[0].imshow(utils.tensor2im(map_, True))
-                    axes[1].imshow(tile)
-                    #axes[2].set_title(f'{round(float(offset_x)* slide.mpp_x)}, {round(float(offset_y) * slide.mpp_y)}')
-                    plt.show()
-                    j += 1
                 output_queue.put((contours, labels, boxes), timeout=opt.sync_timeout)
             num_images += data['input'].shape[0]
             if i % opt.print_freq == 0:

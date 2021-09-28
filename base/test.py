@@ -15,9 +15,10 @@ r"Test script for network, aggregates results over whole validation dataset"
 
 if __name__ == '__main__':
     opt = TestOptions().parse()
+    print(f"Starting at {str(datetime.now())}")
     print(f"Running on host: '{socket.gethostname()}'")
     # hard-code some parameters for test
-    opt.serial_batches = True  # no shuffle
+    opt.sequential_samples = True  # no shuffle
     opt.no_flip = True    # no flip
     opt.display_id = -1   # no visdom display
     if opt.slide_id:
@@ -29,9 +30,6 @@ if __name__ == '__main__':
     dataloader = create_dataloader(dataset)
     model = create_model(opt)
     model.setup(dataset)
-    # create a website
-    web_dir = Path(opt.data_dir)/opt.experiment_name/f'{opt.phase}_{opt.load_epoch}'
-    webpage = html_.HTML(str(web_dir), f'Experiment = {opt.experiment_name}, Phase = {opt.phase}, Epoch = {opt.load_epoch}')
     if opt.eval:
         model.eval()
     print("Begin testing ...")
@@ -50,29 +48,22 @@ if __name__ == '__main__':
                 visuals = model.get_current_visuals()
                 visual_paths = model.get_visual_paths()
                 progress_bar.update(n=model.input.shape[0])
-        save_images(webpage, visuals, visual_paths['input'], aspect_ratio=opt.aspect_ratio, width=opt.display_winsize)
         losses, metrics = model.get_current_losses(), model.get_current_metrics()  # test measures
-    # save the website
-    webpage.save()
     # write results
     message = create_visualizer(opt).print_current_losses_metrics(opt.load_epoch, None, losses, metrics)
-    if opt.task == 'segment':  # only one split file for segmentation is used (different splits are in that file)
-        opt.split_file = str(Path(opt.data_dir) / 'data' / 'CVsplits' / 'tile_split.json')
-        save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'/Path(opt.split_file).with_suffix('').name
-        split_name = Path(opt.split_file).with_suffix('').name
-    else:
-        save_results_dir = Path(opt.checkpoints_dir)/opt.experiment_name/'results'
-        split_name = 'split'
-    (save_results_dir / model.model_tag).mkdir(exist_ok=True, parents=True)
-    if opt.task == 'segment':
-        split_name += str(opt.split_num)
-    results_name = f'{opt.slide_id}' if opt.slide_id else split_name
+    save_results_dir = Path(opt.data_dir) / 'data' / 'experiments' / opt.task / opt.experiment_name
+    (save_results_dir).mkdir(exist_ok=True, parents=True)
+    try:
+        split_name = f'{opt.num_splits}-split{opt.split_num}'
+    except AttributeError:
+        split_name = opt.split_path.name
+    results_name = f'{opt.slide_id}' if opt.slide_id else split_name  # name is based on slide or on split
     # save results for individual slide
     results = {
-        'id': opt.slide_id if opt.slide_id else Path(opt.split_file).with_suffix('').name,
+        'id': opt.slide_id if opt.slide_id else 'split_name',
         'date': str(datetime.now()),
         'model': model.model_tag,
-        'split': split_name,
+        'split': f'{opt.split_num}/{opt.num_splits}',
         'options': TestOptions().print_options(opt, True).split('\n'),
         'epoch': opt.load_epoch,
         'message': message,
@@ -80,7 +71,8 @@ if __name__ == '__main__':
         'metrics': metrics,
         'slide_level_label': slide_level_label.pop() if opt.task == 'phenotype' else ''
     }
-    json.dump(results, open((save_results_dir/model.model_tag/results_name).with_suffix('.json'), 'w'))
+    with open((save_results_dir/(results_name + f'{str(datetime.now())[:10]}')).with_suffix('.json'), 'w') as results_file:
+        json.dump(results, results_file)
     # gather results for all slides
     # this is updated every time a test.py for one particular slide finishes processing
     model_results = dict(options=results['options'])
@@ -88,7 +80,7 @@ if __name__ == '__main__':
     counter = 0
     data_losses = {name: [] for name in losses}
     data_metrics = {name: [] for name in metrics}
-    for result_path in (save_results_dir/model.model_tag).iterdir():
+    for result_path in save_results_dir.iterdir():
         with open(result_path, 'r') as result_json:
             slide_results = json.load(result_json)
             # store the slide level results for final averaging

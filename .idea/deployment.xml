@@ -5,7 +5,7 @@
       <paths name="achatrian@localhost:5000">
         <serverdata>
           <mappings>
-            <mapping deploy="/tmp/pycharm_project_452" local="$PROJECT_DIR$" />
+            <mapping deploy="/well/rittscher/users/achatrian/cancer_phenotype" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>

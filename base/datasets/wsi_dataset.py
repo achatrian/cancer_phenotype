@@ -9,7 +9,7 @@ import numpy as np
 from torchvision.transforms import ToTensor
 from .base_dataset import BaseDataset
 from utils import utils
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from annotation.annotation_builder import AnnotationBuilder
 
 
@@ -20,8 +20,7 @@ class WSIDataset(BaseDataset):
         Simple dataset to read tiles from WSIs using WSIReader
         :param opt:
         """
-        super(WSIDataset, self).__init__()
-        self.opt = opt
+        super(WSIDataset, self).__init__(opt)
         self.files = []
         self.slides = []
         self.tiles_per_slide = []
@@ -89,7 +88,7 @@ class WSIDataset(BaseDataset):
                 if not name.startswith(good_files[-1]):  # start is used
                     continue  # keep only strings matching good_files
                 good_files.pop()
-            slide = WSIReader(file, self.opt)
+            slide = make_wsi_reader(file, self.opt)
             slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold, qc_store)
             # restrict location by tumour annotation area only
             try:  # try to read annotation i

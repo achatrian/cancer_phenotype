@@ -12,58 +12,53 @@ echo "Username: "`whoami`
 echo "Started at: "`date`
 echo "************************************************************************************"
 
-
-
-source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
-COMMANDS=$1
-TCGA=$2
-echo -e "Apply commands:\n ${COMMANDS}"
-export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:${PYTHONPATH}"
+source /well/rittscher/users/achatrian/.bashrc
+source /well/rittscher/users/achatrian/.bash_profile
+conda activate pyenv
+  export PYTHONPATH="/well/rittscher/users/achatrian/cancer_phenotype:/well/rittscher/users/achatrian/cancer_phenotype/base:/well/rittscher/users/achatrian/cancer_phenotype/segment:/well/rittscher/users/achatrian/cancer_phenotype/phenotype:/well/rittscher/users/achatrian/cancer_phenotype/encode:/well/rittscher/users/achatrian/cancer_phenotype/quant:${PYTHONPATH}"
+echo -e "Commands:\n ${COMMANDS}"
+echo -e "${CONDA_PREFIX}"
 shopt -s globstar
 DATE=`date`
 JOBID=$(tr ' ' '_' <<< ${DATE})  # replace spaces with underscores
 JOBID=$(tr ':' '_' <<< ${JOBID})  # replace columns with underscores (or it breaks)
 JOBID="${JOBID}_${JOB_ID}"  # in case multiple jobs are run in the same second, add counter id to differentiate between them
-LOGDIR=/well/rittscher/users/achatrian/jobs_logs/test_many
+LOGDIR=/well/rittscher/users/achatrian/jobs_logs/quant_analyse
+mkdir -p $LOGDIR
+cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts/quant || exit
 
+COMMANDS=$1
 if [[ -z $2 ]]
 then
-    FILES=(/well/rittscher/projects/TCGA_prostate/TCGA/*)
+    FILES=(/well/rittscher/projects/TCGA_prostate/TCGA/data/annotations/combined_mpp1.0_normal_nuclei_circles/*)
 else
     FILES=($2/*)  # expand to all files / dirs in given data directory
 fi
 
-# working on TCGA
 COUNTER=0
 for SLIDEPATH in "${FILES[@]}"; do
     SLIDENAME=$(basename "${SLIDEPATH}") # get basename only
-    # check if file has .ndpi or .svs format. If not, skip iteration
-    if [[ $SLIDENAME == *.ndpi ]]
+    # check whether file has .json format. If not, skip iteration
+    if [[ $SLIDENAME == *.json ]]
     then
-        SLIDEID="${SLIDENAME%%.ndpi*}"
-    elif [[ $SLIDENAME == *.svs ]]
-    then
-        SLIDEID="${SLIDENAME%%.svs*}"
+        SLIDEID="${SLIDENAME%%.json*}"
     else
         # if iterating over dirs, look for images inside dirs
         for SUBPATH in ${SLIDEPATH}/*; do
             SUBNAME=$(basename "${SUBPATH}") # get basename only
-            if [[ $SUBNAME == *.ndpi ]]
+            if [[ $SUBNAME == *.json ]]
             then
-                SLIDEID="${SUBNAME%%.ndpi*}"
-            elif [[ $SUBNAME == *.svs ]]
-            then
-                SLIDEID="${SUBNAME%%.svs*}"
+                SLIDEID="${SUBNAME%%.json*}"
             else
                 continue
             fi
-        done  # NB: JOB IS LAUNCHED ONLY OR LAST IMAGE IN SUBDIR
+        done  # NB: JOB IS LAUNCHED ONLY FOR LAST IMAGE IN SUBDIR
     fi
     if [[ ! -z "$SLIDEID" ]]; then
         echo ${SLIDEID}
-        SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID},--make_subset"
-        qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/o${JOBID}_${SLIDEID}" -P rittscher.prjc -q gpu8.q -l gpu=1 -l gputype=p100 ./l_test.sh ${SLIDECOMMANDS}
         COUNTER=$((COUNTER+1))
+        SLIDECOMMANDS="${COMMANDS},--slide_id=${SLIDEID}"
+#        echo $SLIDECOMMANDS
+        qsub -o "${LOGDIR}/o${JOBID}_${SLIDEID}" -e "${LOGDIR}/e${JOBID}_${SLIDEID}" -q long.qc -pe shmem 4 ./l_quant_analyse.sh ${SLIDECOMMANDS}
     fi
 done
-echo "Testing network on ${COUNTER} slides ..."

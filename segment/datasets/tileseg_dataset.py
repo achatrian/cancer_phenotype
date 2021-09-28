@@ -20,14 +20,13 @@ class TileSegDataset(BaseDataset):
     """
 
     def __init__(self, opt):
-        super(TileSegDataset, self).__init__()
-        self.opt = opt
+        super(TileSegDataset, self).__init__(opt)
         self.paths = []
-        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'CVsplits' / (
+        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'cross_validate' / (
                     re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
         split_tiles_path = str(split_tiles_path)
         # read resolution data - requires global tcga_resolution.json file
-        with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / 'tcga_resolution.json', 'r') as resolution_file:
+        with open(Path(self.opt.data_dir) / 'data' / 'cross_validate' / 'tcga_resolution.json', 'r') as resolution_file:
             self.resolutions = json.load(resolution_file)
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
@@ -174,11 +173,7 @@ class TileSegDataset(BaseDataset):
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
-            if self.opt.augment_level:
-                seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
-                image = seq_det.augment_image(image)
-                gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-                gt = gt[..., 0]
+            image, gt = self.augment_image(image, gt)
             if not self.opt.segment_lumen:
                 gt[gt < 255] = 0
                 gt[gt != 0] = 1
@@ -248,22 +243,3 @@ class AugDataset(TileSegDataset):
         self.paths += paths
         self.label += [x.replace('fake_B', 'real_A') for x in paths]
         assert (len(self.paths) > no_aug_len)
-
-
-class TestDataset(TileSegDataset):
-    def __init__(self, dir_, tile_size=256, bad_folds=[]):
-        super(TestDataset, self).__init__()
-        if bad_folds:
-            for image_file, label_file in zip(self.paths, self.label):
-                image_name = os.path.basename(image_file)
-                label_name = os.path.basename(label_file)
-                assert(image_name[0:10] == label_name[0:10])
-                isbad = any([bad_fold in image_name for bad_fold in bad_folds])
-                if isbad:
-                    self.paths.remove(image_file)
-                    self.label.remove(label_file)
-
-    @staticmethod
-    def modify_commandline_options(parser, is_train):
-        parser.set_defaults(phase="test")
-        return parser

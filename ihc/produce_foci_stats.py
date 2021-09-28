@@ -27,6 +27,7 @@ if __name__ == '__main__':
     slide_ids, foci_per_slide = set(), {}
     focus_paths = sorted(list(tiles_dir.iterdir()), key=lambda p: p.name)
     foci_stains = {}
+    cases_type_count = Counter()
     for focus_path in tqdm(focus_paths, desc="Focus num"):
         if not focus_path.is_dir():
             continue
@@ -62,6 +63,11 @@ if __name__ == '__main__':
                 if slide_id not in focus_extends_across_cuts:
                     focus_extends_across_cuts[slide_id] = []
                 focus_extends_across_cuts[slide_id].append(focus_path.name)
+            if slide_row is not None:
+                if slide_row['Case type'] == 'Real':
+                    cases_type_count.update([str(slide_row['Diagnosis'])])
+                else:
+                    cases_type_count.update(slide_row['Case type'])
             all_data.append(dict(
                 slide_id=slide_id, focus_n=i,
                 staining_code=slide_row['Staining code'] if slide_row is not None else None,
@@ -94,6 +100,7 @@ if __name__ == '__main__':
             '%slides_with_at_least_2_foci': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 2])/len(slide_ids),
             '%slides_with_at_least_3_foci': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 3])/len(slide_ids),
             '%slides_with_at_least_4_foci': len([slide_id for slide_id, foci in foci_per_slide.items() if len(foci) >= 4])/len(slide_ids),
+            'case_type_counts': dict(cases_type_count)
         }, focus_info_file)
     print(f"Done! Saved {args.data_dir/'data'/f'focus_annotations_stats_{timestamp}.csv'} and {args.data_dir/'data'/f'focus_annotations_info_{timestamp}.json'}")
 

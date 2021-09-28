@@ -8,7 +8,7 @@ from quant.contour_processor_ import ContourProcessor
 from quant.analyse import quantify
 from quant.features import region_properties, red_haralick, green_haralick, blue_haralick, gray_haralick, \
     surf_points, gray_cooccurrence
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 
 # fixtures
 
@@ -60,9 +60,9 @@ def multilabel_mask(contour_lib, overlap_struct, label_values):
 
 @fixture
 def reader():
-    opt = WSIReader.get_reader_options()
+    opt = get_reader_options()
     slide_path = Path('/home/andrea/Documents/Temp/Data/17_A047-4463_153D+-+2017-05-11+09.40.22.ndpi')
-    return WSIReader(slide_path, opt)
+    return make_wsi_reader(slide_path, opt)
 
 
 # tests

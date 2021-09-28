@@ -2,6 +2,7 @@ from pathlib import Path
 from functools import partial
 from typing import Union
 import warnings
+import time
 from random import sample
 import numpy as np
 import cv2
@@ -10,9 +11,11 @@ from openslide import OpenSlideError
 from tqdm import tqdm
 from rtree import index
 from annotation.annotation_builder import AnnotationBuilder
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options, WSIReader
 from data.images.dzi_io import DZI_IO
+from base.utils.timer import Timer
 from base.utils import debug
+
 
 r"""Functions to extract and order images and annotation data, for computing features and clustering"""
 
@@ -66,7 +69,7 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
         annotation = AnnotationBuilder.from_annotation_path(annotation_path)
         annotation_id = annotation_path.name.replace('.json', '')
         contour_struct[annotation_id] = dict()
-        for layer_name in annotation.layer_names:
+        for layer_name in annotation.layers:
             contour_struct[annotation_id][layer_name], _ = annotation.get_layer_points(layer_name, contour_format=True)
     if len(annotation_paths) == 0 and len(slide_ids) > 1:
         warnings.warn(f"No annotation matched ids: {slide_ids}")
@@ -139,40 +142,7 @@ def check_point_overlap(parent_contour, child_contour, n_points=5):
     return all(cv2.pointPolygonTest(parent_contour, tuple(point), False) >= 0 for point in child_points)
 
 
-def find_overlap_(slide_contours: dict, different_labels=True):
-    r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
-    :param slide_contours:
-    :param different_labels: whether overlap is reported only for contours of different classes
-    :return: overlap vectors (boolean)
-    """
-    contours, labels = [], []
-    for layer_name, layer_contours in slide_contours.items():  # merge all layers into one list of contours
-        indices = tuple(i for i, contour in enumerate(layer_contours) if contour.size > 2)
-        contours.extend(layer_contours[i] for i in indices)
-        labels.extend([layer_name] * len(indices))
-    contour_bbs = list(cv2.boundingRect(contour) for i, contour in enumerate(contours))
-    overlap_struct = []
-    for parent_bb, parent_label in zip(contour_bbs, labels):
-        # Find out each contour's children (overlapping); if a parent is encountered, no relationship is recorded
-        overlap_vector = []
-        for child_bb, child_label in zip(contour_bbs, labels):
-            if different_labels and parent_label == child_label:
-                overlap_vector.append(False)
-                continue  # contours of the same class are not classified as overlapping
-            position, origin_bb, bb_areas = check_relative_rect_positions(parent_bb, child_bb, eps=0)
-            if parent_bb == child_bb:  # don't do anything for same box
-                overlap_vector.append(False)
-            elif position == 'contained' and origin_bb == 0:  # flag contour when parent contains child
-                overlap_vector.append(True)
-            elif position == 'overlap':  # flag contour when parent and child overlap to some extent
-                overlap_vector.append(True)
-            else:
-                overlap_vector.append(False)
-        overlap_struct.append(overlap_vector)
-    return overlap_struct, contours, contour_bbs, labels
-
-
-def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None):
+def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None, verbose=False):
     r"""Returns structure detailing which contours overlap, so that overlapping features can be computed
     :param slide_contours:
     :param different_labels: whether overlap is reported only for contours of different classes
@@ -185,19 +155,24 @@ def find_overlap(slide_contours: dict, different_labels=True, selected_labels=No
         contours.extend(layer_contours[i] for i in indices)
         labels.extend([layer_name] * len(indices))
     contour_bbs = [cv2.boundingRect(contour) for contour in contours]
-    idx = index.Index()
-    for i, (x, y, w, h) in enumerate(contour_bbs):
-        idx.insert(i, (x, y, x + w, y + h))
+    start_time = time.time()
+    with Timer(None, "Time to construct rtree = {:0.4f}", logger=print if verbose else None):
+        idx = index.Rtree(((i, (x, y, x + w, y + h), None) for i, (x, y, w, h) in enumerate(contour_bbs)))
     overlap_struct = []
-    for parent_bb, parent_label in tqdm(zip(contour_bbs, labels), total=len(contour_bbs),
-                                        desc="Discovering overlapping contours ..."):
-        if selected_labels is not None and parent_label not in selected_labels:
-            overlap_struct.append([])
-            continue
-        x, y, w, h = parent_bb
-        all_overlaps = list(idx.intersection((x, y, x + w, y + h)))  # query for overlapping bbs among the tree nodes
-        overlap_vector = [i for i in all_overlaps if labels[i] != parent_label] if different_labels else all_overlaps
-        overlap_struct.append(overlap_vector)
+    boxes_and_labels = zip(contour_bbs, labels)
+    if verbose:
+        boxes_and_labels = tqdm(boxes_and_labels, total=len(contour_bbs), desc="Discovering overlapping contours ...")
+    for parent_bb, parent_label in boxes_and_labels:
+        with Timer('overlap', "Time to compute overlap = {:0.4f}", print if verbose else None):
+            if selected_labels is not None and parent_label not in selected_labels:
+                overlap_struct.append([])
+                continue
+            x, y, w, h = parent_bb
+            all_overlaps = list(idx.intersection((x, y, x + w, y + h)))  # query for overlapping bbs among the tree nodes
+            overlap_vector = [i for i in all_overlaps if labels[i] != parent_label] if different_labels else all_overlaps
+            overlap_struct.append(overlap_vector)
+    if verbose:
+        print(f"Average time taken to find overlapping boxes = {Timer.averages['overlap']}")
     return overlap_struct, contours, contour_bbs, labels
 
 
@@ -212,7 +187,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
     :return:
     """
     assert type(contour) is np.ndarray and contour.size > 0, "Non-empty numpy array expected for contour"
-    #assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
+    # assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
     contour = contour.squeeze()
     contour_origin = contour.min(0)
     if mask_origin:
@@ -311,7 +286,7 @@ def contours_to_multilabel_masks(slide_contours: Union[dict, tuple], overlap_str
         yield mask, i
 
 
-def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_size=None, level=None, mpp=None,
+def get_contour_image(contour: np.array, reader: WSIReader, min_size=None, level=None, mpp=None,
                       contour_level=0, min_size_enforce='one-sided'):
     r"""
     Extract images from slide corresponding to region covered by contour
@@ -329,7 +304,10 @@ def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_s
             raise ValueError("'level' and 'mpp' cannot be specified at once")
         assert reader.mpp_x == reader.mpp_y, "Assuming same resolution in both orientations"
         level = np.argmin(np.absolute(np.array(reader.level_downsamples) * reader.mpp_x - mpp))
-    rescale_factor = reader.level_downsamples[contour_level]/reader.level_downsamples[level or 0]
+    if mpp is not None:  # if mpp is given
+        rescale_factor = (reader.mpp_x * reader.level_downsamples[contour_level])/mpp
+    else:
+        rescale_factor = reader.level_downsamples[contour_level]/reader.level_downsamples[level or 0]
     x, y, w_read, h_read = cv2.boundingRect(contour)
     w_out, h_out = int(w_read * rescale_factor), int(h_read * rescale_factor)
     if min_size is not None:
@@ -346,8 +324,8 @@ def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_s
             # (I.E. ORIGIN CHANGES)
             if w_out < min_size[0]:
                 w_ = w_read
-                w_read = min(int(min_size[0] / rescale_factor), reader.level_dimensions[contour_level][0] - x)
-                x -= max(w_read - w_, 0) // 2  # would break correspondence with mask
+                w_read = min(int(min_size[0] / rescale_factor), reader.level_dimensions[contour_level][0] - x)  # at level 0
+                x -= max(w_read - w_, 0) // 2  # at level 0 -- would break correspondence with mask
                 w_out = int(w_read * rescale_factor)
             if h_out < min_size[1]:
                 h_ = h_read
@@ -362,11 +340,11 @@ def get_contour_image(contour: np.array, reader: Union[WSIReader, DZI_IO], min_s
         # THE IMAGE -- MORE RELIABLE
         # image = np.array(reader.read_region((x, y), level=level or 0, size=(w_read, h_read)))
         image = np.array(reader.read_region((x, y), level=0, size=(w_read, h_read)))
-        image = cv2.resize(image, (w_out, h_out))
+        image = cv2.resize(image.astype(np.uint8), (w_out, h_out))
     except OpenSlideError:
         raise
     if image.shape[2] == 4:
-        image = (color.rgba2rgb(image) * 255).astype(np.uint8)  # RGBA to RGB TODO this failed feature.is_image() test
+        image = image[..., :3]
     return image
 
 

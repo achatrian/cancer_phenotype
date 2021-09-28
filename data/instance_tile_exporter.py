@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import imageio
 from tqdm import tqdm
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from data.contours import read_annotations, get_contour_image, contour_to_mask
 from data.contours.instance_masker import InstanceMasker
 from base.utils import debug
@@ -73,8 +73,8 @@ class InstanceTileExporter:
             self.annotation_path = next(annotations_path.glob(f'{self.slide_id}.json'))
         except StopIteration:
             raise FileNotFoundError(f"No annotation matching slide id: {slide_id}")
-        slide_opt = WSIReader.get_reader_options(False, False, args=(f'--mpp={mpp}',))
-        self.slide = WSIReader(self.slide_path, slide_opt, set_mpp=set_mpp)
+        slide_opt = get_reader_options(False, False, args=(f'--mpp={mpp}',))
+        self.slide = make_wsi_reader(self.slide_path, slide_opt, set_mpp=set_mpp)
         if annotations_dirname is not None:
             if experiment_name is not None:
                 contour_struct = read_annotations(self.data_dir, slide_ids=(self.slide_id,),
@@ -119,6 +119,8 @@ class InstanceTileExporter:
                 min_size = (self.tile_size,) * 2
             else:
                 min_size = ()
+            # FIXME doesn't work for mpp different from that of the zoom levels / but it works for patch_size=1024 mpp=1.0 and not for patch_size=512 mpp=1.0
+            # TODO design it bottom-up instead of trying random things out
             image = get_contour_image(contour, self.slide, min_size=min_size, mpp=self.mpp,  min_size_enforce='two-sided')
             mask, components = masker.get_shaped_mask(i, shape=image.shape, smoothing=smoothing,
                                                       scaling=self.mpp/self.slide.mpp_x, center=True)

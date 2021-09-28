@@ -13,8 +13,8 @@ echo "Username: "`whoami`
 echo "Started at: "`date`
 echo "************************************************************************************"
 
-module load cuda/9.0
-module load cudnn/7.0-9.0
+
+
 source activate /well/rittscher/users/achatrian/.conda/envs/pyenvclone
 COMMANDS=$1
 echo -e "Apply commands:\n ${COMMANDS}"

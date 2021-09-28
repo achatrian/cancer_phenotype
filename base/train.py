@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 import socket
 from pathlib import Path
 import json
@@ -10,6 +11,7 @@ from utils import create_visualizer
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()
+    print(f"Starting at {str(datetime.now())}")
     print(f"Running on host: '{socket.gethostname()}'")
     train_dataset = create_dataset(opt)
     train_dataset.setup()  # TEMP: for datasets that require a longer set-up time, this step is not done when making options
@@ -45,7 +47,8 @@ if __name__ == '__main__':
 
             if total_steps % opt.display_freq == 0:
                 save_result = total_steps % opt.update_html_freq == 0
-                visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, save_result)
+                if not opt.no_visdom and opt.display_id > 0:
+                    visualizer.display_current_results(model.get_current_visuals(), model.get_visual_paths(), epoch, save_result)
 
             if total_steps % opt.print_freq == 0:
                 losses = model.get_current_losses()

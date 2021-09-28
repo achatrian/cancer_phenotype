@@ -59,7 +59,7 @@ if __name__ == '__main__':
         random.shuffle(image_paths)
     failure_log = []
     for image_path in image_paths:
-        slide_id = re.sub(r'\.(ndpi|svs|tiff)', '', image_path.name)
+        slide_id = re.sub(r'\.(ndpi|svs|tiff|isyntax)', '', image_path.name)
         print(f"Processing slide: {slide_id} (extension: {image_path.suffix})")
         compute_vat_with_model = partial(compute_vat, model=model)
         #
@@ -87,8 +87,6 @@ if __name__ == '__main__':
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
-        if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
         processor = WSIProcessor(file_name=str(image_path), opt=opt, shift_and_merge=False,
                                  normalize_output=True, filter_location=area_contour)
         processor.apply(compute_vat_with_model, np.float32, Path(opt.data_dir) / 'data' / 'uncertainty_maps')

@@ -8,7 +8,7 @@ import pandas as pd
 from skimage import transform
 from matplotlib import cm
 from tqdm import tqdm
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from base.datasets.base_dataset import CenterCrop
 
 if __name__ == '__main__':
@@ -28,7 +28,7 @@ if __name__ == '__main__':
     slide_labels = labels.loc[slide_id]
     slide_labels.index = [tuple(int(d) for d in s.split('_')) for s in slide_labels.index]
     cmap_name = 'tab20'
-    reader = WSIReader(file_name=args.slide_path)
+    reader = make_wsi_reader(file_name=args.slide_path)
     downsample = reader.level_downsamples[args.export_level]
     read_start_corner = (min(slide_labels.index, key=lambda bounding_rect: bounding_rect[0])[0],
                          min(slide_labels.index, key=lambda bounding_rect: bounding_rect[1])[1])

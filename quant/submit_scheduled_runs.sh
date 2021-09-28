@@ -27,7 +27,7 @@ LOGDIR="/well/rittscher/users/achatrian/jobs_logs/run_experiments"
 RUNS_PARAMETERS_FILE=$1
 COMMON_PARAMETERS=$2
 echo -e "Shared run commands:\n ${COMMON_PARAMETERS}"
-cd ../launchscripts/quant
+cd /well/rittscher/users/achatrian/cancer_phenotype/launchscripts/quant || exit
 COUNTER=0
 while IFS="" read -r RUN_PARAMETERS || [ -n "$RUN_PARAMETERS" ]
 do

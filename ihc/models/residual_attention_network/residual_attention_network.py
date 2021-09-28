@@ -44,6 +44,7 @@ class ResidualAttentionModel_448input(nn.Module):
         )
         self.fc = nn.Linear(2048, num_class)
         self.attention_maps = []
+        self.features = None
 
     def forward(self, x):
         self.attention_maps = []
@@ -70,8 +71,8 @@ class ResidualAttentionModel_448input(nn.Module):
         out = self.residual_block6(out)
         out = self.mpool2(out)
         out = out.view(out.size(0), -1)
+        self.features = out
         out = self.fc(out)
-
         return out
 
 
@@ -80,7 +81,7 @@ class ResidualAttentionModel_92(nn.Module):
     def __init__(self):
         super(ResidualAttentionModel_92, self).__init__()
         self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias = False),
+            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True)
         )

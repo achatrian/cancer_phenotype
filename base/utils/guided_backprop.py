@@ -5,7 +5,6 @@ Created on Thu Oct 26 11:23:47 2017
 """
 import torch
 from torch.nn import ReLU
-
 from utils import utils
 
 
@@ -27,7 +26,8 @@ class GuidedBackprop():
         def hook_function(module, grad_in, grad_out):
             self.gradients = grad_in[0]
         # Register hook to the first layer
-        first_layer = dict(getattr(self.net, self.first_layer_name).named_modules())['0.conv']  # assuming first layer is a convolution
+        first_module = dict(getattr(self.net, self.first_layer_name).named_modules())
+        first_layer = next(iter(first_module.values())) # assuming first layer is a convolution
         first_layer.register_backward_hook(hook_function)
 
     def update_relus(self):

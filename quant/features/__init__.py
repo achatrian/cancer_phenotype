@@ -5,34 +5,41 @@ import time
 import warnings
 from numbers import Real
 import numpy as np
-from skimage import measure
-from skimage import color
-from skimage import feature
+import cv2
+from skimage.measure import regionprops, label
+from skimage.color import rgb2gray
+from skimage.feature import greycomatrix, greycoprops, ORB
+from skimage.transform import resize
+from skimage.morphology import skeletonize
+from scipy.stats import kurtosis
 import mahotas as mh
 from mahotas.features import surf  # needs separate import or does not work
 from base.utils import debug
-from joblib import Memory
+# from joblib import Memory
 # caching_path = Path('~/python_caches').expanduser()
 #memory = Memory(caching_path, bytes_limit=5e6, verbose=False)  # caching images so that checks are run faster
 # caching_path.mkdir(exist_ok=True)
 
+EPITHELIUM = 200
+LUMEN = 250
+NUCLEI = 50
 
-#@memory.cache
+# @memory.cache
 def is_contour(arg):  # specifies contour format
     return isinstance(arg, np.ndarray) and arg.ndim == 3 and arg.shape[2] == 2
 
 
-#@memory.cache
+# @memory.cache
 def is_mask(arg, num_classes=0):  # specifies mask format
     return isinstance(arg, np.ndarray) and np.unique(arg).size <= (num_classes or 10) and arg.ndim == 2
 
 
-#@memory.cache
+# @memory.cache
 def is_image(arg):  # specifies images format (RGB mapped to [-1, 1])
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
 
 
-#@memory.cache
+# @memory.cache
 def is_gray_image(arg):  # specifies gray images format (grayscale mapped to [-1, 1])
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 2
 
@@ -41,6 +48,7 @@ class Feature:
     r"""Feature callable"""
     __slots__ = ['function', 'type_', 'returns', 'name', 'call_time', 'n_calls', 'enable_checks',
                  'is_contour', 'is_mask', 'is_image', 'is_gray_image']
+    feature_names = set()
     # how-to-python: docstring and __slots__ defined this way are class attributes
 
     def __init__(self, function, returns, enable_checks=True):
@@ -51,6 +59,9 @@ class Feature:
         self.type_ = type_
         self.returns = returns
         self.name = function.__name__
+        if self.name in self.feature_names:
+            raise ValueError(f"Feature {self.name} already exists")
+        self.feature_names.add(self.name)
         self.call_time = 0.0
         self.n_calls = 0
         self.enable_checks = enable_checks
@@ -92,10 +103,6 @@ class MakeFeature:
         return Feature(f, self.returns)
 
 
-# TODO write class for neural network feature, i.e feature that loads and prepares
-#  nn feature extraction when it's created
-
-
 @MakeFeature(
     list(f'outer_hu_moment{i}' for i in range(7)) + list(f'outer_weighted_hu_moment{i}' for i in range(7)) + [
         'outer_eccentricity',
@@ -103,25 +110,37 @@ class MakeFeature:
         'outer_extent',
         'outer_inertia_eigenval0',
         'outer_inertia_eigenval1'
+    ] + list(f'resized_outer_hu_moment{i}' for i in range(7)) + [
+        'resized_outer_eccentricity',
+        'resized_outer_solidity',
+        'resized_outer_extent',
+        'resized_outer_inertia_eigenval0',
+        'resized_outer_inertia_eigenval1'
     ] + list(f'inner_hu_moment{i}' for i in range(7)) + list(f'inner_weighted_hu_moment{i}' for i in range(7)) + [
         'inner_eccentricity',
         'inner_solidity',
         'inner_extent',
         'inner_inertia_eigenval0',
         'inner_inertia_eigenval1'
+    ] + list(f'resized_inner_hu_moment{i}' for i in range(7)) + [
+        'resized_inner_eccentricity',
+        'resized_inner_solidity',
+        'resized_inner_extent',
+        'resized_inner_inertia_eigenval0',
+        'resized_inner_inertia_eigenval1'
     ])
-def region_properties(mask, image, map_values=((50, 200),)):
+def region_properties(mask, image, map_values=((NUCLEI, EPITHELIUM),), normalized_max_side=2048):
     r"""Region props, returns 2 regions max (outer and inner), the biggest by area
     """
     if image.shape[2] == 3:  # assume RGB
-        image = color.rgb2gray(image)
+        image = rgb2gray(image)
     if map_values is not None:
         mask = mask.copy()
         # any labels in the image that shouldn't be considered as a region can be incorporated in another region through
         # the map_ parameter
         for from_val, to_val in map_values:
             mask[mask == from_val] = to_val
-    all_rp = measure.regionprops(mask.astype(np.int32), intensity_image=image)  # NB: rc coordinates from version >=0.16
+    all_rp = regionprops(mask.astype(np.int32), intensity_image=image)  # NB: rc coordinates from version >=0.16
     if len(all_rp) == 2:
         outer_rp, inner_rp = all_rp
     elif len(all_rp) > 2:  # this case should not be needed though ?
@@ -134,10 +153,30 @@ def region_properties(mask, image, map_values=((50, 200),)):
     outer_features = tuple(outer_rp.moments_hu) + tuple(outer_rp.weighted_moments_hu) + \
                      (outer_rp.eccentricity, outer_rp.solidity, outer_rp.extent) + \
                      tuple(outer_rp.inertia_tensor_eigvals)
+    # calculate features on normalized segmentation mask for epithelium
+    h, w = outer_rp.filled_image.shape[:2]
+    resize_factor = normalized_max_side/w if w > h else normalized_max_side/h
+    resized_mask = resize(outer_rp.filled_image*255,
+                            (round(h*resize_factor), round(w*resize_factor)),
+                            preserve_range=True).astype(np.uint8)
+    r_outer_rp = regionprops((resized_mask > 0).astype(np.uint8))[0]
+    outer_features += tuple(r_outer_rp.moments_hu) + \
+                     (r_outer_rp.eccentricity, r_outer_rp.solidity, r_outer_rp.extent) + \
+                     tuple(r_outer_rp.inertia_tensor_eigvals)
     if inner_rp:
         inner_features = tuple(inner_rp.moments_hu) + tuple(inner_rp.weighted_moments_hu) + \
                       (inner_rp.eccentricity, inner_rp.solidity, inner_rp.extent) + \
                       tuple(inner_rp.inertia_tensor_eigvals)
+        # calculate features on normalized segmentation mask for largest lumen within epithelium
+        h, w = inner_rp.filled_image.shape[:2]
+        resize_factor = normalized_max_side / w if w > h else normalized_max_side / h
+        resized_mask = resize(inner_rp.filled_image*255,
+                                (round(h * resize_factor), round(w * resize_factor)),
+                                preserve_range=True)
+        r_inner_rp = regionprops((resized_mask > 0).astype(np.uint8))[0]
+        inner_features += tuple(r_inner_rp.moments_hu) + \
+                          (r_inner_rp.eccentricity, r_inner_rp.solidity, r_inner_rp.extent) + \
+                          tuple(outer_rp.inertia_tensor_eigvals)
     else:
         inner_features = (0.0,) * len(outer_features)
     return outer_features + inner_features
@@ -210,14 +249,14 @@ def gray_cooccurrence(gray_image):
     binned_image = np.copy(gray_image)
     for i in range(num_levels):
         binned_image[np.logical_and(gray_image >= 256/num_levels*i, gray_image < 256/num_levels*(i + 1))] = i
-    p = feature.greycomatrix(binned_image, distances, angles, levels=num_levels)
-    p_contrast = feature.greycoprops(p, 'contrast')
-    p_correlation = feature.greycoprops(p, 'correlation')
+    p = greycomatrix(binned_image, distances, angles, levels=num_levels)
+    p_contrast = greycoprops(p, 'contrast')
+    p_correlation = greycoprops(p, 'correlation')
     return list(p_contrast.flatten()) + list(p_correlation.flatten())
 
 
 NUM_KEYPOINTS = 30
-orb_extractor = feature.ORB(n_keypoints=NUM_KEYPOINTS)
+orb_extractor = ORB(n_keypoints=NUM_KEYPOINTS)
 
 
 @MakeFeature(list(f'orb_d{i}:{j}' for i in range(NUM_KEYPOINTS) for j in range(256)))
@@ -237,50 +276,93 @@ def orb_descriptor(gray_image):
     return descriptors.astype(np.uint8).flatten()
 
 
+# rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + [
+#         'outer_eccentricity',
+#         'outer_solidity',
+#         'outer_extent',
+#         'outer_inertia_eigenval0',
+#         'outer_inertia_eigenval1',
+#     ]
+# nuclear_features_returns = ['nuclear_' + rp_name for rp_name in rp_names] +\
+#                            ['nuclear_std' + rp_name for rp_name in rp_names] +\
+#                            ['nuclear_kurtosis' + rp_name for rp_name in rp_names] +\
+#                            ['nuclear_perimeter', 'num_nuclei', 'nuclei_to_tissue_ratio']
+
+nuclear_features_returns = ['mean_radius', 'std_radius', 'std_kurtosis', 'nuclear_perimeter', 'num_nuclei', 'nuclei_to_tissue_ratio']
+
+
 # nuclear features  TODO test !!!
-
-rp_names = list(f'outer_hu_moment{i}' for i in range(7)) + [
-        'outer_eccentricity',
-        'outer_solidity',
-        'outer_extent',
-        'outer_inertia_eigenval0',
-        'outer_inertia_eigenval1'
-    ]
-
-
-@MakeFeature(['nuclear_' + rp_name for rp_name in rp_names] + ['nuclear_density'])
-def nuclear_features(mask, image, map_values=((250, 0), (200, 0))):
+@MakeFeature(nuclear_features_returns)
+def nuclear_features(mask, image, tissue_value=EPITHELIUM, map_values=((EPITHELIUM, 0), (LUMEN, 0))):
     if image.shape[2] == 3:  # assume RGB
-        image = color.rgb2gray(image)
+        image = rgb2gray(image)
+    tissue_extent = np.sum(mask[mask == tissue_value])  # store extent of tissue in mask
     if map_values is not None:
         mask = mask.copy()  # need to copy mask as we're modifying it
         for from_val, to_val in map_values:
             mask[mask == from_val] = to_val
-    assert mask.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
-    label_mask = measure.label(mask.astype(np.int32))
-    nuclear_rps = measure.regionprops(label_mask, intensity_image=image)
-    if len(nuclear_rps) == 0:
-        return (0,)*12
-    features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigvals': []}
-    nuclear_perimeter, previous_nuclear_rp = 0, None  # compute distance connecting all nuclei in an image
-    for nuclear_rp in nuclear_rps:
-        for feature_name, feature_values in features.items():
-            feature_values.append(getattr(nuclear_rp, feature_name))
-        if previous_nuclear_rp is not None:
-            # nuclei are not labelled strictly anticlockwise
-            nuclear_perimeter += np.linalg.norm(np.array(nuclear_rp.centroid) -
-                                                np.array(previous_nuclear_rp.centroid), ord=2)
-        previous_nuclear_rp = nuclear_rp
-    mean_features = {}
-    for name, values in features.items():
-        if isinstance(values[0], Real):
-            mean_features[name] = sum(values)/len(values)
-        elif isinstance(values[0], (tuple, list, np.ndarray)):
-            values = np.array(values)
-            for index in range(values.shape[1]):
-                mean_features[f'{name}{index}'] = np.mean(values[:, index])
-    nuclear_density = nuclear_perimeter / len(nuclear_rps)
-    return tuple(mean_features.values()) + (nuclear_density,)
+    nuclei_extent = np.sum(mask[mask > 0])
+    if nuclei_extent == 0:
+        return (0,)*len(nuclear_features_returns)
+    nuclei_to_tissue_ratio = nuclei_extent/tissue_extent  # normalizations by size of mask cancel out in fraction
+    assert image.shape[:2] == mask.shape[:2], "the nuclear mask and image have the same shape"
+    assert mask.ndim == 2
+    # label_mask = label(mask.astype(np.int32))
+    # nuclear_rps = regionprops(label_mask, intensity_image=image)
+    nuclear_contours, hierarchy = cv2.findContours(mask.astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+    def find_centroid(contour):
+        M = cv2.moments(contour)
+        try:
+            return int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+        except ZeroDivisionError:
+            return ()
 
+    # if len(nuclear_rps) == 0:
+    #     return (0,)*len(nuclear_features_returns)
+    if len(nuclear_contours) == 0:
+        return (0,)*len(nuclear_features_returns)
+    # features = {'moments_hu': [], 'eccentricity': [], 'solidity': [], 'extent': [], 'inertia_tensor_eigvals': []}
+    nuclear_perimeter, previous_nuclear_contour, previous_centroid = 0, None, ()  # compute distance connecting all nuclei in an image
+    radii = []
+    for nuclear_contour in nuclear_contours:
+        if nuclear_contour.shape[0] <= 2 or nuclear_contour.ndim == 0 or nuclear_contour is None:
+            continue  # skip nuclei that are missing
+        if previous_nuclear_contour is None or previous_nuclear_contour.shape[0] > 2 or previous_nuclear_contour.ndim != 0:
+            continue
+        # nuclei are not labelled strictly anticlockwise
+        centroid = find_centroid(nuclear_contour)
+        if len(previous_centroid) == 0:
+            previous_centroid = find_centroid(previous_nuclear_contour)
+            if len(previous_centroid) == 0:
+                continue
+        try:
+            nuclear_perimeter += np.linalg.norm(np.array(centroid) -
+                                                np.array(previous_centroid), ord=2)
+        except ValueError as err:  # FIXME nuclear perimeter can sometimes have dimension 0 -- check reason for this
+            print(err)
+            print(nuclear_perimeter)
+            continue
+        previous_nuclear_contour = nuclear_contour
+        previous_centroid = centroid
+        radii.append(cv2.arcLength(nuclear_contour, True)/2/3.14159)
+    if len(radii) == 0:
+        return (0,)*len(nuclear_features_returns)
+    return np.mean(radii), np.std(radii), kurtosis(radii), nuclear_perimeter, len(nuclear_contours), nuclei_to_tissue_ratio
+    # mean_features, std_features, kurtosis_features = {}, {}, {}
+    # for name, values in features.items():
+    #     if isinstance(values[0], Real):
+    #         mean_features[name], std_features[name], kurtosis_features[name] = sum(values)/len(values), 0, 0
+    #     elif isinstance(values[0], (tuple, list, np.ndarray)):
+    #         values = np.array(values)
+    #         for index in range(values.shape[1]):
+    #             mean_features[f'{name}{index}'] = np.mean(values[:, index])
+    #             std_features[f'{name}{index}'] = np.std(values[:, index])
+    #             kurtosis_features[f'{name}{index}'] = kurtosis(values[:, index])
+    # return tuple(mean_features.values()) + tuple(std_features.values()) + tuple(kurtosis_features.values()) \
+    #        + (nuclear_perimeter, len(nuclear_rps), nuclei_to_tissue_ratio)
 
+#
+# @MakeFeature(nuclear_features_returns)
+# def branch_length():
+#     pass

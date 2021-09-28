@@ -32,7 +32,7 @@ def find_visualizer_using_name(task_name):
         return next(iter(subclass.__bases__)).__module__.endswith(superclass.__module__)
 
     visualizer = None
-    target_visualizer_name = task_name + 'visualizer'
+    target_visualizer_name = task_name.replace('_', '') + 'visualizer'
     for name, cls in visualizerlib.__dict__.items():
         if name.lower() == target_visualizer_name.lower():
             if is_subclass(cls, BaseVisualizer) or any(is_subclass(cls_b, BaseVisualizer) for cls_b in cls.__bases__):

@@ -9,7 +9,7 @@ import cv2
 from tqdm import tqdm
 from imageio import imwrite, imread
 from data.contours import get_contour_image, read_annotations
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from staintools import MacenkoStainExtractor
 from base.utils import debug
 
@@ -27,6 +27,8 @@ if __name__ == '__main__':
     parser.add_argument('--save_dir', type=Path, default=None)
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--shuffle_annotations', action='store_true')
+    parser.add_argument('--suffix', action='append', default=['ndpi', 'svs', 'tiff'])
+    parser.add_argument('--deeper_image_search', action='store_true')
     # wsi reader args
     parser.add_argument('--mpp', default=0.40, type=float, help="MPP value to read images from slide")  # CHANGED DEFAULT FROM 0.5 to 0.4
     args = parser.parse_args()
@@ -36,12 +38,10 @@ if __name__ == '__main__':
     (args.save_dir/'references').mkdir(exist_ok=True, parents=True)
 
     image_paths = []
-    image_paths += list(path for path in Path(args.data_dir).glob('*.ndpi'))
-    image_paths += list(path for path in Path(args.data_dir).glob('*.svs'))
-    image_paths += list(path for path in Path(args.data_dir).glob('*.tiff'))
-    image_paths += list(path for path in Path(args.data_dir).glob('*/*.ndpi'))
-    image_paths += list(path for path in Path(args.data_dir).glob('*/*.svs'))
-    image_paths += list(path for path in Path(args.data_dir).glob('*/*.tiff'))
+    for suffix in args.suffix:
+        image_paths += list(path for path in Path(args.data_dir).glob(f'*.{suffix}'))
+        if args.deeper_image_search:
+            image_paths += list(path for path in Path(args.data_dir).glob(f'*/*.{suffix}'))
     if args.shuffle_annotations:
         shuffle(image_paths)
 
@@ -61,7 +61,7 @@ if __name__ == '__main__':
         except KeyError as err:
             print(err)
             return None
-        reader = WSIReader(image_path, {'patch_size': args.tile_size, 'mpp': args.mpp})
+        reader = make_wsi_reader(image_path, {'patch_size': args.tile_size, 'mpp': args.mpp})
         with SpooledTemporaryFile() as matrix_file:
             reference = np.memmap(matrix_file, mode='w+', dtype=np.uint8,
                                         shape=(args.matrix_size, args.matrix_size, 3))

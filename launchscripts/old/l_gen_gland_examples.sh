@@ -18,8 +18,8 @@ CHKPT=/well/rittscher/users/achatrian/ProstateCancer/logs/pix2pix_big
 VAE=/well/rittscher/users/achatrian/ProstateCancer/logs/gtvae2018_10_11_18_38_22/ckpt/epoch_.3991_rec_loss_398118.46354_enc_loss_0.27605_dec_loss_0.10399_dis_loss_0.37233G.pth
 GPU='0,1'
 
-module load cuda/9.0
-module load cudnn/7.0-9.0
+
+
 source /users/rittscher/achatrian/pytorch-0.4.1-cuda9.0-py3.5.2-local-install/bin/activate
 cd /users/rittscher/achatrian/ProstateCancer/generative
 echo "SCRIPT STARTS"

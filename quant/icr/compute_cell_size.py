@@ -101,8 +101,7 @@ if __name__ == '__main__':
                             'nuclear_size:median': nuclear_median,
                             'nuclear_size:var': nuclear_var,
                             'num_nuclei': nuclear_areas.size,
-                            'cell_size:mean': tumour_area / nuclear_mean,
-                            'cell_size:median': tumour_area / nuclear_median,
+                            'cell_size': tumour_area / nuclear_areas.size
                         }
                         writer.writerow(tumour_data)
                         dataset = areas_file.create_dataset(f'{slide_id}:{roi_id}', data=nuclear_areas)

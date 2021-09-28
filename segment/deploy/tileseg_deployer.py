@@ -69,14 +69,14 @@ class TileSegDeployer(BaseDeployer):
             model.test()
             visuals = model.get_current_visuals()
             for i, map_ in enumerate(visuals['output_map']):
-                offset_x, offset_y = data['x_offset'][i], data['y_offset'][i]
+                x_offset, y_offset = data['x_offset'][i], data['y_offset'][i]
                 rescale_factor = float(data['read_mpp'][i] / data['base_mpp'][i]) if 'read_mpp' in data else 2.0
-                contours, labels, boxes = converter.mask_to_contour(map_, offset_x, offset_y, rescale_factor)
-                output_queue.put((contours, labels, boxes, (int(offset_x), int(offset_y)) + (opt.patch_size * rescale_factor,) * 2), timeout=opt.sync_timeout)
+                contours, labels, boxes = converter.mask_to_contour(map_, x_offset, y_offset, rescale_factor)
+                output_queue.put((contours, labels, boxes, (int(x_offset), int(y_offset)) + (opt.patch_size * rescale_factor,) * 2), timeout=opt.sync_timeout)
                 if opt.save_masks:
                     mask = utils.tensor2im(map_, segmap=True,
                                            num_classes=converter.num_classes)  # transforms tensors into mask label images
-                    imageio.imwrite(save_path / f"{offset_x}_{offset_y}_{opt.experiment_name}.png", mask)
+                    imageio.imwrite(save_path / f"{x_offset}_{y_offset}_{opt.experiment_name}.png", mask)
             num_images += data['input'].shape[0]
             if i % opt.print_freq == 0:
                 logger.info("[{}] has converted {} tiles".format(process_id, num_images))

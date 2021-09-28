@@ -1,40 +1,32 @@
 from pathlib import Path
 import json
+from collections import OrderedDict
+import operator
 import imageio
 import torch
 import numpy as np
 import cv2
 from skimage.color import rgba2rgb
 import imgaug as ia
+import warnings
 from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 ia.seed(1)
 
 
-class ROITilesDataset(BaseDataset):
-    r"""Dataset to train on output of data.roi_tile_extractor - multiple instances per image
+class InstanceTilesDataset(BaseDataset):
+    r"""
+        Same as TilePheno except instead of outputing the class label of the tile it outputs its ground truth
     """
 
     def __init__(self, opt):
-        super(ROITilesDataset, self).__init__(opt)
+        super(InstanceTilesDataset, self).__init__(opt)
         self.paths = []
         self.opt.data_dir = Path(self.opt.data_dir)
-        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split.json'  # what if I had wanted to use a different layer? TODO make roi_layer an option field
+        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split.json'  # what if I had wanted to use a different layer?
         with open(tiles_splits_path, 'r') as tiles_splits_file:
             tiles_splits = json.load(tiles_splits_file)
         assert tiles_splits['n_splits'] > 0, "Nonzero number of splits"
         phase = 'test' if self.opt.phase == 'val' else self.opt.phase
-        slide_ids = tiles_splits[phase][self.opt.split_num]
-        slides_tiles_dirs = tuple(self.opt.data_dir/'data'/'tiles'/tiles_splits['roi_layer']/slide_id for slide_id in slide_ids)
-        for slide_tiles_dir in slides_tiles_dirs:
-            self.paths.extend(path for path in slide_tiles_dir.iterdir() if path.name.endswith('_image.png'))
-        with open(slides_tiles_dirs[0]/'tile_export_info.json', 'r') as tile_export_info_file:  # assume every slide has same info (?)
-            self.resolution_data = json.load(tile_export_info_file)
-        assert self.paths, "Cannot be empty"
-        if not self.opt.no_ground_truth:
-            self.gt_paths = [Path(str(path).replace('_image', '_mask')) for path in self.paths]
-        self.randomcrop = RandomCrop(self.opt.patch_size)
-        if self.opt.augment_level:
-            self.aug_seq = get_augment_seq(opt.augment_level)
         if self.opt.skip_labels is not None:
             with open(self.opt.skip_labels, 'r') as label_file:
                 label_data = json.load(label_file)
@@ -44,20 +36,36 @@ class ROITilesDataset(BaseDataset):
             self.label_interval_map = {
                 'background': (0, 30),
                 'epithelium': (31, 225),
-                'lumen': (225, 255)
+                'lumen': (225, 250)
             }
             self.label_value_map = {
                 'background': 0,
                 'epithelium': 200,
                 'lumen': 250
             }
-        self.printed_tile_info = False
+        self.label_interval_map = OrderedDict(sorted(self.label_interval_map.items(), key=operator.itemgetter(1)))
+        self.label_value_map = OrderedDict(sorted(self.label_value_map.items(), key=operator.itemgetter(1)))
+        slide_ids = tiles_splits[phase][self.opt.split_num]
+        for layer in self.label_value_map:
+            slides_tiles_dirs = tuple(self.opt.data_dir/'data'/'tiles'/layer/slide_id for slide_id in slide_ids)
+            for slide_tiles_dir in slides_tiles_dirs:
+                if slide_tiles_dir.is_dir():
+                    self.paths.extend(path for path in slide_tiles_dir.iterdir() if path.name.endswith('_image.png'))
+        with open(self.opt.data_dir/'data'/'tiles'/tiles_splits['roi_layer']/'logs'/(slides_tiles_dirs[0].name + '_tiles.json'), 'r') as tile_export_info_file:  # assume every slide has same info (?)
+            self.resolution_data = json.load(tile_export_info_file)  # will be the same for all slides
+        assert self.paths, "Cannot be empty"
+        if not self.opt.no_ground_truth:
+            self.gt_paths = [Path(str(path).replace('_image', '_mask')) for path in self.paths]
+        self.randomcrop = RandomCrop(self.opt.patch_size)
+        if self.opt.augment_level:
+            self.aug_seq = get_augment_seq(opt.augment_level)
+        self.last_crop = (0, 0)
 
     def __len__(self):
         return len(self.paths)
 
     def name(self):
-        return "ROITilesDataset"
+        return "InstanceTilesDataset"
 
     def setup(self):
         pass
@@ -81,7 +89,7 @@ class ROITilesDataset(BaseDataset):
         :param gt: optionally scale and pad / random crop ground truth as for the images
         :return:
         """
-        image_size_after_resizing, delta_w, delta_h = image.shape, 0, 0
+        origin = (0, 0)
         if gt is not None and (gt.ndim == 3 and gt.shape[2] == 3):
             gt = gt[..., 0]  # take only one channel of the 3 identical RGB values
         if gt is not None and self.opt.one_class:
@@ -91,7 +99,6 @@ class ROITilesDataset(BaseDataset):
             # if asymmetrical, crop images
             resize_factor = read_mpp / target_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
-            image_size_after_resizing = image.shape
             if gt is not None:
                 gt = cv2.resize(gt, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
 
@@ -99,26 +106,31 @@ class ROITilesDataset(BaseDataset):
             too_narrow = image.shape[1] < self.opt.patch_size
             too_short = image.shape[0] < self.opt.patch_size
             if too_narrow or too_short:
-                # pad if needed
                 delta_w = self.opt.patch_size - image.shape[1] if too_narrow else 0
                 delta_h = self.opt.patch_size - image.shape[0] if too_short else 0
-                top, bottom = delta_h // 2, delta_h - (delta_h // 2)
-                left, right = delta_w // 2, delta_w - (delta_w // 2)
-                image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_REFLECT)
-                if gt is not None:
-                    gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_REFLECT)
+                if self.opt.phase == 'train':  # in the train phase contours extracted from reflected images will be wrong
+                    # pad if needed
+                    top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+                    left, right = delta_w // 2, delta_w - (delta_w // 2)
+                    image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_REFLECT)
+                    if gt is not None:
+                        gt = cv2.copyMakeBorder(gt, top, bottom, left, right, cv2.BORDER_REFLECT)
+                    origin = (top, bottom)
+                else:
+                    image = cv2.copyMakeBorder(image, 0, delta_h, 0, delta_w, cv2.BORDER_CONSTANT)
+                    if gt is not None:
+                        gt = cv2.copyMakeBorder(gt, 0, delta_h, 0, delta_w, cv2.BORDER_CONSTANT)
             if image.shape[0] > self.opt.patch_size or image.shape[1] > self.opt.patch_size:
                 if gt is not None:
                     cat = np.concatenate([image, gt[:, :, np.newaxis]], axis=2)
                     cat = self.randomcrop(cat)
+                    origin = self.randomcrop.last_crop
                     image = cat[:, :, 0:3]
                     gt = cat[:, :, 3]
                 else:
                     image = self.randomcrop(image)
-        # if not self.printed_tile_info:
-        #     print(f"Image after resizing has shape {image_size_after_resizing}. Needed paddings are: w={delta_w}, h={delta_h}")
-        #     self.printed_tile_info = True
-        return image, gt
+                    origin = self.randomcrop.last_crop
+        return image, gt, origin
 
     def __getitem__(self, idx):
         image_path = self.paths[idx]
@@ -130,13 +142,14 @@ class ROITilesDataset(BaseDataset):
             # process images and ground truth together to keep spatial correspondence
             gt_path = self.gt_paths[idx]
             gt = imageio.imread(gt_path)
+            if gt.ndim == 3 and gt.shape[2] == 3:
+                gt = gt[..., 0]
             assert gt.ndim == 2, "Check gt format"
-            image, gt = self.rescale(image, gt=gt)
+            image, gt, origin = self.rescale(image, gt=gt)
             if not (isinstance(gt, np.ndarray) and gt.ndim > 0):
                 raise ValueError("{} is not valid".format(gt_path))
             # im aug
             image, gt = self.augment_image(image, gt)
-            # TODO test below !!!
             # paint labels in
             for i, (label, interval) in enumerate(self.label_interval_map.items()):
                 gt[np.logical_and(gt >= interval[0], gt <= interval[1])] = i
@@ -144,7 +157,7 @@ class ROITilesDataset(BaseDataset):
             assert (len(gt.shape) == 2)
             gt = torch.from_numpy(gt.copy()).long()  # change to FloatTensor for BCE
         else:
-            image, _ = self.rescale(image)  # gt is none here
+            image, _, origin = self.rescale(image)  # gt is none here
         # scale between 0 and 1
         image = image/255.0
         # normalised images between -1 and 1
@@ -158,9 +171,10 @@ class ROITilesDataset(BaseDataset):
         data = dict(
             input=image,
             input_path=str(image_path),
-            x_offset=int(coords[0]),
-            y_offset=int(coords[1])
+            x_offset=int(coords[1]) + origin,  # different from roitiles
+            y_offset=int(coords[2]) + origin
         )
         if not self.opt.no_ground_truth:
-            data.update(target=gt, target_path=str(gt_path))
+            data['target'] = gt
+            data['target_path'] = str(gt_path)
         return data

@@ -57,7 +57,8 @@ if __name__ == '__main__':
     parser.add_argument('--experiment', type=str, help="Experiment type - used to load desired experiment class")
     args = parser.parse_args()
     results_dir = args.data_dir / 'data' / 'experiments' / f'{args.experiment}' / 'results'
-    final_result_dir = args.data_dir / 'data' / 'experiments' / f'{args.experiment}' / 'final_result'
+    visual_result_dir = args.data_dir / 'data' / 'experiments' / f'{args.experiment}' / 'results_viz'
+    visual_result_dir.mkdir(exist_ok=True, parents=True)
     evaluation_results = {}
     # incorporate parameters into result
     for result_path in results_dir.iterdir():
@@ -73,49 +74,49 @@ if __name__ == '__main__':
         except FileNotFoundError:
             continue
         evaluation_result.update(parameters)
-        evaluation_results[result_path.name] = evaluation_result
+        evaluation_results[result_path.name] = evaluation_result  #
     # num neighbours and inflation vs modularity
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'modularity',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir/f'num_neighbors&inflation_vs_modularity.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_modularity.png')
     # num neighbours and inflation vs silhouette score
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'silhouette_score',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir / f'num_neighbors&inflation_vs_silhouette.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_silhouette.png')
     # num neighbors and inflation vs num_clusters
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'num_clusters',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir / f'num_neighbors&inflation_vs_num_clusters.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_num_clusters.png')
     # num neighbors and inflation vs adjusted mutual information
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'adjusted_mutual_information_score',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir / f'num_neighbors&inflation_vs_adjusted_mutual_information_score.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_adjusted_mutual_information_score.png')
     # num neighbors and inflation vs adjusted rand score
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'adjusted_rand_score',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir / f'num_neighbors&inflation_vs_adjusted_rand_score.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_adjusted_rand_score.png')
     # num neighbors and inflation vs random forest gleason prediction
     fig, axes = plt.subplots(2, 2, figsize=(20, 20))
     axes = axes.flatten()
     for i, map_size in enumerate([80, 90, 100, 110]):
         make_grids_and_plot_heatmap(evaluation_results, 'num_neighbors', 'inflation', 'rf_average_gleason_prediction_score',
                                     ax=axes[i], fig=fig, map_size=map_size)
-    fig.savefig(final_result_dir / f'num_neighbors&inflation_vs_rf_average_gleason_prediction_score.png')
+    fig.savefig(visual_result_dir / f'num_neighbors&inflation_vs_rf_average_gleason_prediction_score.png')
     print("Done!")
 
 

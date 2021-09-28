@@ -9,77 +9,39 @@ import json
 from numbers import Real
 import datetime
 import time
+from openslide import OpenSlideError
 import tqdm
-from openslide import OpenSlide, PROPERTY_NAME_MPP_X, PROPERTY_NAME_MPP_Y, PROPERTY_NAME_BACKGROUND_COLOR
 import numpy as np
 import cv2
-from skimage.morphology import remove_small_objects
-import imageio
-from base.utils import utils, debug
+from skimage.morphology import remove_small_objects, remove_small_holes
+from .base_wsi_reader import TiffReader as TReader, IsyntaxReader as IReader
+from base.utils import debug
 
 
-class WSIReader(OpenSlide):
-
-    @staticmethod
-    def get_reader_options(include_path=True, include_thresholds=True, args=()):
-        parser = argparse.ArgumentParser(usage="wsi_reader.py path_to_image [options]" if include_path else None)
-        if include_path:
-            parser.add_argument('slide_path', type=str, default='')
-        parser.add_argument('--qc_mpp', default=2.0, type=float, help="MPP value to perform quality control on slide")
-        parser.add_argument('--mpp', default=0.40, type=float, help="MPP value to read images from slide")   # CHANGED DEFAULT FROM 0.5 to 0.4
-        parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
-        parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
-        parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
-        parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
-        parser.add_argument('--patch_size', type=int, default=1024, help="Pixel size of patches (at desired resolution)")
-        parser.add_argument('--verbose', action='store_true', help="Print more information")
-        if include_thresholds:
-            parser.add_argument('--tissue_threshold', type=float, default=0.4,
-                                help="Threshold of tissue filling in tile for it to be considered a tissue tile")
-            parser.add_argument('--saturation_threshold', type=int, default=25,
-                                help="Saturation difference threshold of tile for it to be considered a tissue tile")
-        if args:
-            if isinstance(args, dict):
-                args = tuple(f'--{key}={value}' for key, value in args.items())
-            opt, unknown = parser.parse_known_args(args)
-        else:
-            opt, unknown = parser.parse_known_args()
-        return opt
-
+class AdvancedReader:
     def __init__(self, file_name='', opt=None, set_mpp=None):
         r"""
-
         :param file_name: path to image file
         :param opt: options, as returned by get_reader_options (or dict)
-        :param set_mpp: if no mpp metadata is available, write
+        :param set_mpp: if no mpp metadata is available, set_mpp is assumed to be the highest resolution for the slide
         """
         file_name = str(file_name)
-        super(WSIReader, self).__init__(file_name)
-        slide_format = WSIReader.detect_format(file_name)
-        if not slide_format:
-            warnings.warn("Format vendor is not specified in metadata for {}".format(file_name), UserWarning)
+        super().__init__(file_name)  # initializes tiff or isyntax base readers
         if isinstance(opt, dict):
-            self.opt = WSIReader.get_reader_options(include_path=False, args=opt)
+            self.opt = get_reader_options(include_path=False, args=opt)
         else:
-            self.opt = opt or WSIReader.get_reader_options(False, True)
+            self.opt = opt or get_reader_options(False, True)
         self.file_name = file_name
         self.tissue_locations = []
         self.locations = []
         self.tile_info = dict()
         self.qc = None
         self.stride = None  # stride s
-        self.PROPERTY_NAME_MPP_X = PROPERTY_NAME_MPP_X
-        self.PROPERTY_NAME_MPP_Y = PROPERTY_NAME_MPP_Y
         self.no_resolution = False
-        try:
-            self.mpp_x, self.mpp_y = float(self.properties[self.PROPERTY_NAME_MPP_X]), \
-                           float(self.properties[self.PROPERTY_NAME_MPP_Y])
-        except KeyError:
-            if set_mpp is not None:
-                self.mpp_x, self.mpp_y = set_mpp, set_mpp
-            else:
-                warnings.warn("No resolution information available")
-                self.no_resolution = True  # TODO disable all resolution dependent commands
+        self.mpp_x, self.mpp_y = self.mpp[0] or set_mpp, self.mpp[1] or set_mpp
+        if self.mpp_x is None:
+            warnings.warn("No resolution information available")
+            self.no_resolution = True  # TODO disable all resolution dependent commands
         # compute read level based on mpp
         if not self.no_resolution and hasattr(self.opt, 'qc_mpp') and hasattr(self.opt, 'mpp'):
             if self.opt.qc_mpp < self.opt.mpp:
@@ -100,7 +62,7 @@ class WSIReader(OpenSlide):
             self.qc_mpp = float(self.mpp_x) * self.level_downsamples[self.qc_read_level]
         else:
             warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
-            self.find_tissue_locations = lambda: print("No mpp or qc_mpp options - cannot perform quality control")
+            self.find_tissue_locations = lambda *args: print("No mpp or qc_mpp options - cannot perform quality control")
         self.tissue_threshold = None
         self.tissue_percentage = None
         self.saturation_threshold = None
@@ -110,6 +72,7 @@ class WSIReader(OpenSlide):
         Perform quality control on regions of slide by examining each tile
         :return:
         """
+        tile_read_errors = []
         try:
             if self.opt.overwrite_qc:
                 raise FileNotFoundError('Option: overwrite quality_control')
@@ -120,9 +83,8 @@ class WSIReader(OpenSlide):
             print("Finding tissue tiles ...")
             tissue_locations = []
             qc_downsample = int(self.level_downsamples[self.qc_read_level])
-            read_downsample = int(self.level_downsamples[self.read_level])
-            self.stride = self.opt.patch_size * read_downsample  # size of read tiles at level 0
-            qc_sizes = (self.stride // qc_downsample,) * 2  # size of read tiles at level qc_read_level
+            self.stride = self.opt.patch_size * qc_downsample  # size of read tiles at level 0
+            qc_sizes = (self.opt.patch_size,) * 2  # size of read tiles at level qc_read_level
             xs = list(range(0, self.level_dimensions[0][0], self.stride))[:-1]  # dimensions = (width, height)
             ys = list(range(0, self.level_dimensions[0][1], self.stride))[:-1]
             self.tissue_threshold = tissue_threshold
@@ -132,7 +94,12 @@ class WSIReader(OpenSlide):
             with tqdm.tqdm(total=total_tile_num) as progress_bar:
                 for x in xs:
                     for y in ys:
-                        tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
+                        try:
+                            tile = self.read_region((x, y), self.qc_read_level, qc_sizes)
+                        except OpenSlideError as err:  # 'Cannot read raw tile' error on red regions of some images
+                            tile_read_errors.append(str(err))
+                            progress_bar.update()
+                            continue
                         tile = np.array(tile)  # convert from PIL.Image
                         self.locations.append((x, y))
                         if not self.is_HnE(tile, threshold=tissue_threshold, sat_thresh=saturation_threshold):
@@ -149,7 +116,8 @@ class WSIReader(OpenSlide):
                 self.tissue_locations = tissue_locations
                 self.save_locations()  # overwrite if existing
             self.tissue_percentage = coverage / total_tile_num
-            print(f"Performed quality control on {os.path.basename(self.file_name)}, {self.tissue_percentage}% coverage")
+            print(f"Performed quality control on {os.path.basename(self.file_name)}, {self.tissue_percentage * 100}% coverage")
+        return tile_read_errors
 
     def save_locations(self):
         """
@@ -205,7 +173,7 @@ class WSIReader(OpenSlide):
                     raise FileNotFoundError(f"Empty file: {slide_loc_path}")
                 quality_control = json.load(slide_loc_file)
                 if quality_control['mpp_x'] != self.mpp_x or quality_control['mpp_y'] != self.mpp_y or \
-                    quality_control['qc_read_level'] != self.qc_read_level or quality_control['qc_mpp'] != self.qc_mpp:
+                        quality_control['qc_read_level'] != self.qc_read_level or quality_control['qc_mpp'] != self.qc_mpp:
                     raise ValueError(f"Mismatching slide and quality control information for {Path(self.file_name).name} (slide/file) "
                                      f"mpp_x: {self.mpp_x:.2f}/{quality_control['mpp_x']:.2f}; mpp_y: {self.mpp_y:.2f}/{quality_control['mpp_y']:.2f}; "
                                      f"qc_mpp: {self.qc_mpp:.2f}/{quality_control['qc_mpp']:.2f}; qc_read_level: {self.qc_read_level:.2f}/{quality_control['qc_read_level']:.2f}")
@@ -219,7 +187,7 @@ class WSIReader(OpenSlide):
 
     def __getitem__(self, item):
         r"""Returns tissue tiles"""
-        return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size, ) * 2)
+        return self.read_region(self.tissue_locations[item], self.read_level, (self.opt.patch_size,) * 2)
 
     def filter_locations(self, delimiters, delimiters_scaling=None, loc_tol=0.2):
         r"""
@@ -258,60 +226,20 @@ class WSIReader(OpenSlide):
             warnings.warn(f"Filtering resulted in empty reader for {Path(self.file_name).name}")
         self.tissue_locations = tuple(internal_locations)
 
-    def export_tissue_tiles(self, tile_dir='tiles', export_delimiters=(), delimiters_scaling=None):
-        r"""
-        Save quality-controlled tiles
-        :param tile_dir:
-        :param export_delimiters:
-        :param delimiters_scaling:
-        :return:
-        """
-        sizes = (self.opt.patch_size, )*2
-        save_tiles_dir = Path(self.opt.data_dir)/'data'/tile_dir/Path(self.file_name).name[:-4]  # remove extension
-        utils.mkdirs(save_tiles_dir)
-        with open(save_tiles_dir/'resolution.json', 'w') as res_file:
-            json.dump({
-                'target_mpp': self.opt.mpp,
-                'target_qc_mpp': self.opt.qc_mpp,
-                'read_level': self.read_level,
-                'qc_read_level': self.qc_read_level,
-                'read_mpp': self.read_mpp,
-                'qc_mpp': self.qc_mpp,
-                'tissue_locations': self.tissue_locations
-            },
-                      res_file)
-        if self.tissue_locations:
-            print("Begin exporting tiles ...")
-            log_freq, start_time, last_print = 5, time.time(), 0
-            exported_locations = []
-            with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
-                log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
-                if export_delimiters:
-                    self.filter_locations(export_delimiters, delimiters_scaling)  # TODO test
-                for x, y in tqdm.tqdm(self.tissue_locations):
-                    tile = self.read_region((x, y), self.read_level, sizes)
-                    tile = np.array(tile)
-                    imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
-                    exported_locations.append((x, y))
-                    if len(exported_locations) % log_freq == 0 and last_print != len(exported_locations):
-                        log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}s) Exported {len(exported_locations)} tiles ...\n")
-                        last_print = len(exported_locations)
-                if not exported_locations:
-                    warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
-                log_file.write(f"{time.time() - start_time:.3f}s Done !")
-                print(f"Exported {len(exported_locations)} tiles.")
-        else:
-            warnings.warn(f"No locations to export - {Path(self.file_name).name}")
-
     def __str__(self):
         return os.path.basename(self.file_name) + '\t' + '\t'.join(['{},{}'.format(x, y) for x, y in self.tissue_locations])
 
+    def __repr__(self):
+        return str(self)
+
     @staticmethod
-    def is_HnE(image, threshold=0.4, sat_thresh=20, small_obj_size_factor=1/5):
+    def is_HnE(image, threshold=0.4, sat_thresh=20, min_size=50, area_threshold=200):
         """Returns true if slide contains tissue or just background
         Problem: doesn't work if tile is completely white because of normalization step"""
+        assert np.issubdtype(image.dtype, np.integer), "RGB representation must be integers from 0 to 255 "
         if image.shape[-1] == 4:
-            image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+            #image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+            image = image[..., :3]
         hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(float)
         # saturation check
         sat_mean = hsv_image[..., 1].mean()
@@ -320,7 +248,8 @@ class WSIReader(OpenSlide):
         kernel = np.ones((20, 20), np.uint8)
         ret, _ = cv2.threshold(empirical.astype(np.uint8), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-        mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
+        mask = remove_small_holes(mask.astype(bool), area_threshold=area_threshold, connectivity=3)
+        mask = remove_small_objects(mask.astype(bool), min_size=min_size)
         return mask.mean() > threshold and sat_mean >= sat_thresh
 
     @staticmethod
@@ -333,21 +262,159 @@ class WSIReader(OpenSlide):
         # TODO implement
         return False
 
-    # def read_region(self, location: Tuple[int, int], level=None, size=None, array=True):
-    #     if size is None and not hasattr(self.opt, 'patch_size'):
-    #         raise ValueError("Either size or opt.patch_size must be defined")
-    #     region = super().read_region(location, level=level if level is not None else self.read_level,
-    #                                size=size or (self.opt.patch_size, )*2)
-    #     return np.array(region) if array else region
+
+class WSIReader(AdvancedReader, TReader):
+
+    def __init__(self, file_name='', opt=None, set_mpp=None):
+        super().__init__(file_name, opt, set_mpp)
 
 
-if __name__ == '__main__':
-    opt = WSIReader.get_reader_options()
-    wsi_reader = WSIReader(opt.slide_path, opt)
-    wsi_reader.find_tissue_locations(opt.tissue_threshold, opt.saturation_threshold)
-    wsi_reader.export_tissue_tiles('tiles_temp')
+class IsyntaxReader(AdvancedReader, IReader):
+
+    def __init__(self, file_name='', opt=None, set_mpp=None):
+        super().__init__(file_name, opt, set_mpp)
 
 
+def make_wsi_reader(file_name='', opt=None, set_mpp=None):
+    if Path(file_name).suffix == '.isyntax':
+        return IsyntaxReader(file_name, opt, set_mpp)
+    else:
+        return WSIReader(file_name, opt, set_mpp)
+
+
+def add_reader_args(parser, include_path=False, include_thresholds=True):
+    def get_option_strings(parser: argparse.ArgumentParser):
+        option_strings = set()
+        for action in parser._actions:
+            for option_string in action.option_strings:
+                option_strings.add(option_string)
+        return option_strings
+
+    preexisting_options = get_option_strings(parser)
+    if include_path:
+        parser.add_argument('slide_path', type=str, default='')
+    parser.add_argument('--qc_mpp', default=2.0, type=float, help="MPP value to perform quality control on slide")
+    if '--mpp' not in preexisting_options:
+        parser.add_argument('--mpp', default=0.40, type=float, help="MPP value to read images from slide")   # CHANGED DEFAULT FROM 0.5 to 0.4
+    if '--data_dir' not in preexisting_options:
+        parser.add_argument('--data_dir', type=str, default='', help="Dir where to save qc result")
+    parser.add_argument('--check_tile_blur', action='store_true', help="Check for blur")
+    parser.add_argument('--check_tile_fold', action='store_true', help="Check tile fold")
+    parser.add_argument('--overwrite_qc', action='store_true', help="Overwrite saved quality control data")
+    if '--patch_size' not in preexisting_options:
+        parser.add_argument('--patch_size', type=int, default=1024, help="Pixel size of patches (at desired resolution)")
+    if '--verbose' not in preexisting_options:
+        parser.add_argument('--verbose', action='store_true', help="Print more information")
+    if include_thresholds:
+        parser.add_argument('--tissue_threshold', type=float, default=0.4,
+                            help="Threshold of tissue filling in tile for it to be considered a tissue tile")
+        parser.add_argument('--saturation_threshold', type=int, default=25,
+                            help="Saturation difference threshold of tile for it to be considered a tissue tile")
+    return parser
+
+
+def get_reader_options(include_path=True, include_thresholds=True, args=()):
+    parser = argparse.ArgumentParser(usage="base_wsi_reader.py path_to_image [options]" if include_path else None)
+    parser = add_reader_args(parser, include_path, include_thresholds)
+    if args:
+        if isinstance(args, dict):
+            args = tuple(f'--{key}={value}' for key, value in args.items())
+        opt, unknown = parser.parse_known_args(args)
+    else:
+        opt, unknown = parser.parse_known_args()
+    return opt
+
+
+    # def export_tissue_tiles(self, tile_dir='tiles', export_delimiters=(), delimiters_scaling=None):
+    #     r"""
+    #     Save quality-controlled tiles
+    #     :param tile_dir:
+    #     :param export_delimiters:
+    #     :param delimiters_scaling:
+    #     :return:
+    #     """
+    #     sizes = (self.opt.patch_size, )*2
+    #     save_tiles_dir = Path(self.opt.data_dir)/'data'/tile_dir/Path(self.file_name).name[:-4]  # remove extension
+    #     utils.mkdirs(save_tiles_dir)
+    #     with open(save_tiles_dir/'resolution.json', 'w') as res_file:
+    #         json.dump({
+    #             'target_mpp': self.opt.mpp,
+    #             'target_qc_mpp': self.opt.qc_mpp,
+    #             'read_level': self.read_level,
+    #             'qc_read_level': self.qc_read_level,
+    #             'read_mpp': self.read_mpp,
+    #             'qc_mpp': self.qc_mpp,
+    #             'tissue_locations': self.tissue_locations
+    #         },
+    #                   res_file)
+    #     if self.tissue_locations:
+    #         print("Begin exporting tiles ...")
+    #         log_freq, start_time, last_print = 5, time.time(), 0
+    #         exported_locations = []
+    #         with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
+    #             log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
+    #             if export_delimiters:
+    #                 self.filter_locations(export_delimiters, delimiters_scaling)  # TODO test
+    #             for x, y in tqdm.tqdm(self.tissue_locations):
+    #                 tile = self.read_region((x, y), self.read_level, sizes)
+    #                 tile = np.array(tile)
+    #                 imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+    #                 exported_locations.append((x, y))
+    #                 if len(exported_locations) % log_freq == 0 and last_print != len(exported_locations):
+    #                     log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}s) Exported {len(exported_locations)} tiles ...\n")
+    #                     last_print = len(exported_locations)
+    #             if not exported_locations:
+    #                 warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
+    #             log_file.write(f"{time.time() - start_time:.3f}s Done !")
+    #             print(f"Exported {len(exported_locations)} tiles.")
+    #     else:
+    #         warnings.warn(f"No locations to export - {Path(self.file_name).name}")
+
+
+    # def export_tissue_tiles(self, tile_dir='tiles', export_delimiters=(), delimiters_scaling=None):
+    #     r"""
+    #     Save quality-controlled tiles
+    #     :param tile_dir:
+    #     :param export_delimiters:
+    #     :param delimiters_scaling:
+    #     :return:
+    #     """
+    #     sizes = (self.opt.patch_size, )*2
+    #     save_tiles_dir = Path(self.opt.data_dir)/'data'/tile_dir/Path(self.file_name).name[:-4]  # remove extension
+    #     utils.mkdirs(save_tiles_dir)
+    #     with open(save_tiles_dir/'resolution.json', 'w') as res_file:
+    #         json.dump({
+    #             'target_mpp': self.opt.mpp,
+    #             'target_qc_mpp': self.opt.qc_mpp,
+    #             'read_level': self.read_level,
+    #             'qc_read_level': self.qc_read_level,
+    #             'read_mpp': self.read_mpp,
+    #             'qc_mpp': self.qc_mpp,
+    #             'tissue_locations': self.tissue_locations
+    #         },
+    #                   res_file)
+    #     if self.tissue_locations:
+    #         print("Begin exporting tiles ...")
+    #         log_freq, start_time, last_print = 5, time.time(), 0
+    #         exported_locations = []
+    #         with open(save_tiles_dir / 'log.txt', 'w') as log_file:  # 'w' flags overwrites file completely
+    #             log_file.write(f"{''.join(datetime.datetime.now().__str__().split(' ')[0:2])} - begin export ...\n")
+    #             if export_delimiters:
+    #                 self.filter_locations(export_delimiters, delimiters_scaling)  # TODO test
+    #             for x, y in tqdm.tqdm(self.tissue_locations):
+    #                 tile = self.read_region((x, y), self.read_level, sizes)
+    #                 tile = np.array(tile)
+    #                 imageio.imwrite(save_tiles_dir/f'{x}_{y}.png', tile)
+    #                 exported_locations.append((x, y))
+    #                 if len(exported_locations) % log_freq == 0 and last_print != len(exported_locations):
+    #                     log_file.write(f"({len(exported_locations)}: {time.time() - start_time:.3f}s) Exported {len(exported_locations)} tiles ...\n")
+    #                     last_print = len(exported_locations)
+    #             if not exported_locations:
+    #                 warnings.warn(f"No tissue locations overlapped with annotation - {Path(self.file_name).name}")
+    #             log_file.write(f"{time.time() - start_time:.3f}s Done !")
+    #             print(f"Exported {len(exported_locations)} tiles.")
+    #     else:
+    #         warnings.warn(f"No locations to export - {Path(self.file_name).name}")
 
 
 

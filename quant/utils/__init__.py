@@ -51,7 +51,7 @@ def read_parameter_values(args, parameter):
         except ValueError:
             try:
                 # or read ; - separated values
-                parameter_values = tuple(to_num(s) for s in getattr(args, f'{parameter}').split(';'))
+                parameter_values = list(to_num(s) for s in getattr(args, f'{parameter}').split(';'))
             except ValueError:
                 raise ValueError(f"Unknown format for parameter values: '{getattr(args, f'{parameter}')}'")
     return parameter_values

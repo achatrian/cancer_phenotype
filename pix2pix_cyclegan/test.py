@@ -11,7 +11,7 @@ if __name__ == '__main__':
     # hard-code some parameters for test
     opt.num_threads = 1   # test code only supports num_threads = 1
     opt.batch_size = 1    # test code only supports batch_size = 1
-    opt.serial_batches = True  # no shuffle
+    opt.sequential_samples = True  # no shuffle
     opt.no_flip = True    # no flip
     opt.display_id = -1   # no visdom display
     data_loader = CreateDataLoader(opt)

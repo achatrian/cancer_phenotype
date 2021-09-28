@@ -6,7 +6,7 @@ from quant.utils import print_options, read_parameter_values, print_parameters
 
 
 r"""
-Scripts for applying experiment results to new / different dataset
+Script for applying experiment results to new / different dataset
 """
 
 
@@ -16,7 +16,7 @@ if __name__ == '__main__':
     parser.add_argument('--task', type=str, help="Description of task")
     parser.add_argument('--experiment', type=str, help="Experiment type - used to load desired experiment class")
     parser.add_argument('--data_dir', type=Path, help="Directory where data is stored")
-    parser.add_argument('--preprocess_search', action='store_true', help="whether to instantiate a search over preprocessing parameters")
+    parser.add_argument('--preprocess_search', action='store_true', help="whether to perform a search over preprocessing parameters")
     parser.add_argument('--exp_help', action='store_true')
     parser.add_argument('--debug', action='store_true', help="flag used in experiment to run tests for debugging")
     args, unparsed = parser.parse_known_args()

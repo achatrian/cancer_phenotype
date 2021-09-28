@@ -7,7 +7,7 @@ sys.path.extend([
     '/well/rittscher/users/achatrian/cancer_phenotype/',
     '/well/rittscher/users/achatrian/cancer_phenotype/base'
 ])
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from annotation.annotation_builder import AnnotationBuilder
 from base.options.base_options import BaseOptions
 
@@ -31,7 +31,7 @@ def main(slide_file):
         contours, labels = AnnotationBuilder.from_object(annotation).get_layer_points(0, contour_format=True)
     setattr(opt, 'overwrite_qc', True)  # force overwriting of all quality_control files
     print(f"Quality control mpp: {opt.qc_mpp}, read_mpp: {opt.mpp}")
-    slide = WSIReader(slide_file, opt)
+    slide = make_wsi_reader(slide_file, opt)
     slide.find_tissue_locations()
     print("Exporting data ...")
     try:

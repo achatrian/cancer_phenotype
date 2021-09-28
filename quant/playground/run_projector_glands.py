@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from skimage import color
 from quant.experiment import BaseExperiment
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 
 
 if __name__ == '__main__':
@@ -25,7 +25,7 @@ if __name__ == '__main__':
     for slide_path in args.data_dir.iterdir():
         if slide_path.suffix not in ('.ndpi', '.svs'):
             continue
-        slide = WSIReader(file_name=str(slide_path))
+        slide = make_wsi_reader(file_name=str(slide_path))
         slide_id = slide_path.with_suffix('').name
         x_slide = exp.x[slide_id]
         bounding_boxes = tuple(tuple(d for d in s.split('_')) for s in list(x_slide.index))

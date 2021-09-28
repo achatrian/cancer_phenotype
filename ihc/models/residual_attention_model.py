@@ -51,16 +51,19 @@ class ResidualAttentionModel(BaseModel):
         if self.input is None:
             raise ValueError("Input not set for {}".format(self.name()))
         self.output = self.net(self.input)
-        if hasattr(self.net, 'attention_maps'):
-            self.attention0, self.attention1, self.attention2 = [
-                255 * np.tile(resize(map_, (self.opt.patch_size,) * 2)[np.newaxis, ...], (3, 1, 1))
-                for map_ in self.net.attention_maps
-            ]
-        elif hasattr(self.net.module, 'attention_maps'):  #TODO check doesn't work if using more than 1 gpu?
-            self.attention0, self.attention1, self.attention2 = [
-                255 * np.tile(resize(map_, (self.opt.patch_size,) * 2)[np.newaxis, ...], (3, 1, 1))
-                for map_ in self.net.module.attention_maps
-            ]
+        try:
+            if hasattr(self.net, 'attention_maps'):
+                self.attention0, self.attention1, self.attention2 = [
+                    255 * np.tile(resize(map_, (self.opt.patch_size,) * 2)[np.newaxis, ...], (3, 1, 1))
+                    for map_ in self.net.attention_maps
+                ]
+            elif hasattr(self.net.module, 'attention_maps'):  #TODO check if this doesn't work if using more than 1 gpu?
+                self.attention0, self.attention1, self.attention2 = [
+                    255 * np.tile(resize(map_, (self.opt.patch_size,) * 2)[np.newaxis, ...], (3, 1, 1))
+                    for map_ in self.net.module.attention_maps
+                ]
+        except ValueError:
+            self.attention0, self.attention1, self.attention2 = None, None, None
         self.loss_bce = self.bce(self.output, self.target)
 
     def backward(self):

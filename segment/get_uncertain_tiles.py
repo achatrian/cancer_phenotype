@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from openslide.lowlevel import OpenSlideError
 from skimage.feature import peak_local_max
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from annotation.annotation_builder import AnnotationBuilder
 
 
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     uncertainty_annotations_dir.mkdir(exist_ok=True, parents=True)
     print(f"Creating uncertainty annotations for {len(uncertainty_maps_paths)} uncertainty maps")
     for uncertainty_map_path in uncertainty_maps_paths:
-        uncertainty_map = WSIReader(uncertainty_map_path, args)
+        uncertainty_map = make_wsi_reader(uncertainty_map_path, args)
         for suffix in ('.ndpi', '.svs', '.tiff'):
             tissue_slide_path = (args.data_dir/uncertainty_map_path.name).with_suffix(suffix)  # TODO does with_suffix cut the slide id?
             if tissue_slide_path.exists():
@@ -53,7 +53,7 @@ if __name__ == '__main__':
                     pass
         else:
             raise ValueError(f"No tissue slide for '{uncertainty_map_path.name}'")
-        tissue_slide = WSIReader(tissue_slide_path, args)
+        tissue_slide = make_wsi_reader(tissue_slide_path, args)
         try:
             tissue_slide.find_tissue_locations()
         except OpenSlideError:
@@ -63,7 +63,7 @@ if __name__ == '__main__':
         # find locations with highest uncertainty
         for x, y in tqdm(tissue_slide.tissue_locations):
             try:
-                tile = np.array(uncertainty_map.read_region((x, y), tissue_slide.read_level, (args.patch_size,)*2))
+                tile = np.array(uncertainty_map.read_region((x, y), tissue_slide.read_level, (args.patch_size,) * 2))
             except OpenSlideError:
                 break
             tile_peaks = peak_local_max(tile)

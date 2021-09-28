@@ -13,15 +13,18 @@ import imageio
 from tqdm import tqdm
 from skimage.filters import gaussian
 from skimage.color import rgba2rgb
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from contours import read_annotations, contour_to_mask, check_relative_rect_positions
 from annotation.mask_converter import MaskConverter
 
 
+# TODO test
+
+
 class ROITileExporter:
     r"""Extract tiles from an annotation area"""
-    def __init__(self, data_dir, slide_id, experiment_name='', annotation_dirname='', tile_size=1024, mpp=0.2,
-                 label_values=(('epithelium', 200), ('lumen', 250)), roi_dir_name=None, sigma_smooth=10):
+    def __init__(self, data_dir, slide_id, experiment_name='', annotations_dirname='', tile_size=1024, mpp=0.2,
+                 label_values=(('epithelium', 200), ('lumen', 250)), roi_dir_name=None, sigma_smooth=10, set_mpp=None):
         self.data_dir = Path(data_dir)
         self.slide_id = slide_id
         self.tile_size = tile_size
@@ -40,16 +43,17 @@ class ROITileExporter:
                                                           tuple(self.data_dir.glob('*/*.ndpi'))) if slide_id in path.name)
         except StopIteration:
             raise ValueError(f"No image file matching slide id: {slide_id}")
-        self.slide = WSIReader(self.slide_path, {
+        self.slide = make_wsi_reader(self.slide_path, {
             'patch_size': tile_size,
             'mpp': mpp,
             'data_dir': str(data_dir)
-        })
+        }, set_mpp=set_mpp)
         self.slide.opt.patch_size = self.tile_size
         self.slide.find_tissue_locations(0.0, 0)
         self.original_tissue_locations = self.slide.tissue_locations
         assert self.original_tissue_locations, "Cannot have 0 tissue locations"
         self.contour_lib = read_annotations(self.data_dir, slide_ids=(self.slide_id,),
+                                            annotation_dirname=annotations_dirname,
                                             experiment_name=experiment_name)[self.slide_id]
         # clean contours
         for layer_name in self.contour_lib:
@@ -104,8 +108,7 @@ class ROITileExporter:
                     print("###")
         return mask
 
-    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path], hier_rule=lambda x: x,
-                     area_contour_rescaling=1.0):
+    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path], hier_rule=lambda x: x):
         r"""
         :param area_layer: annotation layer marking areas in the slide to extract tiles from
         :param save_dir: where to save the tiles
@@ -128,9 +131,6 @@ class ROITileExporter:
             labels.extend([layer_name] * len(layer_contours))
         # remove all tissue locations outside of ROI
         initial_length = len(self.slide.tissue_locations)
-        if area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            areas_to_tile = [(area_contour / area_contour_rescaling).astype(np.int32)
-                             for area_contour in areas_to_tile]
         areas_to_tile = [area_contour for area_contour in areas_to_tile if area_contour.size > 0]
         if len(areas_to_tile) == 0:
             warnings.warn("No ROIs to tile ... returning")
@@ -167,8 +167,8 @@ class ROITileExporter:
             for value_binary_mask, value in zip(value_binary_masks, value_hier):
                 mask[value_binary_mask > 0] = value
             mask = np.array(mask, dtype=np.uint8)
-            tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=(self.tile_size,)*2),
-                                                   dtype=np.uint8)
+            tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=self.tile_size),
+                            dtype=np.uint8)
             if tile.shape[-1] == 4:  # assume tile is in RGBA format
                 tile = (rgba2rgb(tile)*255).astype(np.uint8)
             # resize mask according to mpp difference

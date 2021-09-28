@@ -9,29 +9,26 @@ from torch.autograd import Variable
 ###################################
 
 class BiasReduceLoss(nn.Module):
-    def __init__(self,opt):
+    def __init__(self, opt):
         super(BiasReduceLoss, self).__init__()
         self.opt = opt
         self.criterion = nn.MSELoss()
+        self.register_buffer('w', torch.tensor(1, requires_grad=False))
     def forward(self, x, y, weight=1):
-        w = torch.cuda.FloatTensor(1).fill_(weight)
-        if self.opt.cuda:
-            w.cuda()
-        w = Variable(w, requires_grad=False)
-        self.avg = torch.mean(x,0).unsqueeze(0)
-        self.loss = w*self.criterion(self.avg, y)
+        self.w.fill_(weight)
+        self.avg = torch.mean(x, 0).unsqueeze(0)
+        self.loss = self.w*self.criterion(self.avg, y)
         return self.loss
 
 class TotalVaryLoss(nn.Module):
     def __init__(self,opt):
         super(TotalVaryLoss, self).__init__()
         self.opt = opt
+        self.register_buffer('w', torch.tensor(1, requires_grad=False))
+
     def forward(self, x, weight=1):
-        w = torch.cuda.FloatTensor(1).fill_(weight)
-        if self.opt.cuda:
-            w.cuda()
-        w = Variable(w, requires_grad=False)
-        self.loss = w * (torch.sum(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:])) +
+        self.w.fill_(weight)
+        self.loss = self.w * (torch.sum(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:])) +
             torch.sum(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :])))
         return self.loss
 
@@ -39,11 +36,9 @@ class SelfSmoothLoss2(nn.Module):
     def __init__(self,opt):
         super(SelfSmoothLoss2, self).__init__()
         self.opt = opt
+        self.register_buffer('w', torch.tensor(1, requires_grad=False))
     def forward(self, x, weight=1):
-        w = torch.cuda.FloatTensor(1).fill_(weight)
-        if self.opt.cuda:
-            w.cuda()
-        w = Variable(w, requires_grad=False)
+        self.w.fill_(weight)
         self.x_diff = x[:, :, :, :-1] - x[:, :, :, 1:]
         self.y_diff = x[:, :, :-1, :] - x[:, :, 1:, :]
         self.loss = torch.sum(torch.mul(self.x_diff, self.x_diff)) + torch.sum(torch.mul(self.y_diff, self.y_diff))
@@ -56,9 +51,8 @@ class SelfSmoothLoss2(nn.Module):
 ###################################
 # a mixer (linear layer)
 class waspMixer(nn.Module):
-    def __init__(self, opt, ngpu=1, nin=128, nout=128):
+    def __init__(self, nin=128, nout=128):
         super(waspMixer, self).__init__()
-        self.ngpu = ngpu
         self.main = nn.Sequential(
             # simply a linear layer
             nn.Linear(nin, nout),
@@ -66,10 +60,7 @@ class waspMixer(nn.Module):
         )
 
     def forward(self, input):
-        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
-        else:
-            output = self.main(input)
+        output = self.main(input)
         return output
 
 # shading * albedo = texture(img)
@@ -88,8 +79,8 @@ class waspWarper(nn.Module):
     def __init__(self, opt):
         super(waspWarper, self).__init__()
         self.opt = opt
-        self.batchSize = opt.batchSize
-        self.imgSize = opt.imgSize
+        self.batchSize = opt.batch_size
+        self.imgSize = opt.patch_size
 
     def forward(self, input_img, input_grid):
         self.warp = input_grid.permute(0,2,3,1)
@@ -98,29 +89,24 @@ class waspWarper(nn.Module):
 
 # integrate over the predicted grid offset to get the grid(deformation field)
 class waspGridSpatialIntegral(nn.Module):
-    def __init__(self,opt):
+    def __init__(self, opt):
         super(waspGridSpatialIntegral, self).__init__()
         self.opt = opt
-        self.w = self.opt.imgSize
-        self.filterx = torch.cuda.FloatTensor(1,1,1,self.w).fill_(1)
-        self.filtery = torch.cuda.FloatTensor(1,1,self.w,1).fill_(1)
-        self.filterx = Variable(self.filterx, requires_grad=False)
-        self.filtery = Variable(self.filtery, requires_grad=False)
-        if opt.cuda:
-            self.filterx.cuda()
-            self.filtery.cuda()
+        self.w = self.opt.patch_size
+        filterx = torch.tensor(torch.ones(1, 1, 1, self.w), dtype=torch.float, requires_grad=False)
+        self.register_buffer('filterx', filterx)
+        filtery = torch.tensor(torch.ones(1, 1, self.w, 1), dtype=torch.float, requires_grad=False)
+        self.register_buffer('filtery', filtery)
     def forward(self, input_diffgrid):
-        #print(input_diffgrid.size())
-        fullx = F.conv_transpose2d(input_diffgrid[:,0,:,:].unsqueeze(1), self.filterx, stride=1, padding=0)
-        fully = F.conv_transpose2d(input_diffgrid[:,1,:,:].unsqueeze(1), self.filtery, stride=1, padding=0)
-        output_grid = torch.cat((fullx[:,:,0:self.w,0:self.w], fully[:,:,0:self.w,0:self.w]),1)
+        fullx = F.conv_transpose2d(input_diffgrid[:, 0, :, :].unsqueeze(1), self.filterx, stride=1, padding=0)
+        fully = F.conv_transpose2d(input_diffgrid[:, 1, :, :].unsqueeze(1), self.filtery, stride=1, padding=0)
+        output_grid = torch.cat((fullx[:, :, 0:self.w, 0:self.w], fully[:, :, 0:self.w, 0:self.w]),1)
         return output_grid
 
 # an encoder architecture
 class waspEncoder(nn.Module):
-    def __init__(self, opt, ngpu=1, input_channels=1, num_filters = 32, num_dim = 128):
+    def __init__(self, input_channels=1, num_filters=32, num_dim=128):
         super(waspEncoder, self).__init__()
-        self.ngpu = ngpu
         self.num_dim = num_dim
         self.main = nn.Sequential(
             # input is (input_channels) x 64 x 64
@@ -144,16 +130,15 @@ class waspEncoder(nn.Module):
         )
 
     def forward(self, input):
-        output = self.main(input).view(-1,self.num_dim)
+        output = self.main(input).view(-1, self.num_dim)
         #print(output.size())
         return output
 
 # a decoder architecture
 class waspDecoder(nn.Module):
-    def __init__(self, opt, ngpu=1, nz=128,  input_channels=1, num_gen_filters=32, lb=0, ub=1):
+    def __init__(self, nz=128, input_channels=1, num_gen_filters=32, lb=0, ub=1):
         # ngf --> num_gen_filters
         super(waspDecoder, self).__init__()
-        self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
             nn.ConvTranspose2d(nz, num_gen_filters * 8, 4, 1, 0, bias=False),
@@ -181,17 +166,13 @@ class waspDecoder(nn.Module):
         )
 
     def forward(self, input):
-        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
-        else:
-            output = self.main(input)
+        output = self.main(input)
         return output
 
 # a decoder architecture
 class waspDecoderTanh(nn.Module):
-    def __init__(self, opt, ngpu=1, nz=128,  input_channels=1, num_gen_filters=32, lb=0, ub=1):
+    def __init__(self, nz=128, input_channels=1, num_gen_filters=32, lb=0, ub=1):
         super(waspDecoderTanh, self).__init__()
-        self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
             nn.ConvTranspose2d(nz, num_gen_filters * 8, 4, 1, 0, bias=False),
@@ -220,10 +201,7 @@ class waspDecoderTanh(nn.Module):
         )
 
     def forward(self, input):
-        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
-        else:
-            output = self.main(input)
+        output = self.main(input)
         return output
 
 ###################################
@@ -392,10 +370,10 @@ class Encoders(nn.Module):
     def __init__(self, opt):
         # zdim --> latent_dim; wdim --> warp_grid_dim; idim --> texture_dim
         super(Encoders, self).__init__()
-        self.ngpu = opt.ngpu
-        self.encoder = waspEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters=opt.num_filters, num_dim = opt.latent_dim)
-        self.zImixer = waspMixer(opt, ngpu=1, nin=opt.latent_dim, nout=opt.texture_dim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin=opt.latent_dim, nout=opt.warp_grid_dim)
+        self.encoder = waspEncoder(input_channels=opt.input_channels, num_filters=opt.num_filters,
+                                   num_dim=opt.latent_dim)
+        self.zImixer = waspMixer(nin=opt.latent_dim, nout=opt.texture_dim)
+        self.zWmixer = waspMixer(nin=opt.latent_dim, nout=opt.warp_grid_dim)
         self.z, self.zImg, self.zWarp = (None,) * 3
 
     def forward(self, input_):
@@ -404,16 +382,18 @@ class Encoders(nn.Module):
         self.zWarp = self.zWmixer(self.z)
         return self.z, self.zImg, self.zWarp
 
+
 # encoders of instrinsic DAE
 class Encoders_Intrinsic(nn.Module):
     def __init__(self, opt):
         super(Encoders_Intrinsic, self).__init__()
         self.ngpu = opt.ngpu
-        self.encoder = waspEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
+        self.encoder = waspEncoder(input_channels=opt.input_channels, num_filters=opt.num_filters,
+                                   num_dim=opt.latent_dim)
         #self.zImixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.texture_dim)
-        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.sdim)
-        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.tdim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
+        self.zSmixer = waspMixer(nin=opt.latent_dim, nout=opt.sdim)
+        self.zTmixer = waspMixer(nin=opt.latent_dim, nout=opt.tdim)
+        self.zWmixer = waspMixer(nin=opt.latent_dim, nout=opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -423,14 +403,15 @@ class Encoders_Intrinsic(nn.Module):
         self.zWarp = self.zWmixer(self.z)
         return self.z, self.zShade, self.zTexture, self.zWarp
 
+
 # encoders of DAE, using DenseNet architecture
 class Dense_Encoders(nn.Module):
     def __init__(self, opt):
         super(Dense_Encoders, self).__init__()
         self.ngpu = opt.ngpu
         self.encoder = waspDenseEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
-        self.zImixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.texture_dim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
+        self.zImixer = waspMixer(nin=opt.latent_dim, nout=opt.texture_dim)
+        self.zWmixer = waspMixer(nin=opt.latent_dim, nout=opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -444,9 +425,9 @@ class Dense_Encoders_Intrinsic(nn.Module):
         super(Dense_Encoders_Intrinsic, self).__init__()
         self.ngpu = opt.ngpu
         self.encoder = waspDenseEncoder(opt, ngpu=1, input_channels=opt.input_channels, num_filters = opt.num_filters, num_dim = opt.latent_dim)
-        self.zSmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.sdim)
-        self.zTmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.tdim)
-        self.zWmixer = waspMixer(opt, ngpu=1, nin = opt.latent_dim, nout = opt.warp_grid_dim)
+        self.zSmixer = waspMixer(nin=opt.latent_dim, nout=opt.sdim)
+        self.zTmixer = waspMixer(nin=opt.latent_dim, nout=opt.tdim)
+        self.zWmixer = waspMixer(nin=opt.latent_dim, nout=opt.warp_grid_dim)
 
     def forward(self, input):
         self.z     = self.encoder(input)
@@ -455,18 +436,20 @@ class Dense_Encoders_Intrinsic(nn.Module):
         self.zWarp = self.zWmixer(self.z)
         return self.z, self.zShade, self.zTexture, self.zWarp
 
+
 #### The decoders ####
 
 # decoders of DAE
 class DecodersIntegralWarper2(nn.Module):
     def __init__(self, opt):
         super(DecodersIntegralWarper2, self).__init__()
-        self.imagedimension = opt.imgSize
-        self.ngpu = opt.ngpu
+        self.imagedimension = opt.patch_size
         self.texture_dim = opt.texture_dim
         self.warp_grid_dim = opt.warp_grid_dim
-        self.decoderI = waspDecoder(opt, ngpu=self.ngpu, nz=opt.texture_dim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
-        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=0.1)
+        self.decoderI = waspDecoder(nz=opt.texture_dim, input_channels=opt.input_channels,
+                                    num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderW = waspDecoderTanh(nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters,
+                                        lb=0, ub=0.1)
         self.warper   = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
         self.cutter = nn.Hardtanh(-1,1)
@@ -476,7 +459,7 @@ class DecodersIntegralWarper2(nn.Module):
         self.diffentialWarping = self.decoderW(zW.view(-1,self.warp_grid_dim,1,1))*(5.0/self.imagedimension)
         self.warping = self.integrator(self.diffentialWarping)-1.2
         self.warping = self.cutter(self.warping)
-        self.resWarping = self.warping-basegrid
+        self.resWarping = self.warping-basegrid.float()
         self.output  = self.warper(self.texture, self.warping)
         return self.texture, self.resWarping, self.output, self.warping
 
@@ -485,19 +468,22 @@ class DecodersIntegralWarper2(nn.Module):
 class DecodersIntegralWarper2_Intrinsic(nn.Module):
     def __init__(self, opt):
         super(DecodersIntegralWarper2_Intrinsic, self).__init__()
-        self.imagedimension = opt.imgSize
+        self.imagedimension = opt.patch_size
         self.ngpu = opt.ngpu
         self.texture_dim = opt.texture_dim
         self.sdim = opt.sdim
         self.tdim = opt.tdim
         self.warp_grid_dim = opt.warp_grid_dim
-        self.decoderS = waspDecoder(opt, ngpu=self.ngpu, nz=opt.sdim, input_channels=1, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
-        self.decoderT = waspDecoder(opt, ngpu=self.ngpu, nz=opt.tdim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
-        self.decoderW = waspDecoderTanh(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=0.1)
+        self.decoderS = waspDecoder(nz=opt.sdim, input_channels=1, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
+        self.decoderT = waspDecoder(nz=opt.tdim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters,
+                                    lb=0, ub=1)
+        self.decoderW = waspDecoderTanh(nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters,
+                                        lb=0, ub=0.1)
         self.intrinsicComposer = waspIntrinsicComposer(opt)
         self.warper   = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
-        self.cutter = nn.Hardtanh(-1,1)
+        self.cutter = nn.Hardtanh(-1, 1)
+
     def forward(self, zS, zT, zW, basegrid):
         self.shading = self.decoderS(zS.view(-1,self.sdim,1,1))
         self.texture = self.decoderT(zT.view(-1,self.tdim,1,1))
@@ -514,13 +500,13 @@ class DecodersIntegralWarper2_Intrinsic(nn.Module):
 class Dense_DecodersIntegralWarper2(nn.Module):
     def __init__(self, opt):
         super(Dense_DecodersIntegralWarper2, self).__init__()
-        self.imagedimension = opt.imgSize
+        self.imagedimension = opt.patch_size
         self.ngpu = opt.ngpu
         self.texture_dim = opt.texture_dim
         self.warp_grid_dim = opt.warp_grid_dim
         self.decoderI = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.texture_dim, input_channels=opt.input_channels, num_gen_filters=opt.num_gen_filters, lb=0, ub=1)
         self.decoderW = waspDenseDecoder(opt, ngpu=self.ngpu, nz=opt.warp_grid_dim, input_channels=2, num_gen_filters=opt.num_gen_filters, lb=0, ub=1, activation=nn.Tanh, args=[], f_activation=nn.Sigmoid, f_args=[])
-        self.warper   = waspWarper(opt)
+        self.warper = waspWarper(opt)
         self.integrator = waspGridSpatialIntegral(opt)
         self.cutter = nn.Hardtanh(-1,1)
     def forward(self, zI, zW, basegrid):
@@ -536,7 +522,7 @@ class Dense_DecodersIntegralWarper2(nn.Module):
 class Dense_DecodersIntegralWarper2_Intrinsic(nn.Module):
     def __init__(self, opt):
         super(Dense_DecodersIntegralWarper2_Intrinsic, self).__init__()
-        self.imagedimension = opt.imgSize
+        self.imagedimension = opt.patch_size
         self.ngpu = opt.ngpu
         self.texture_dim = opt.texture_dim
         self.sdim = opt.sdim

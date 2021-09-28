@@ -1,14 +1,14 @@
 from queue import Empty
 import resource
 import torch.multiprocessing as mp
-from options.apply_options import ApplyOptions
+from options.deploy_options import DeployOptions
 from models import create_model
 from datasets import create_dataset, create_dataloader
 from deploy import create_deployer
 
 
 if __name__ == '__main__':
-    opt = ApplyOptions().parse()
+    opt = DeployOptions().parse()
     opt.display_id = -1   # no visdom display
     model = create_model(opt)
     # model.setup()  # done in predictor process, as it fails when net is push to cuda otherwise

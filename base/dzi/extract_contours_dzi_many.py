@@ -26,7 +26,7 @@ if __name__ == '__main__':
     annotation_dir.mkdir(exist_ok=True, parents=True)
     failure_log = []
     for image_path in tqdm(image_paths):
-        slide_id = re.sub(r'\.(ndpi|svs|tiff)', '', image_path.name)
+        slide_id = re.sub(r'\.(ndpi|svs|tiff|isyntax)', '', image_path.name)
         if any(path.name.startswith(slide_id) for path in annotation_dir.iterdir() if path.suffix == '.json'):
             continue
         tqdm.write(f"Processing slide: {slide_id}")
@@ -81,8 +81,6 @@ if __name__ == '__main__':
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
-        if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
         # read downsampled region corresponding to tumour area annotation and extract contours
         x, y, w, h = cv2.boundingRect(area_contour)
         # if base layer is not copied from mask, need to read at half the origin as mask dimensions will be halved
@@ -113,7 +111,7 @@ if __name__ == '__main__':
             annotation.add_item(label, 'path')
             contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
             annotation.add_segments_to_last_item(contour)
-        if annotation.is_empty():
+        if len(annotation) == 0:
             warnings.warn(f"No contours were extracted for slide: {slide_id}")
         annotation.shrink_paths(0.1)
         annotation.add_data('experiment', opt.experiment_name)

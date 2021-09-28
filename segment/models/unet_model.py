@@ -13,14 +13,14 @@ class UNetModel(BaseModel):
         self.opt = opt
         self.module_names = ['']
         if self.opt.unet_type == 'normal':
-            self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size, opt.max_multiple,
+            self.net = UNet(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.max_multiple,
                             multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None,
                             gaussian_layer=self.opt.gaussian_layer)
         elif self.opt.unet_type == 'skip':
             self.net = UNetOld(opt.depth, opt.num_class, opt.input_channels, opt.num_filters, opt.patch_size,
                             opt.max_multiple, multiples=[int(m) for m in opt.filter_multiples.split(',')] if opt.filter_multiples else None)
         else:
-            raise ValueError(f"Uknown UNet type '{self.opt.unet_type}'")
+            raise ValueError(f"Unknown UNet type '{self.opt.unet_type}'")
         self.loss_names = ['ce', 'reg'] if self.opt.regularizer_coeff else ['ce']
         self.ce = torch.nn.CrossEntropyLoss(opt.loss_weight, reduction='mean')
         self.reg = network_utils.RegularizationLoss()
@@ -61,8 +61,8 @@ class UNetModel(BaseModel):
         super().set_input(data)
         self.visual_paths = {'input': data['input_path'],
                              'output': [''] * len(data['input_path'])}  # and 3 must be returned by dataset
-        if not self.opt.is_apply:
-            self.visual_paths['target'] = data['target_path']  # 4 is optional, only for when available
+        if 'target_path' in data:
+            self.visual_paths['target'] = data['target_path']  # 4 is optional, only when it is available
 
     def forward(self):
         # use set_input() to assign input to model

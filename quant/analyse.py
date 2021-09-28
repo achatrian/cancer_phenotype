@@ -5,22 +5,26 @@ import argparse
 import sys
 import time
 import json
+import pickle as pkl
 import multiprocessing as mp
+from random import sample
 import numpy as np
 import pandas as pd
 import cv2
+import warnings
 from tqdm import tqdm
 from imageio import imread
 from sklearn.utils import shuffle
 import h5py
 import joblib as jl
 from staintools import StainNormalizer
-from data.images.wsi_reader import WSIReader
+from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
 from data.contours import read_annotations, annotations_summary, check_point_overlap
 from data.contours.instance_masker import InstanceMasker
-from utils.contour_processor import ContourProcessor
+from quant.utils.contour_processor import ContourProcessor
 from features import region_properties, gray_haralick, gray_cooccurrence, nuclear_features
 from base.utils.utils import bytes2human
+from base.utils.timer import Timer
 
 
 r"""Script with tasks to transform and crunch data"""
@@ -29,20 +33,41 @@ r"""Script with tasks to transform and crunch data"""
 def extract_features(annotation_path, slide_path, feature_dir, label_values, args):
     r"""Quantify features from one annotated images. Used in quantify()"""
     logger = logging.getLogger(__name__)
-    opt = WSIReader.get_reader_options(include_path=False)
+    opt = get_reader_options(include_path=False)
     slide_id = annotation_path.with_suffix('').name
+    if (feature_dir/(slide_id + '.json')).exists():
+        return 0.0
     logger.info(f"Reading contours for {slide_id} ...")
     contour_struct = read_annotations(args.data_dir, slide_ids=(slide_id,), experiment_name=args.experiment_name)
     annotations_summary(contour_struct)
+    if args.outer_label not in contour_struct[slide_id]:
+        logger.error(f"Annotation for slide {slide_id} does not contain layer '{args.outer_label}'")
+        return
+    if args.max_contours_num > 0:
+        logger.info(f"""Analysis capped at {args.max_contours_num} contours. Sampling
+        {min(args.max_contours_num, len(contour_struct[slide_id][args.outer_label]))} '{args.outer_label}' contours """)
+        if len(contour_struct[slide_id][args.outer_label]) > args.max_contours_num:
+            contour_struct[slide_id][args.outer_label] = sample(contour_struct[slide_id][args.outer_label], args.max_contours_num)
     logger.info(f"Processing {slide_id} ...")
-    reader = WSIReader(slide_path, opt)
+    reader = make_wsi_reader(slide_path, opt)
     start_processing_time = time.time()
-    macenko_normalizer = StainNormalizer(method='macenko')
-    reference_image = imread(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                  args.experiment_name, 'references', f'{args.reference_slide}.png'))
-    macenko_normalizer.fit(reference_image)
-    slide_stain_matrix = np.load(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                      args.experiment_name, f'{args.reference_slide}.npy'))
+    with Timer('stain_normalization', "Stain normalization took {:0.4f} seconds"):
+        try:
+            with open(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                           'normalizers', f'{args.reference_slide}.pkl'), 'rb') as normalizer_file:
+                macenko_normalizer = pkl.load(normalizer_file)
+        except FileNotFoundError:
+            macenko_normalizer = StainNormalizer(method='macenko')
+            reference_image = imread(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                                          'references', f'{args.reference_slide}.png'))
+            macenko_normalizer.fit(reference_image)
+            normalizers_path = Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                                    'normalizers')
+            normalizers_path.mkdir(exist_ok=True, parents=True)
+            with open(normalizers_path/f'{args.reference_slide}.pkl', 'wb') as normalizer_file:
+                pkl.dump(macenko_normalizer, normalizer_file)
+        slide_stain_matrix = np.load(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
+                                          f'{args.reference_slide}.npy'))
     masker = InstanceMasker(contour_struct[slide_id], args.outer_label, label_values)
     processor = ContourProcessor(masker, reader,
                                  features=[
@@ -59,6 +84,7 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
                                  stain_normalizer=macenko_normalizer,
                                  stain_matrix=slide_stain_matrix)
     try:
+        logger.info("Extracting features ...")
         x, data, dist = processor.get_features()
         # below: 'index' yields larger files than 'split', but then the dict with extra custom fields can be loaded
         with open(feature_dir / (slide_id + '.json'), 'w') as feature_file:
@@ -80,7 +106,7 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
 
 def quantify(args):
     r"""Task: Extract features from annotated images in data dir"""
-    print(f"Quantifying annotated images data in {str(args.data_dir)} (workers = {args.workers}) ...")
+    print(f"Quantifying annotated images data in {str(args.data_dir)} using experiment {args.experiment_name} (workers = {args.workers}) ...")
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
     (args.data_dir/'logs').mkdir(exist_ok=True)
@@ -91,7 +117,7 @@ def quantify(args):
     fh.setFormatter(formatter), ch.setFormatter(formatter)
     logger.addHandler(fh)
     logger.addHandler(ch)
-    label_values = {'epithelium': 200, 'lumen': 250, 'nuclei': 50}
+    label_values = {'epithelium': 200, 'lumen': 250, 'nuclei': 50, 'nuclei_circles': 50}
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
     feature_dir.mkdir(exist_ok=True, parents=True)  # for features
     (feature_dir/'data').mkdir(exist_ok=True)  # for other data
@@ -100,6 +126,9 @@ def quantify(args):
     annotation_paths = sorted((path for path in (Path(args.data_dir)/'data'/'annotations'/args.experiment_name).iterdir()
                  if (args.overwrite or not (feature_dir/path.name).is_file()) and
                  not path.is_dir() and path.suffix == '.json'), key=lambda path: path.with_suffix('').name)
+    if args.slide_id is not None:  # select subset for debugging
+        annotation_paths = [annotation_path for annotation_path in annotation_paths
+                            if annotation_path.with_suffix('').name in args.slide_id]
     slide_paths_ = list(path for path in Path(args.data_dir).iterdir()
                        if path.suffix == '.svs' or path.suffix == '.ndpi')
     slide_paths_ += list(path for path in Path(args.data_dir).glob('*/*.ndpi'))
@@ -119,6 +148,7 @@ def quantify(args):
         annotation_paths, slide_paths = shuffle(annotation_paths, slide_paths)
     if args.reference_slide is None:
         args.reference_slide = slide_paths[0].with_suffix('').name
+    logger.info(f"Using '{args.reference_slide}' as reference slide for stain normalization")
     logger.info(f"Processing {len(annotation_paths)} annotations (overwrite = {args.overwrite}) ...")
     if annotation_paths:
         if args.workers > 0:
@@ -144,12 +174,15 @@ def compress(args):
     feature_paths = list(feature_dir.iterdir())
     i, pre_compression_size = 0, 0
     print("Loading features for each slide ...")
-    for i, feature_path in enumerate(tqdm(feature_paths)):
-        if feature_path.suffix == '.json':
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for i, feature_path in enumerate(tqdm(feature_paths)):
+            if feature_path.suffix != '.json' or feature_path.stat().st_size == 0:
+                continue
+            slide_id = feature_path.name[:-4]
             with open(feature_path, 'r') as feature_file:
                 slide_features = pd.read_json(feature_file, orient='split', convert_axes=False, convert_dates=False)
             pre_compression_size += slide_features.memory_usage().sum()
-            slide_id = feature_path.name[:-4]
             slide_features.to_hdf(compress_path, key=slide_id)
     print(f"Done! Features for {i} slides were compressed from {bytes2human(pre_compression_size)} to {bytes2human(compress_path.stat().st_size)}!")
 
@@ -158,6 +191,8 @@ def dim_reduce(args):  # TODO test
     r"""Task: Reduce the size of compressed features, useful to reduce very large datasets in size"""
 
     from sklearn.decomposition import IncrementalPCA
+    from sklearn.preprocessing import StandardScaler
+    # FIXME should scale all features before computing PCA, but these should be all at once to get right sscaler parameters
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
     compressed_path, dim_reduce_path = feature_dir/'compressed.h5', feature_dir/'dim_reduced.h5'
     slide_ids = list(h5py.File(compressed_path, 'r').keys())  # read keys to access different stored frames
@@ -166,17 +201,20 @@ def dim_reduce(args):  # TODO test
     try:
         if args.overwrite_model:
             raise FileNotFoundError("")
-        ipca = jl.load(ipca, feature_dir / 'dim_reduce_ipca_model.joblib')
+        ipca = jl.load(feature_dir / 'dim_reduce_ipca_model.joblib')
     except FileNotFoundError:
         # fit loop
         for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Computing PCA incrementally for {len(slide_ids)} slides ...")):
             slide_features = pd.read_hdf(compressed_path, slide_id)
+            if len(slide_features) < args.n_components:
+                continue
             pre_dim_reduce_size += slide_features.memory_usage().sum()
             ipca = ipca.partial_fit(slide_features)
         jl.dump(ipca, feature_dir/'dim_reduce_ipca_model.joblib')
+    print(f"{ipca.explained_variance_ratio_}")
     # save loop
     for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Dimensionality reduction ...")):
-        slide_features = pd.read_hdf(dim_reduce_path, slide_id)
+        slide_features = pd.read_hdf(compressed_path, slide_id)
         slide_features = pd.DataFrame(data=ipca.transform(slide_features), index=slide_features.index)
         slide_features.to_hdf(dim_reduce_path, key=slide_id)
         post_dim_reduce_size += slide_features.memory_usage().sum()
@@ -185,6 +223,9 @@ def dim_reduce(args):  # TODO test
 
 def filter_(args):
     r"""Task: filter data points"""
+    from sklearn.decomposition import PCA
+    from sklearn.neighbors import KernelDensity
+    from sklearn.preprocessing import StandardScaler
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
     compressed_path = feature_dir/'compressed.h5'
     filtered_path = feature_dir/'filtered.h5'
@@ -197,8 +238,6 @@ def filter_(args):
                                         annotation_dirname='tumour_area_annotations')[slide_id_]['Tumour area']
         area_contour = max((contour for contour in roi_contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
-        if args.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            area_contour = (area_contour / args.area_contour_rescaling).astype(np.int32)
         # load contour from saved feature data
         data_path = next(path for path in (feature_dir/'data').iterdir() if path.name.startswith('data_' + slide_id))
         with data_path.open('r') as data_file:
@@ -213,9 +252,18 @@ def filter_(args):
         pre_filter_size += slide_features.memory_usage().sum()
         original_n += len(slide_features)
         slide_features = slide_features[slide_features.index.map(lambda bb_str: bb_str not in bounding_boxes_to_discard)]  # YOU HAD MADE A CATASTROPHIC MISTAKE HERE, BY FORGETTING THE 'NOT'
+        if len(slide_features) == 0:
+            continue
         # additional subsampling to keep dataset small
         if args.subsample_fraction != 1.0:
-            slide_features = slide_features.sample(frac=args.subsample_fraction)
+            # estimate data distribution on dim reduced version of data and attempt to extract samples that follow the distribution
+            dim_reduced_features = PCA(min(20, *slide_features.shape)).fit_transform(StandardScaler().fit_transform(slide_features))
+            scores = np.exp(KernelDensity().fit(dim_reduced_features).score_samples(dim_reduced_features))
+            weights = scores/scores.sum()
+            indices = np.random.choice(np.arange(len(slide_features)),
+                                       size=int(np.ceil(len(slide_features)*args.subsample_fraction)),
+                                       p=weights, replace=False)
+            slide_features = slide_features.iloc[indices]
         post_filter_size += slide_features.memory_usage().sum()
         final_n += len(slide_features)
         slide_features.to_hdf(filtered_path, key=slide_id)
@@ -224,9 +272,28 @@ def filter_(args):
         print(f"Only {args.subsample_fraction*100}% of the dataset was kept")
 
 
-def single_key(args):
+def select_label(args):  # TODO test
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
-    pass
+    compressed_path = feature_dir/'compressed.h5'
+    labelled_path = feature_dir/'labelled.h5'
+    slide_ids = list(h5py.File(compressed_path, 'r').keys())  # read keys to access different stored frames
+    labels = pd.read_csv(args.skip_labels)
+    original_n, final_n = 0, 0
+    pre_filter_size, post_filter_size = 0, 0
+    for i, slide_id in enumerate(tqdm(slide_ids, desc=f"Selecting datapoints by label ...")):
+        slide_id_ = slide_id[:-1]  # FIXME ids in features file have a final undesired period
+        slide_features = pd.read_hdf(compressed_path, slide_id)
+        slide_labels = labels[labels['slide_id'] == slide_id_]
+        box_ids = set([box_id for box_id, label in zip(slide_labels['box_id'], slide_labels['label'])
+                       if label == args.label_num])
+        pre_filter_size += slide_features.memory_usage().sum()
+        original_n += len(slide_features)
+        slide_features = slide_features[slide_features.index.map(lambda box_id: box_id in box_ids)]
+        post_filter_size += slide_features.memory_usage().sum()
+        final_n += len(slide_features)
+        slide_features.to_hdf(labelled_path, key=slide_id)
+    print(f"Done! {original_n - final_n} contours were filtered out of feature file ({bytes2human(pre_filter_size)} --> {bytes2human(post_filter_size)}")
+
 
 # ########## subparser commands ############
 
@@ -243,8 +310,8 @@ def add_quantify_args(parser_quantify):
     parser_quantify.add_argument('--shuffle_annotations', action='store_true',
                                  help="Shuffle processing order. Useful if multiple processing jobs are launched at the same time.")
     parser_quantify.add_argument('--overwrite', action='store_true', help="Whether to overwrite existing feature files")
-    # parser_quantify.add_argument('--max_contour_num', type=int, default=3000,
-    # help="Max number of glands in one slide to sample")
+    parser_quantify.add_argument('--slide_id', type=str, action='append', help='only process slides with specified ids. Useful for debugging and dividing tasks')
+    parser_quantify.add_argument('--max_contours_num', type=int, default=1500, help="Max number of glands in one slide to sample")
 
 
 def add_compress_args(parser_compress):
@@ -254,6 +321,7 @@ def add_compress_args(parser_compress):
 
 
 def add_dim_reduce_args(parser_dim_reduce):
+    # not used
     parser_dim_reduce.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
     parser_dim_reduce.add_argument('--n_components', type=int, default=20, help="Number of principal components in incremental PCA")
     parser_dim_reduce.add_argument('--overwrite_model', action='store_true')
@@ -265,24 +333,26 @@ def add_filter_args(parser_filter):
     parser_filter.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
     parser_filter.add_argument('--experiment_name', type=str, required=True,
                                help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
-    parser_filter.add_argument('--area_contour_rescaling', type=float, default=1.0,
-                               help="Divide area contour by this number (used for annotations that are not taken at original image magnification)")
     # additional subsampling
     parser_filter.add_argument('--subsample_fraction', type=float, default=1.0, help="Subsample the dataset further to keep only the important pieces")
 
 
-def add_single_key_args(parser_single_key):
+def add_select_label_args(parser_single_key):
     parser_single_key.add_argument('data_dir', type=Path)
     parser_single_key.add_argument('experiment_name', type=str)
+    parser_single_key.add_argument('label_file', type=Path)
+    parser_single_key.add_argument('--label_num', type=int, default=1)
 
 
 if __name__ == '__main__':
+    print("Start")
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='task', help="Name of task to perform")
     add_quantify_args(subparsers.add_parser('quantify'))
     add_compress_args(subparsers.add_parser('compress'))
     add_dim_reduce_args(subparsers.add_parser('dim_reduce'))
     add_filter_args(subparsers.add_parser('filter'))
+    add_select_label_args(subparsers.add_parser('select_label'))
     # general arguments
     args = parser.parse_args()
     if args.task is None:
@@ -296,5 +366,7 @@ if __name__ == '__main__':
         dim_reduce(args)
     elif args.task == 'filter':
         filter_(args)
+    elif args.task == 'select_label':
+        select_label(args)
     else:
         raise ValueError(f"Unknown task type {args.task}.")

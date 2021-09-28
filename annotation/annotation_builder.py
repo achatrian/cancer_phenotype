@@ -32,14 +32,13 @@ class AnnotationBuilder:
     def from_object(cls, obj, metadata_warning=False):
         if 'annotation' in obj:
             obj = obj['annotation']  # for annotations exported from Nasullah's backend
+        obj['data'] = {}
         instance = cls(
             obj['slide_id'] if 'slide_id' in obj else 'unknown_slide',
             obj['project_name'] if 'project_name' in obj else '',
             obj['layer_names'] if 'layer_names' in obj else [layer['name'] for layer in obj['layers']]
         )
         instance._obj = obj
-        for layer in instance._obj['layers']:
-            instance.layers[layer['name']] = layer
         try:
             instance.metadata = obj['metadata']
         except KeyError:
@@ -55,28 +54,29 @@ class AnnotationBuilder:
             'layers': [],
             'data': {}  # additional data, e.g. network that produced annotation
         }  # to be dumped to .json
-        self.layer_names = []
         # store additional info on segments for processing
         self.last_added_item = None
         # store references to layers
-        self.layers = {}
         # point comparison
         for layer_name in layers:
-            self.add_layer(layer_name)  # this also updates self.layer_names with references to layers names
+            self.add_layer(layer_name)  # this also updates self.layers with references to layers names
+
+    @property
+    def layers(self):
+        return {layer['name']: layer for layer in self._obj['layers']}
 
     @classmethod
     def concatenate(cls, annotation0, annotation1, concatenate_layers=True):
         r"""Add layers from another annotation object to this object"""
         annotation0 = copy.copy(annotation0)
         for layer in annotation1._obj['layers']:
-            if layer['name'] in annotation0.layer_names and concatenate_layers:
+            if layer['name'] in annotation0.layers and concatenate_layers:
                 layer0 = next(layer_ for layer_ in  annotation0._obj['layers'] if layer_['name'] == layer['name'])
                 layer0['items'].extend(layer['items'])
             else:
-                if layer['name'] in annotation0.layer_names:
+                if layer['name'] in annotation0.layers:
                     layer['name'] = layer['name'] + ('_' + annotation0.project_name)
                 annotation0._obj['layers'].append(layer)
-                annotation0.layer_names.append(layer['name'])
         return annotation0
 
     @staticmethod
@@ -96,23 +96,21 @@ class AnnotationBuilder:
     def num_layers(self):
         return len(self._obj['layers'])
 
+    def layer_len(self, layer_idx):
+        if isinstance(layer_idx, str):
+            layer_idx = self.get_layer_idx(layer_idx)
+        return len(self._obj['layers'][layer_idx])
+
     def __len__(self):
         return 0 if not self.num_layers() else sum(len(layer['items']) for layer in self._obj['layers'])
 
     def rename_layer(self, old_name, new_name):
-        layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
-        layer = self._obj['layers'][layer_idx]
-        layer['name'] = new_name
-        self.layer_names[layer_idx] = new_name
-
-    def layer_has_items(self, layer_idx):
-        if type(layer_idx) is str:
-            layer_idx = self.get_layer_idx(layer_idx)  # if name is given rather than index
-        layers_len = len(self._obj['layers'][layer_idx])
-        if layer_idx > layers_len:
-            raise IndexError(f'Index {layer_idx} is out of range for layers list with len {layers_len}')
-        layer = self._obj['layers'][layer_idx]
-        return bool(layer['items'])
+        try:
+            layer_idx = self.get_layer_idx(old_name) if type(old_name) is str else old_name  # if name is given rather than index
+            layer = self._obj['layers'][layer_idx]
+            layer['name'] = new_name
+        except ValueError:
+            pass
 
     def get_layer_idx(self, layer_name):
         try:
@@ -129,11 +127,10 @@ class AnnotationBuilder:
             'items': []
         }
         self._obj['layers'].append(new_layer)
-        self.layer_names.append(self._obj['layers'][-1]['name'])
-        self.layers[layer_name] = self._obj['layers'][-1]
         return self
 
-    def add_item(self, layer_idx, type_, class_=None, points=None, filled=False, color=None, rectangle=None):
+    def add_item(self, layer_idx, type_, class_=None, points=None, filled=False,
+                 color=None, rectangle=None, center=None, radius=None, item=None):
         r"""
         Add item to desired layer
         :param layer_idx: numerical index or layer name (converted to index)
@@ -147,47 +144,64 @@ class AnnotationBuilder:
         """
         if type(layer_idx) is str:
             layer_idx = self.get_layer_idx(layer_idx)  # if name is given rather than index
-        if color is None:
-            color = {} if not filled else {
-                "fill": {
-                    "saturation": 0.44,
-                    "lightness": 0.69,
-                    "alpha": 0.7,
-                    "hue": 170
-                },
-                "stroke": {
-                    "saturation": 0.44,
-                    "lightness": 0.69,
-                    "alpha": 1,
-                    "hue": 170
-                }  # fill with pre-selected color
+        if item is None:
+            if type_ not in {'path', 'rectangle', 'circle'}:
+                raise NotImplementedError(f"Items of type '{type_}' are not supported")
+            if color is None:
+                color = {} if not filled else {
+                    "fill": {
+                        "saturation": 0.44,
+                        "lightness": 0.69,
+                        "alpha": 0.7,
+                        "hue": 170
+                    },
+                    "stroke": {
+                        "saturation": 0.44,
+                        "lightness": 0.69,
+                        "alpha": 1,
+                        "hue": 170
+                    }  # fill with pre-selected color
+                }
+            new_item = {
+                'class': class_ if class_ else self._obj['layers'][layer_idx]['name'],
+                'type': type_,
+                'closed': True,
+                'color': color
             }
-        new_item = {
-            'class': class_ if class_ else self._obj['layers'][layer_idx]['name'],
-            'type': type_,
-            'closed': True,
-            'color': color
-        }
-        if type_ == 'path':
-            new_item.update(segments=[])
-            self._obj['layers'][layer_idx]['items'].append(new_item)
-            if points:
-                self.add_segments_to_last_item(points)
-        elif type_ == 'rectangle':
-            if rectangle is not None:
-                if isinstance(rectangle, (tuple, list)):
-                    new_item.update(x=rectangle[0], y=rectangle[1], width=rectangle[2], height=rectangle[3])
-                elif isinstance(rectangle, dict) and set(rectangle.keys()) == {'x', 'y', 'width', 'height'}:
-                    new_item.update(**rectangle)
-                else:
-                    raise ValueError(f"Unsupported format for rectangle {rectangle}")
-            self._obj['layers'][layer_idx]['items'].append(new_item)
-        self.last_added_item = self._obj['layers'][layer_idx]['items'][-1]  # use to update item
+            if type_ == 'path':
+                new_item.update(segments=[])
+                self._obj['layers'][layer_idx]['items'].append(new_item)
+                self.last_added_item = new_item
+                if points:
+                    self.add_segments_to_last_item(points)
+            elif type_ == 'rectangle':
+                if rectangle is not None:
+                    if isinstance(rectangle, (tuple, list)):
+                        new_item.update(x=rectangle[0], y=rectangle[1], width=rectangle[2], height=rectangle[3])
+                    elif isinstance(rectangle, dict) and set(rectangle.keys()) == {'x', 'y', 'width', 'height'}:
+                        new_item.update(**rectangle)
+                    else:
+                        raise ValueError(f"Unsupported format for rectangle {rectangle}")
+                self._obj['layers'][layer_idx]['items'].append(new_item)
+            elif type_ == 'circle':
+                if center is None or radius is None:
+                    raise ValueError(f"For 'circle' item, 'center' and 'radius' must be provided")
+                assert 'x' in center and 'y' in center, "Center has correct format"
+                new_item.update(center=center, radius=radius)
+                self._obj['layers'][layer_idx]['items'].append(new_item)
+            self.last_added_item = self._obj['layers'][layer_idx]['items'][-1]  # use to update item
+        else:
+            self._obj['layers'][layer_idx]['items'].append(copy.copy(item))
+            self.last_added_item = self._obj['layers'][layer_idx]['items'][-1]  # use to update item
         return self
 
     def remove_item(self, layer_idx, item_idx):
         layer_idx = self.get_layer_idx(layer_idx)  # FIXME slightly confusing - this is getting layer idx from name or doing nothing
         del self._obj['layers'][layer_idx]['items'][item_idx]
+
+    def remove_layer(self, layer_idx):
+        layer_idx = self.get_layer_idx(layer_idx)
+        del self._obj['layers'][layer_idx]
 
     def set_layer_items(self, layer_idx, items):
         self._obj['layers'][layer_idx]['items'] = items
@@ -225,7 +239,7 @@ class AnnotationBuilder:
         obj = copy.deepcopy(self._obj)
         obj['project_name'] = self.project_name
         obj['slide_id'] = self.slide_id
-        obj['layer_names'] = self.layer_names
+        obj['layer_names'] = list(self.layers)
         return obj
 
     def dump_to_json(self, save_dir, name='', suffix_to_remove=('.ndpi', '.svs', '.json'), rewrite_name=False):  # adding .json here so that .json is not written twice
@@ -242,6 +256,7 @@ class AnnotationBuilder:
             save_path = str(save_path)[:-5] + '_' + name + '.json'
         with open(save_path, 'w') as dump_file:
             json.dump(self.export(), dump_file)
+        return save_path
 
     def get_layer_points(self, layer_idx, contour_format=True):
         r"""Get all paths in a given layer, function used to extract layer from annotation object"""
@@ -253,7 +268,7 @@ class AnnotationBuilder:
             layer_points = list(
                 np.array(list(self.item_points(item))).astype(np.int32)[:, np.newaxis, :]  # contour functions only work on int32
                 if (item['type'] == 'path' and 'segments' in item and item['segments']) or
-                   (item['type'] == 'rectangle')
+                   (item['type'] == 'rectangle') or (item['type'] == 'circle')
                 else np.array([])
                 for item in layer['items']
             )
@@ -352,13 +367,13 @@ class AnnotationBuilder:
                 for j, part in enumerate(splits):
                     part['layers'][i]['items'] = chunks[j]
         else:
-            if roi_layer not in self.layer_names:
+            if roi_layer not in self.layers:
                 raise ValueError(f"For 'spatial' mode, roi_layer must be name of top level layer (no layer named '{roi_layer}')")
             roi_contours, layer_name = self.get_layer_points(roi_layer, contour_format=True)
             roi_contour = max((contour for contour in roi_contours if contour.size > 0), key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(roi_contour)
             if w > h:
-                split_rects = [(x + i*int(w/num_splits), y, int(w/num_splits), h) for i in range(num_splits)]
+                split_rects = [(x + i*round(w/num_splits), y, round(w/num_splits), h) for i in range(num_splits)]
             else:
                 split_rects = [(x, y + i*int(h/num_splits), w, int(h/num_splits)) for i in range(num_splits)]
             for i, layer in enumerate(self._obj['layers']):
@@ -455,10 +470,16 @@ class AnnotationBuilder:
                 x, y, w, h = item['x'], item['y'], item['width'], item['height']
             else:
                 raise ValueError(f"Invalid rectangle layer item \n{item}\n Either 'from' and 'to' or 'x', 'y', 'width', and 'height' must be specified")
-            yield (x, y)  # yield points anticlockwise
-            yield (x, y + h)
-            yield (x + w, y + h)
-            yield (x + w, y)
+            yield x, y  # yield points anticlockwise
+            yield x, y + h
+            yield x + w, y + h
+            yield x + w, y
+        elif item['type'] == 'circle':
+            NUM_POINTS = 6
+            for i in range(NUM_POINTS):
+                angle = 2*math.pi*i/NUM_POINTS
+                yield (item['center']['x'] + item['radius']*math.cos(angle),
+                       item['center']['y'] + item['radius']*math.sin(angle))
         else:
             raise NotImplementedError(f"Unrecognized item type '{item['type']}'")
 
@@ -565,14 +586,23 @@ class AnnotationBuilder:
                     # keep from and to attributes for backward compatibility
                     num_changed_items += 1
         print(f"{num_changed_items} items were updated")
+        return self
 
     def new_to_old(self):
+        num_changed_items = 0
         for layer in self._obj['layers']:
             for item in layer['items']:
                 if item['type'] == 'path' and isinstance(item['segments'][0], list):
                     item['segments'] = [{
                         'point': {'x': point[0], 'y': point[1]}
                     } for point in item['segments']]
+                    num_changed_items += 1
+                if item['type'] == 'rectangle' and 'x' in item and 'y' in item and 'width' in item and 'height' in item:
+                    item['from'] = {'x': item['x'], 'y': item['y']}
+                    item['to'] = {'x': item['x'] + item['width'], 'y': item['y'] + item['height']}
+                    num_changed_items += 1
+        print(f"{num_changed_items} items were updated")
+        return self
 
     def clear(self):
         for layer in self.layers.values():
@@ -597,6 +627,29 @@ class AnnotationBuilder:
                 scaled_layer['items'].append(scaled_item)
             self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
         print(f"Layers were scaled by {scale_factor}")
+        return self
+
+    def shift(self, x, y):
+        x, y = int(x), int(y)
+        for layer in self.layers.values():
+            scaled_layer = {
+                'name': layer['name'],
+                'items': []
+            }
+            for item in layer['items']:
+                points = self.item_points(item)
+                scaled_item = copy.deepcopy(item)
+                if item['type'] == 'path':
+                    scaled_item['segments'] = [
+                        [point[0] + x, point[1] + y]
+                        for point in points
+                    ]
+                else:
+                    raise NotImplementedError("Scaling only implemented for paths")
+                scaled_layer['items'].append(scaled_item)
+            self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
+        print(f"Layers were shifted by {(x, y)}")
+        return self
 
 
 def pairwise(iterable):

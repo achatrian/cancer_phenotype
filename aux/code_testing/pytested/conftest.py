@@ -57,7 +57,7 @@ def test_options():
 
 @pytest.fixture
 def apply_options():
-    ApplyOptions = options.apply_options.ApplyOptions
+    ApplyOptions = options.deploy_options.DeployOptions
     apply_options = ApplyOptions()
     apply_options.parser.set_defaults(gpu_ids='-1')
     sys.argv = sys.argv[1:]  # must remove file name, which is first argument

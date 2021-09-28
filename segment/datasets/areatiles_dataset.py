@@ -18,8 +18,7 @@ class AreaTilesDataset(BaseDataset):
         Old dataset for loading gland images
         :param opt:
         """
-        super(AreaTilesDataset, self).__init__()
-        self.opt = opt
+        super(AreaTilesDataset, self).__init__(opt)
         self.file_list = []
         self.labels = []
         phase_dir = os.path.join(self.opt.data_dir, self.opt.phase)
@@ -81,11 +80,7 @@ class AreaTilesDataset(BaseDataset):
                 image = cv2.resize(image, sizes, interpolation=cv2.INTER_AREA)
                 gt = cv2.resize(gt, sizes, interpolation=cv2.INTER_AREA)
         # im aug
-        if self.opt.augment_level:
-            seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
-            image = seq_det.augment_image(image)
-            gt = np.squeeze(seq_det.augment_image(np.tile(gt[..., np.newaxis], (1, 1, 3)), ground_truth=True))
-            gt = gt[..., 0]
+        image, gt = self.augment_image(image, gt)
         if self.opt.one_class:
             gt[gt < 255] = 0
             gt[gt != 0] = 1

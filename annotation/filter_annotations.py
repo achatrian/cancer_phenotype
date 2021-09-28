@@ -12,7 +12,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('annotation_dir', type=Path)
     parser.add_argument('area_annotation_dir', type=Path)
-    parser.add_argument('--area_contour_rescaling', type=float, default=1.0)
     parser.add_argument('--save_dir', type=Path)
     parser.add_argument('--shuffle_annotations', action='store_true')
     opt = parser.parse_args()
@@ -44,8 +43,6 @@ if __name__ == '__main__':
         # biggest contour is used to select the area to process
         area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
                            key=cv2.contourArea)
-        if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-            area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
         x, y, w, h = cv2.boundingRect(area_contour)
 
         def in_rect_check(contour, area_rect):
@@ -58,7 +55,7 @@ if __name__ == '__main__':
             print(f"Cannot decode annotation file for {slide_id}")
             print(err)
             continue
-        for layer_name in annotation.layer_names:
+        for layer_name in annotation.layers:
             annotation.filter(layer_name, [in_rect_check], area_rect=(x, y, w, h))
         annotation.dump_to_json(opt.save_dir)
     print("Done!")

@@ -23,13 +23,12 @@ class TilePhenoDataset(BaseDataset):
     """
 
     def __init__(self, opt):
-        super(TilePhenoDataset, self).__init__()
-        self.opt = opt
+        super(TilePhenoDataset, self).__init__(opt)
         self.paths = []
-        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'CVsplits' / (re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
+        split_tiles_path = Path(self.opt.data_dir) / 'data' / 'cross_validate' / (re.sub('.json', '', opt.split_file) + f'_tiles_{self.opt.phase}.txt')
         split_tiles_path = str(split_tiles_path)
         # read resolution data - requires global tcga_resolution.json file
-        with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / 'tcga_resolution.json', 'r') as resolution_file:
+        with open(Path(self.opt.data_dir) / 'data' / 'cross_validate' / 'tcga_resolution.json', 'r') as resolution_file:
             self.resolutions = json.load(resolution_file)
         try:
             with open(split_tiles_path, 'r') as split_tiles_file:
@@ -40,7 +39,7 @@ class TilePhenoDataset(BaseDataset):
                 print("Outdated tile list - rewriting ...")
                 raise FileNotFoundError
             print(f"Loaded {len(self.paths)} tile paths for split {Path(self.opt.split_file).name}")
-            with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / opt.split_file) as split_json:
+            with open(Path(self.opt.data_dir) / 'data' / 'cross_validate' / opt.split_file) as split_json:
                 self.split = json.load(split_json)
         except FileNotFoundError:
             self.ANNOTATION_SCALING_FACTOR = 0.1  # in case images were shrank before being annotated (for TCGA) TODO rescale annotation instead
@@ -50,7 +49,7 @@ class TilePhenoDataset(BaseDataset):
                          path.is_dir()]  # one per wsi images the tiles were derived from
             paths = [path for path in chain(*(wsi_path.glob(self.opt.image_glob_pattern) for wsi_path in wsi_paths))]
             assert paths, "Cannot be empty"
-            with open(Path(self.opt.data_dir) / 'data' / 'CVsplits' / opt.split_file) as split_json:
+            with open(Path(self.opt.data_dir) / 'data' / 'cross_validate' / opt.split_file) as split_json:
                 self.split = json.load(split_json)
             tqdm.write("Selecting split tiles within annotation area (might take a while) ...")
             self.opt.phase = self.opt.phase if self.opt.phase != 'val' else 'test'  # check on test set during training (TEMP)

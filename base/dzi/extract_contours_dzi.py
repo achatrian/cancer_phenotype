@@ -38,9 +38,8 @@ if __name__ == '__main__':
         contours, layer_name = AnnotationBuilder.from_object(annotation_obj). \
             get_layer_points('Tumour area', contour_format=True)
     # biggest contour is used to select the area to process
-    area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3), key=cv2.contourArea)
-    if opt.area_contour_rescaling != 1.0:  # rescale annotations that were taken at the non base magnification
-        area_contour = (area_contour / opt.area_contour_rescaling).astype(np.int32)
+    area_contour = max((contour for contour in contours if contour.shape[0] > 1 and contour.ndim == 3),
+                       key=cv2.contourArea)
     # read downsampled region corresponding to tumour area annotation and extract contours
     x, y, w, h = cv2.boundingRect(area_contour)
     # if base layer is not copied from mask, need to read at half the origin as mask dimensions will be halved
@@ -62,7 +61,7 @@ if __name__ == '__main__':
         annotation.add_item(label, 'path')
         contour = contour.squeeze().astype(int).tolist()  # deal with extra dim at pos 1
         annotation.add_segments_to_last_item(contour)
-    if annotation.is_empty():
+    if len(annotation) == 0:
         warnings.warn(f"No contours were extracted for slide: {opt.slide_id}")
     annotation.shrink_paths(0.1)
     annotation.add_data('experiment', opt.experiment_name)
@@ -72,3 +71,8 @@ if __name__ == '__main__':
     annotation.dump_to_json(annotation_dir)
     print(f"Annotation saved in {str(annotation_dir)}")
     print("Done !")
+
+
+    
+
+

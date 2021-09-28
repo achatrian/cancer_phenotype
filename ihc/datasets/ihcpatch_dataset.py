@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import json
-import random
+import re
 import warnings
 from datetime import datetime
 import numpy as np
@@ -12,21 +12,36 @@ from PIL import Image
 from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 
 
+def find_slides_description(slides_data, data_dir):
+    slide_paths = list(data_dir.glob('*.tiff')) + list(data_dir.glob('*/*.tiff'))
+    slide_ids = set(list(path.with_suffix('').name for path in slide_paths))
+    slide_labels, slide_stains = {}, {}
+    # match slides to labels
+    for i, slide_row in slides_data.iterrows():
+        slide_id, staining_type, case_type = slide_row['Image'], slide_row['Staining code'], slide_row['Case type']
+        if slide_id in slide_ids:
+            slide_labels[slide_id] = 1 if case_type == 'Real' else 0
+            slide_stains[slide_id] = str(staining_type)
+    return slide_ids, slide_labels, slide_stains
+
+
 class IHCPatchDataset(BaseDataset):
 
     def __init__(self, opt):
-        super().__init__()
-        self.opt = opt
+        super().__init__(opt)
         self.opt.data_dir = Path(self.opt.data_dir)
-        # read file describing what type of stains the images are
+        # read file describing what images are stained with
         self.slides_data = pd.read_csv(self.opt.ihc_data_file)
         # assume data organization is dd/data/tiles/Focus#/slide_id
         self.tiles_dir = self.opt.data_dir/'data'/self.opt.tiles_dirname
-        self.all_paths = []  # store both H&E and CK5 images
+        self.slide_ids, self.slide_labels, self.slide_stains = find_slides_description(self.slides_data,
+                                                                                       self.opt.data_dir)
+        self.all_paths = []
         for focus_path in self.tiles_dir.iterdir():
             if not focus_path.is_dir():
                 continue
             for slide_path in focus_path.iterdir():
+                self.slide_ids.add(slide_path.with_suffix('').name)
                 self.all_paths += list(slide_path.glob('*_image.png'))
         if not self.all_paths:
             raise ValueError(f"No image tiles in {self.opt.data_dir}")
@@ -37,7 +52,7 @@ class IHCPatchDataset(BaseDataset):
         self.labels, self.ck5_labels = [], []  # ambiguous (IHC request) = 1, unambiguous (No IHC request) 0
         for i, slide_row in self.slides_data.iterrows():
             slide_id, staining_type, case_type = slide_row['Image'], slide_row['Staining code'], slide_row['Case type']
-            if staining_type is np.nan and not any(slide_id.endswith(stain) for stain in ('34B12', 'CK5', 'CKAE13', 'PGM1')):
+            if not isinstance(staining_type, str) and np.isnan(staining_type):
                 slide_paths = [path for path in self.all_paths if path.parent.name == slide_id
                                and path.name.endswith('_image.png')]
                 self.paths += slide_paths
@@ -45,7 +60,7 @@ class IHCPatchDataset(BaseDataset):
                 self.labels += [1 if case_type == 'Real' else 0] * len(slide_paths)
                 self.focus_areas_paths += [path for path in self.all_focus_areas_paths if path.parent.name == slide_id
                                            and path.name.endswith('_mask.png')]
-            elif staining_type == 'CK5' or any(slide_id.endswith(stain) for stain in ('CK5', 'CKAE13')):
+            elif staining_type == 'CK5' or any(slide_id.endswith(stain) for stain in ('CK5', 'CKAE13')):  #elif
                 slide_paths = [path for path in self.all_paths if path.parent.name == slide_id
                                and path.name.endswith('_image.png')]
                 self.ck5_paths += slide_paths
@@ -53,18 +68,22 @@ class IHCPatchDataset(BaseDataset):
                 self.ck5_focus_areas_paths += [path for path in self.all_focus_areas_paths if
                                                path.parent.name == slide_id
                                                and path.name.endswith('_mask.png')]
-            elif staining_type in {'panCK', 'Other', 'Staining code', '34BE12', np.nan}:
+            elif staining_type in {'panCK', 'Other', 'Staining code', '34BE12'} \
+                    or isinstance(staining_type, type(np.nan)):
                 continue  # TODO decide how to deal with panCK slides and other stains
             else:
                 raise ValueError(f"Unknown staining type: {staining_type}")
-        assert self.paths and len(self.paths) == len(self.focus_areas_paths) and \
-               len(self.ck5_paths) == len(self.ck5_focus_areas_paths), "Focus tile mismatch"
+        assert self.paths and len(self.paths) == len(self.focus_areas_paths), "Focus tile mismatch"
+        assert len(self.ck5_paths) == len(self.ck5_focus_areas_paths), "CK5 Focus tile mismatch"
         print(f"Found {len(self.paths)} H&E tiles ({sum(self.labels)} IHC, {len(self.labels) - sum(self.labels)} Controls) and {len(self.ck5_paths)} CK5 tiles ({sum(self.ck5_labels)} IHC, {len(self.ck5_labels) - sum(self.ck5_labels)} Controls)")
-        self.make_train_test_split()  # only keeps paths for specified phase
-        if self.opt.phase == 'train':
-            self.paths, self.labels, self.ck5_paths, self.ck5_labels = self.train_test_split['train_paths'], self.train_test_split['train_labels'], self.train_test_split['train_ck5_paths'], self.train_test_split['train_ck5_labels']
-        elif self.opt.phase in {'val', 'test'}:
-            self.paths, self.labels, self.ck5_paths, self.ck5_labels = self.train_test_split['test_paths'], self.train_test_split['test_labels'], self.train_test_split['test_ck5_paths'], self.train_test_split['test_ck5_labels']
+        if not self.opt.is_apply:
+            self.make_train_test_split()  # only keeps paths for specified phase
+            if self.opt.phase == 'train':
+                self.paths, self.labels = self.train_test_split['train_paths'], self.train_test_split['train_labels']
+                # self.ck5_paths, self.ck5_labels = self.train_test_split['train_ck5_paths'], self.train_test_split['train_ck5_labels']
+            elif self.opt.phase in {'val', 'test'}:
+                self.paths, self.labels = self.train_test_split['test_paths'], self.train_test_split['test_labels']
+                # self.ck5_paths, self.ck5_labels = self.train_test_split['test_ck5_paths'], self.train_test_split['test_ck5_labels']
         assert len(self.paths) == len(self.labels) and len(self.ck5_paths) == len(self.ck5_labels),  "Same # of paths and labels (shouldn't be possible unless file is tampered with)"
         print(f"Selected data for {self.opt.phase} split.")
         self.randomcrop = RandomCrop(self.opt.patch_size)
@@ -77,9 +96,6 @@ class IHCPatchDataset(BaseDataset):
                 self.tiles_info = json.load(tiles_info_file)  # read resolution of tiles
         except StopIteration:
             self.tiles_info = None
-        # TODO divide into train-test splits, save split info and keep only train / test depending on opt.phase
-        # TODO check that images are all at same resolution ? (Maybe not here though)
-        # TODO only applying annotations to CK5 images for a lot of cases -- apply to all!!
 
     def name(self):
         return 'IHCPatchDataset'
@@ -90,10 +106,10 @@ class IHCPatchDataset(BaseDataset):
     @staticmethod
     def modify_commandline_options(parser, is_train):
         parser.add_argument('--ihc_data_file', type=Path,
-                            default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-02-24.csv')
+                            default='/well/rittscher/projects/IHC_Request/data/documents/additional_data_2020-04-21.csv')
         parser.add_argument('--tiles_dirname', type=str, default='tiles', help="Name of folder containing the loaded tiles")
         parser.add_argument('--stain', type=str, default='HE', choices=['HE', 'CK5'], help="What stain data to use")
-        parser.add_argument('--train_fraction', type=float, default=0.6, help="Fraction of samples used for training")
+        parser.add_argument('--train_fraction', type=float, default=0.7, help="Fraction of samples used for training")
         parser.add_argument('--no_ground_truth', action='store_true',
                             help="Whether not to load the focus area")  # TODO this needed?
         parser.add_argument('--mpp', type=float, default=0.25, help="Resolution to load the slides at")
@@ -104,11 +120,12 @@ class IHCPatchDataset(BaseDataset):
 
     def get_sampler(self):
         if self.opt.stain == 'HE':
-            weight = sum(self.labels)/len(self.labels)
-            weights = [1/weight if label else 1 for label in self.labels]
+            ambiguous_weight = 1.0 - sum(self.labels)/len(self.labels)
+            weights = [ambiguous_weight if label else 1.0 - ambiguous_weight for label in self.labels]
+            print(f"Ambiguous weight = {round(ambiguous_weight, 2)}")
         elif self.opt.stain == 'CK5':
             weight = sum(self.ck5_labels)/len(self.ck5_labels)
-            weights = [1/weight if label else 1 for label in self.labels]
+            weights = [1.0/weight if label else 1 - weight for label in self.labels]
         else:
             raise ValueError(f"Invalid stain type {self.opt.stain}")
         return torch.utils.data.WeightedRandomSampler(weights, len(self))
@@ -130,7 +147,7 @@ class IHCPatchDataset(BaseDataset):
             # if asymmetrical, crop images
             resize_factor = read_mpp / target_mpp
             image = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
-            if ground_truth:
+            if ground_truth is not None:
                 ground_truth = cv2.resize(image, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
         if image.shape[0:2] != (self.opt.patch_size,) * 2:
             too_narrow = image.shape[1] < self.opt.patch_size
@@ -192,10 +209,16 @@ class IHCPatchDataset(BaseDataset):
         assert (image.shape[-1] == 3)
         image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image.copy()).float()
+        # coordinates offset
+        groups = re.match(r'Focus\d_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)?', Path(image_path).name).groups()
+        x_offset, y_offset, w, h, tile_num = groups
         data = dict(
             input=image,
             input_path=str(image_path),
             target=self.labels[idx] if self.opt.stain == 'HE' else self.ck5_labels[idx],
+            x_offset=int(x_offset),
+            y_offset=int(y_offset),
+            tile_num=int(tile_num) if tile_num is not None else 0
         )
         if not self.opt.no_ground_truth:
             data.update(
@@ -216,41 +239,51 @@ class IHCPatchDataset(BaseDataset):
                 raise FileNotFoundError("Overwrite")
             with split_path.open('r') as split_file:
                 self.train_test_split = json.load(split_file)
+            print(f"Loading split file: {split_path} ...")
             self.train_test_split['train_paths'] = [Path(s) for s in self.train_test_split['train_paths']]
             self.train_test_split['test_paths'] = [Path(s) for s in self.train_test_split['test_paths']]
-            self.train_test_split['train_ck5_paths'] = [Path(s) for s in self.train_test_split['train_ck5_paths']]
-            self.train_test_split['test_ck5_paths'] = [Path(s) for s in self.train_test_split['test_ck5_paths']]
+            # self.train_test_split['train_ck5_paths'] = [Path(s) for s in self.train_test_split['train_ck5_paths']]
+            # self.train_test_split['test_ck5_paths'] = [Path(s) for s in self.train_test_split['test_ck5_paths']]
             if self.train_test_split['train_fraction'] != self.opt.train_fraction:
-                raise FileNotFoundError('Train fraction is different from the required value')
+                warnings.warn('Train fraction is different from the required value')
             split_check = not set(self.train_test_split['train_paths']) <= set(self.paths) or \
-                    not set(self.train_test_split['test_paths']) <= set(self.paths) or \
-                    not set(self.train_test_split['train_ck5_paths']) <= set(self.ck5_paths) or \
-                    not set(self.train_test_split['test_ck5_paths']) <= set(self.ck5_paths)
+                    not set(self.train_test_split['test_paths']) <= set(self.paths)  # or \
+                    # not set(self.train_test_split['train_ck5_paths']) <= set(self.ck5_paths) or \
+                    # not set(self.train_test_split['test_ck5_paths']) <= set(self.ck5_paths)
             if split_check:
                 if not self.opt.soft_split_check:
                     raise ValueError(f"Mismatch between read paths and paths in split file: {split_path}")
                 else:
                     warnings.warn(f"""
                     Dataset is missing {len(set(self.train_test_split['train_paths']) - set(self.paths))} 
-                    training paths, {len(set(self.train_test_split['test_paths']) - set(self.paths))} test paths,
-                    {len(set(self.train_test_split['train_ck5_paths']) - set(self.paths))} train ck5 paths, amd
-                    {len(set(self.train_test_split['test_ck5_paths']) - set(self.paths))} test ck5 paths from split
+                    training paths, {len(set(self.train_test_split['test_paths']) - set(self.paths))} test paths
                     """)
-        except (FileNotFoundError, json.JSONDecodeError):
-            train_paths, test_paths, train_labels, test_labels = train_test_split(self.paths, self.labels,
-                                                                                  train_size=self.opt.train_fraction)
-            train_ck5_paths, test_ck5_paths, train_ck5_labels, test_ck5_labels = train_test_split(self.ck5_paths,
-                                                                                                  self.ck5_labels,
-                                                                                                  train_size=self.opt.train_fraction)
+                    # f"""{len(set(self.train_test_split['train_ck5_paths']) - set(self.paths))} train ck5 paths, amd
+                    # {len(set(self.train_test_split['test_ck5_paths']) - set(self.paths))} test ck5 paths from split"""
+        except (FileNotFoundError, json.JSONDecodeError) as err:
+            print(err)
+            print("Making new train split ...")
+            slides = list(slide_id for slide_id, stain in self.slide_stains.items() if stain == 'nan')
+            labels = list(self.slide_labels[slide_id] for slide_id in slides)
+            train_slides, test_slides, train_labels, test_labels = train_test_split(slides, labels,
+                                                                                  train_size=self.opt.train_fraction,
+                                                                                  stratify=labels)
+            ck5_slides = list(slide_id for slide_id, stain in self.slide_stains.items() if stain == 'CK5')
+            ck5_labels = list(self.slide_labels[slide_id] for slide_id in slides)
+            # train_ck5_slides, test_ck5_slides, train_ck5_labels, test_ck5_labels = train_test_split(ck5_slides,
+            #                                                                                       ck5_labels,
+            #                                                                                       train_size=self.opt.train_fraction,
+            #                                                                                       stratify=ck5_labels)
+            train_slides, test_slides = set(train_slides), set(test_slides)
             self.train_test_split = {
-                'train_paths': [str(path) for path in train_paths],
-                'test_paths': [str(path) for path in test_paths],
-                'train_labels': train_labels,
-                'test_labels': test_labels,
-                'train_ck5_paths': [str(path) for path in train_ck5_paths],
-                'test_ck5_paths': [str(path) for path in test_ck5_paths],
-                'train_ck5_labels': train_ck5_labels,
-                'test_ck5_labels': test_ck5_labels,
+                'train_paths': [str(path) for path in self.paths if path.parent.name in train_slides],
+                'test_paths': [str(path) for path in self.paths if path.parent.name in test_slides],
+                'train_labels': [label for path, label in zip(self.paths, self.labels) if path.parent.name in train_slides],
+                'test_labels': [label for path, label in zip(self.paths, self.labels) if path.parent.name in test_slides],
+                # 'train_ck5_paths': [str(path) for path in self.ck5_paths if path.parents[1] in train_ck5_slides],
+                # 'test_ck5_paths': [str(path) for path in self.ck5_paths if path.parents[1] in test_ck5_slides],
+                # 'train_ck5_labels': [label for path, label in zip(self.ck5_paths, self.labels) if path.parents[1] in train_ck5_slides],
+                # 'test_ck5_labels': [label for path, label in zip(self.ck5_paths, self.labels) if path.parents[1] in test_ck5_slides],
                 'train_fraction': self.opt.train_fraction,
                 'date': str(datetime.now())[:10]
             }
