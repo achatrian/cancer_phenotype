@@ -66,7 +66,7 @@ class SegmentVisualizer(BaseVisualizer):
             else:
                 idx = 1
                 for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image, label.endswith("_map"))
+                    image_numpy = utils.tensor2im(image, label.endswith("_map"), num_classes=self.opt.num_class)
                     self.vis.image(image_numpy.transpose([2, 0, 1]), opts=dict(title=label),
                                    win=self.display_id + idx + 1)
                     idx += 1
@@ -74,7 +74,7 @@ class SegmentVisualizer(BaseVisualizer):
         if self.use_html and (save_result or not self.saved):  # save images to a html file
             self.saved = True
             for label, image in visuals.items():
-                image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
+                image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"), num_classes=self.opt.num_class)
                 img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
                 utils.save_image(image_numpy, img_path)
             # update website
@@ -84,9 +84,9 @@ class SegmentVisualizer(BaseVisualizer):
                 ims, txts, links = [], [], []
 
                 for label, image in visuals.items():
-                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"))
+                    image_numpy = utils.tensor2im(image[0, ...], label.endswith("_map"), num_classes=self.opt.num_class)
                     img_path = 'epoch%.3d_%s.png' % (n, label)
-                    ims.append(img_path)
+                    ims.append(image_numpy)
                     txts.append(label)
                     links.append(img_path)
                 webpage.add_images(ims, txts, links, width=self.win_size)

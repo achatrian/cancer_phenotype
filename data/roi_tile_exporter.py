@@ -13,8 +13,9 @@ import imageio
 from tqdm import tqdm
 from skimage.filters import gaussian
 from skimage.color import rgba2rgb
-from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
-from contours import read_annotations, contour_to_mask, check_relative_rect_positions
+from data.images.wsi_reader import make_wsi_reader
+from data.contours import read_annotations, check_relative_rect_positions, contour_to_mask
+from data.contours.instance_masker import InstanceMasker
 from annotation.mask_converter import MaskConverter
 
 
@@ -23,26 +24,38 @@ from annotation.mask_converter import MaskConverter
 
 class ROITileExporter:
     r"""Extract tiles from an annotation area"""
-    def __init__(self, data_dir, slide_id, experiment_name='', annotations_dirname='', tile_size=1024, mpp=0.2,
-                 label_values=(('epithelium', 200), ('lumen', 250)), roi_dir_name=None, sigma_smooth=10, set_mpp=None):
+    def __init__(self, data_dir, slide_id, experiment_name, annotations_dirname,
+                 tile_size=1024, mpp=0.2, roi_dir_name=None, sigma_smooth=10, set_mpp=None):
         self.data_dir = Path(data_dir)
         self.slide_id = slide_id
+        self.experiment_name = experiment_name
+        self.converter = MaskConverter()
         self.tile_size = tile_size
         self.mpp = mpp
-        self.label_values = OrderedDict(label_values)
         self.sigma_smooth = sigma_smooth
         if roi_dir_name is not None and not (self.data_dir/'data'/roi_dir_name).is_dir():
             ValueError(f"{str(self.data_dir/'data'/roi_dir_name)} is not a directory")
         self.roi_dir = self.data_dir/'data'/roi_dir_name if roi_dir_name is not None else None
-        try:
-            self.slide_path = next(path for path in chain(tuple(self.data_dir.glob('*.tiff')),
-                                                          tuple(self.data_dir.glob('*.svs')),
-                                                          tuple(self.data_dir.glob('*.ndpi')),
-                                                          tuple(self.data_dir.glob('*/*.tiff')),
-                                                          tuple(self.data_dir.glob('*/*.svs')),
-                                                          tuple(self.data_dir.glob('*/*.ndpi'))) if slide_id in path.name)
+        try:  # compatible openslide formats: {.tiff|.svs|.ndpi}
+            self.slide_path = next(
+                chain(self.data_dir.glob(f'{self.slide_id}.tiff'), self.data_dir.glob(f'*/{self.slide_id}.tiff'),
+                      self.data_dir.glob(f'{self.slide_id}.svs'), self.data_dir.glob(f'*/{self.slide_id}.svs'),
+                      self.data_dir.glob(f'{self.slide_id}.ndpi'), self.data_dir.glob(f'*/{self.slide_id}.ndpi'),
+                      self.data_dir.glob(f'{self.slide_id}.isyntax'), self.data_dir.glob(f'*/{self.slide_id}.isyntax'))
+            )
         except StopIteration:
-            raise ValueError(f"No image file matching slide id: {slide_id}")
+            cases_dir = self.data_dir/'cases'  # TODO finish
+            try:
+                self.slide_path = next(
+                    chain(cases_dir.glob(f'{self.slide_id}.tiff'), cases_dir.glob(f'*/{self.slide_id}.tiff'),
+                          cases_dir.glob(f'{self.slide_id}.svs'), cases_dir.glob(f'*/{self.slide_id}.svs'),
+                          cases_dir.glob(f'{self.slide_id}.ndpi'), cases_dir.glob(f'*/{self.slide_id}.ndpi'),
+                          cases_dir.glob(f'{self.slide_id}.isyntax'), cases_dir.glob(f'*/{self.slide_id}.isyntax'))
+                )
+            except StopIteration:
+                raise FileNotFoundError(f"No image file matching id: {slide_id} ")
+            # else:
+            #     raise FileNotFoundError(f"No image file matching id: {slide_id} (partial id matching: OFF)")
         self.slide = make_wsi_reader(self.slide_path, {
             'patch_size': tile_size,
             'mpp': mpp,
@@ -61,14 +74,9 @@ class ROITileExporter:
                                                  if contour.size > 0 and contour.shape[0] > 2 and contour.ndim == 3)
         self.tile_size = tile_size
         self.center_crop = CenterCrop(self.tile_size)
-        self.bounding_boxes = {
-            layer_name: [
-                cv2.boundingRect(contour) for contour in contours
-            ] for layer_name, contours in self.contour_lib.items()
-        }
-
         if self.roi_dir is not None:
             self.roi_contour_lib = read_annotations(self.roi_dir, (self.slide_id,), full_path=True)[self.slide_id]
+        self.masker = None
 
     @staticmethod
     def get_tile_contours(contours, bounding_rects, labels, tile_rect):
@@ -90,14 +98,14 @@ class ROITileExporter:
         shape = (self.tile_size*round(self.mpp/self.slide.mpp_x),
                  self.tile_size*round(self.mpp/self.slide.mpp_y))
         # reorder contours and labels so that innermost is applied last
-        order = tuple(self.label_values)  # get the label names
+        order = tuple(self.converter.label_value_map)  # get the label names
         ordering = tuple(order.index(label) for label in labels)
         tile_contours = tuple(contour for _, contour in sorted(zip(ordering, tile_contours), key=lambda oc: oc[0]))
         labels = tuple(label for _, label in sorted(zip(ordering, labels)))
         for contour, label in zip(tile_contours, labels):
             try:
                 mask = contour_to_mask(
-                    contour, value=self.label_values[label], shape=shape, mask=mask, mask_origin=mask_origin
+                    contour, value=self.converter.label_value_map[label], shape=shape, mask=mask, mask_origin=mask_origin
                 )  # contours that lay outside of mask are cut
             except ValueError as err:
                 if not err.args[0].startswith('Contour'):
@@ -108,13 +116,14 @@ class ROITileExporter:
                     print("###")
         return mask
 
-    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path], hier_rule=lambda x: x):
+    def export_tiles(self, area_layer: Union[str, int], save_dir: Union[str, Path]):
         r"""
         :param area_layer: annotation layer marking areas in the slide to extract tiles from
         :param save_dir: where to save the tiles
         :return:
         """
         # TODO externalise parameters
+        self.masker = InstanceMasker(self.contour_lib, area_layer, self.converter.label_value_map)
         save_dir = Path(save_dir)/area_layer
         slide_dir = save_dir/self.slide_id
         save_dir.mkdir(exist_ok=True, parents=True), slide_dir.mkdir(exist_ok=True, parents=True)
@@ -127,7 +136,7 @@ class ROITileExporter:
             if layer_name == area_layer:
                 continue  # get all contours except those delimiting the export area
             contours.extend(layer_contours)
-            bounding_rects.extend(self.bounding_boxes[layer_name])
+            bounding_rects.extend([cv2.boundingRect(contour) for contour in layer_contours])
             labels.extend([layer_name] * len(layer_contours))
         # remove all tissue locations outside of ROI
         initial_length = len(self.slide.tissue_locations)
@@ -140,8 +149,6 @@ class ROITileExporter:
             warnings.warn("ROI is whole slide image")
         print("Extracting tiles and masks ...")
         num_saved_images = 0
-        value_hier = sorted(self.label_values.values(), key=hier_rule)
-        converter = MaskConverter(value_hier=value_hier)
         x_tile_size = self.tile_size*round(self.mpp/self.slide.mpp_x)
         y_tile_size = self.tile_size*round(self.mpp/self.slide.mpp_y)
         for x, y in tqdm(self.slide.tissue_locations):
@@ -151,9 +158,11 @@ class ROITileExporter:
                 continue
             mask = self.make_segmentation_map(tile_contours, tile_labels, (x, y))
             mask = cv2.dilate(mask, np.ones((3, 3)))  # pre-dilate to remove jagged boundary from low-res contour extraction
-            value_binary_masks = []
-            for value in value_hier:
-                value_binary_mask = converter.threshold_by_value(value, mask)
+            value_binary_masks = {}
+            for label, interval in self.converter.label_interval_map.items():
+                if label == 'background':
+                    continue  # don't extract contours for background
+                value_binary_mask = self.converter.threshold_by_interval(mask, interval)
                 if self.sigma_smooth > 0:
                     value_binary_mask = (gaussian(value_binary_mask, sigma=self.sigma_smooth) > 0.5).astype(np.uint8)  # smoothen jagged edges
                 # value_binary_mask = converter.remove_ambiguity(
@@ -162,10 +171,12 @@ class ROITileExporter:
                 #     final_closing_size=0,  # no need for large closing of annotation images
                 #     final_dilation_size=3
                 # )
-                value_binary_masks.append(value_binary_mask)
+                value_binary_masks[label] = value_binary_mask
             mask = np.zeros_like(mask)
-            for value_binary_mask, value in zip(value_binary_masks, value_hier):
-                mask[value_binary_mask > 0] = value
+            for label, value in self.converter.label_value_map.items():
+                if label == 'background':
+                    continue  # don't extract contours for background
+                mask[value_binary_masks[label] > 0] = value
             mask = np.array(mask, dtype=np.uint8)
             tile = np.array(self.slide.read_region((x, y), level=self.slide.read_level, size=self.tile_size),
                             dtype=np.uint8)
@@ -184,7 +195,7 @@ class ROITileExporter:
                 'mpp': self.mpp,
                 'tile_size': self.tile_size,
                 'sigma_smooth': self.sigma_smooth,
-                'label_values': str(self.label_values)
+                'label_values': str(self.converter.label_value_map)
             }, info_file)
         print(f"Saved {num_saved_images}x2 images. Done!")
 

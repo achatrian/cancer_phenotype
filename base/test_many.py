@@ -42,11 +42,6 @@ if __name__ == '__main__':
         with model.start_validation() as update_validation_meters:
             with tqdm(total=len(dataset)) as progress_bar:
                 for i, data in enumerate(dataloader):
-                    if opt.task == 'phenotype':
-                        slide_level_label.add(int(data['target'][0]))
-                        if len(slide_level_label) > 1:
-                            raise ValueError(
-                                f"Inconsistent slide-level label for {opt.slide_id}; labels = {slide_level_label}")
                     model.set_input(data)
                     model.test()
                     model.evaluate_parameters()

@@ -85,8 +85,9 @@ class BaseDataset(data.Dataset):
             seq_det = self.aug_seq.to_deterministic()  # needs to be called for every batch https://github.com/aleju/imgaug
             image = seq_det.augment_image(image)
             if ground_truth is not None:
-                ground_truth = np.squeeze(seq_det.augment_image(np.tile(ground_truth[..., np.newaxis], (1, 1, 3)),
-                                                                ground_truth=True))
+                if ground_truth.ndim == 2:
+                    ground_truth = np.tile(ground_truth[..., np.newaxis], (1, 1, 3))
+                ground_truth = np.squeeze(seq_det.augment_image(ground_truth, ground_truth=True))
                 ground_truth = ground_truth[..., 0]
         return image, ground_truth
 
@@ -121,7 +122,7 @@ def get_augment_seq(augment_level):
     """
 
     if not 0 < augment_level < 5:
-        raise ValueError("Level of augmentation must be between 1 and 5 (input was {})".format(augment_level))
+        raise ValueError("Level of augmentation must be between 1 and 4 (input was {})".format(augment_level))
 
     def sometimes(aug):
         return iaa.Sometimes(0.5, aug)
@@ -195,7 +196,7 @@ def get_augment_seq(augment_level):
                                iaa.MedianBlur(k=(3, 11)),
                                # blur images using local medians with kernel sizes between 2 and 7
                             ]),
-                            iaa.ContrastNormalization(alpha=(0.5, 1.0), per_channel=0.5),
+                            iaa.LinearContrast(alpha=(0.5, 1.0), per_channel=0.5),
                             # improve or worsen the contrast
                             iaa.Grayscale(alpha=(0.0, 1.0)),
                             sometimes(iaa.ElasticTransformation(alpha=(0.1, 0.3), sigma=0.2)),
@@ -272,7 +273,7 @@ def get_augment_seq(augment_level):
                             iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
                             # either change the brightness of the whole images (sometimes
                             # per channel) or change the brightness of subareas
-                            iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                            iaa.LinearContrast((0.5, 2.0), per_channel=0.5),
                             # improve or worsen the contrast
                             # iaa.Grayscale(alpha=(0.0, 1.0)),
                             sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),
@@ -347,13 +348,12 @@ def get_augment_seq(augment_level):
                                 # per channel) or change the brightness of subareas
                                 iaa.OneOf([
                                     iaa.Multiply((0.5, 1.5), per_channel=0.5),
-                                    iaa.FrequencyNoiseAlpha(
+                                    iaa.BlendAlphaFrequencyNoise(
                                         exponent=(-4, 0),
-                                        first=iaa.Multiply((0.5, 1.5), per_channel=True),
-                                        second=iaa.ContrastNormalization((0.5, 2.0))
-                                    )
+                                        foreground=iaa.Multiply((0.5, 1.5), per_channel=True),
+                                        background=iaa.LinearContrast((0.5, 2.0))),
                                 ]),
-                                iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                                iaa.LinearContrast((0.5, 2.0), per_channel=0.5),
                                 # improve or worsen the contrast
                                 # iaa.Grayscale(alpha=(0.0, 1.0)),
                                 sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)),

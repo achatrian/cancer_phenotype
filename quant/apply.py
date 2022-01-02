@@ -30,8 +30,9 @@ if __name__ == '__main__':
     print_options(args, parser)
     experiment: BaseExperiment = create_experiment(args)
     all_parameter_names = experiment.preprocess_parameters_names + experiment.parameters_names
-    parameters = namedtuple('Parameters', all_parameter_names,
-                            defaults=[None] * len(all_parameter_names))()
+    # parameters = namedtuple('Parameters', all_parameter_names,
+    #                         defaults=[None] * len(all_parameter_names))()  # defaults do not work with python 3.6
+    parameters = namedtuple('Parameters', all_parameter_names)(None, None, None, None, None)
     parameters_assignment = {parameter: read_parameter_values(args, parameter).pop()
                              for parameter in all_parameter_names}
     parameters = parameters._replace(**parameters_assignment)

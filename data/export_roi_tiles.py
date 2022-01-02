@@ -4,6 +4,7 @@ import json
 import multiprocessing as mp
 import numpy as np
 from roi_tile_exporter import ROITileExporter
+from annotation.mask_converter import MaskConverter
 
 
 if __name__ == '__main__':
@@ -18,7 +19,7 @@ if __name__ == '__main__':
     parser.add_argument('--area_label', type=str, default='Tumour area')
     # parser.add_argument('--label_values', type=json.loads, default='[["epithelium", 200], ["lumen", 250]]',
     #                     help='!!! NB: this would be "[[\"epithelium\", 200], [\"lumen\", 250]]" if passed externally')
-    parser.add_argument('--roi_dir_name', default='tumour_area_annotations')
+    parser.add_argument('--roi_dir_name', default=None)  # e.g. 'tumour_area_annotations'
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--tiles_dirname', type=str, default='tiles')
     parser.add_argument('--stop_overwrite', action='store_true')
@@ -37,9 +38,9 @@ if __name__ == '__main__':
         try:
             exporter = ROITileExporter(args.data_dir, slide_id,
                                        args.experiment_name,
+                                       args.annotations_dirname,
                                        tile_size=args.tile_size,
                                        mpp=args.mpp,
-                                       annotations_dirname=args.annotations_dirname,
                                        roi_dir_name=args.roi_dir_name,
                                        set_mpp=args.set_mpp)
             print(f"Exporting tiles from {slide_id} ...")

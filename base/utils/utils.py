@@ -4,6 +4,7 @@ from PIL import Image
 import time
 import socket
 import re
+from itertools import tee
 from collections import OrderedDict
 from torch import nn
 import torch
@@ -89,6 +90,13 @@ def namespace_to_dict(namespace):
         k = str(k)
         dict_[k] = v
     return dict_
+
+
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = tee(iterable)
+    next(b, None)
+    return zip(a, b)
 
 
 #### torch

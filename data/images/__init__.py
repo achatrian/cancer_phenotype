@@ -18,3 +18,4 @@ def is_hne(image, threshold=0.4, sat_thresh=20, small_obj_size_factor=1/5):
     mask = cv2.morphologyEx((empirical > ret).astype(np.uint8), cv2.MORPH_CLOSE, kernel)
     mask = remove_small_objects(mask.astype(bool), min_size=image.shape[0] * small_obj_size_factor)
     return mask.mean() > threshold and sat_mean >= sat_thresh
+

@@ -4,6 +4,7 @@ from typing import Union
 import warnings
 import time
 from random import sample
+import math
 import numpy as np
 import cv2
 from skimage import color
@@ -60,7 +61,7 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
         annotation_dir = annotation_dir.resolve(strict=True)  # resolve symlinks
     if slide_ids:
         annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
-                            if any(slide_id in str(annotation_path.name) for slide_id in slide_ids)]
+                            if any(slide_id == annotation_path.stem for slide_id in slide_ids)]
     else:
         annotation_paths = [annotation_path for annotation_path in annotation_dir.iterdir()
                             if annotation_path.is_file() and annotation_path.suffix == '.json']
@@ -71,7 +72,7 @@ def read_annotations(data_dir, slide_ids=(), experiment_name='', full_path=False
         contour_struct[annotation_id] = dict()
         for layer_name in annotation.layers:
             contour_struct[annotation_id][layer_name], _ = annotation.get_layer_points(layer_name, contour_format=True)
-    if len(annotation_paths) == 0 and len(slide_ids) > 1:
+    if len(annotation_paths) == 0:
         warnings.warn(f"No annotation matched ids: {slide_ids}")
     return contour_struct
 
@@ -135,11 +136,12 @@ def check_relative_rect_positions(tile_rect0, tile_rect1, eps=0):
     return positions, origin_rect, rect_areas
 
 
-def check_point_overlap(parent_contour, child_contour, n_points=5):
+def check_point_overlap(parent_contour, child_contour, n_points=5, strict=False):
     r"""Check whether child contour is inside parent contour by testing n_points points for inclusion"""
     # sample child contour
     child_points = sample(child_contour.squeeze().tolist(), min(n_points, child_contour.shape[0]))
-    return all(cv2.pointPolygonTest(parent_contour, tuple(point), False) >= 0 for point in child_points)
+    inclusions = tuple(cv2.pointPolygonTest(parent_contour, tuple(point), False) >= 0 for point in child_points)
+    return all(inclusions) if strict else any(inclusions)
 
 
 def find_overlap(slide_contours: dict, different_labels=True, selected_labels=None, verbose=False):
@@ -154,6 +156,8 @@ def find_overlap(slide_contours: dict, different_labels=True, selected_labels=No
         indices = tuple(i for i, contour in enumerate(layer_contours) if contour.size > 2)
         contours.extend(layer_contours[i] for i in indices)
         labels.extend([layer_name] * len(indices))
+    if len(contours) == 0:
+        raise ValueError("Empty contour structure")
     contour_bbs = [cv2.boundingRect(contour) for contour in contours]
     start_time = time.time()
     with Timer(None, "Time to construct rtree = {:0.4f}", logger=print if verbose else None):
@@ -186,6 +190,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
     :param smoothing:
     :return:
     """
+    # TODO this should always be done relative to original slide in order to avoid confusion
     assert type(contour) is np.ndarray and contour.size > 0, "Non-empty numpy array expected for contour"
     # assert fit_to_size in ('mask', 'contour'), "Invalid value for fit_to_size: " + str(fit_to_size)
     contour = contour.squeeze()
@@ -213,7 +218,7 @@ def contour_to_mask(contour: np.ndarray, value=250, shape=None, mask=None, mask_
     )
     assert mask.shape[0] >= contour_dims[0] - 1 and mask.shape[1] >= contour_dims[1] - 1, "Shifted contour should fit in mask"
     cv2.drawContours(mask, [contour], -1, value, thickness=-1)  # thickness=-1 fills the entire area inside
-    if smoothing > 0:
+    if smoothing > 0 and mask.shape[0] > 10 and mask.shape[1] > 10:
         mask_type = mask.dtype
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((10, 10)))
         blurred_mask = cv2.blur(mask, (smoothing, smoothing))
@@ -302,7 +307,7 @@ def get_contour_image(contour: np.array, reader: WSIReader, min_size=None, level
     if mpp is not None:
         if level is not None:
             raise ValueError("'level' and 'mpp' cannot be specified at once")
-        assert reader.mpp_x == reader.mpp_y, "Assuming same resolution in both orientations"
+        assert math.isclose(reader.mpp_x, reader.mpp_y, rel_tol=0.0001), "Assuming same resolution in both orientations"
         level = np.argmin(np.absolute(np.array(reader.level_downsamples) * reader.mpp_x - mpp))
     if mpp is not None:  # if mpp is given
         rescale_factor = (reader.mpp_x * reader.level_downsamples[contour_level])/mpp

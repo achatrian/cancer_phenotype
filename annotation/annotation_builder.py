@@ -7,7 +7,10 @@ from itertools import tee
 from pathlib import Path
 import multiprocessing as mp
 import numpy as np
-from matplotlib import pyplot as plt
+try:
+    from matplotlib import pyplot as plt
+except (ModuleNotFoundError, ImportError):
+    plt = None
 import cv2
 
 
@@ -66,12 +69,13 @@ class AnnotationBuilder:
         return {layer['name']: layer for layer in self._obj['layers']}
 
     @classmethod
-    def concatenate(cls, annotation0, annotation1, concatenate_layers=True):
+    def concatenate(cls, annotation0, annotation1, concatenate_layers=True, layers=None):
         r"""Add layers from another annotation object to this object"""
         annotation0 = copy.copy(annotation0)
-        for layer in annotation1._obj['layers']:
+        layers = [annotation1[layer] for layer in layers] if layers else annotation1.layers.values()
+        for layer in layers:
             if layer['name'] in annotation0.layers and concatenate_layers:
-                layer0 = next(layer_ for layer_ in  annotation0._obj['layers'] if layer_['name'] == layer['name'])
+                layer0 = next(layer_ for layer_ in annotation0.layers.values() if layer_['name'] == layer['name'])
                 layer0['items'].extend(layer['items'])
             else:
                 if layer['name'] in annotation0.layers:
@@ -120,12 +124,15 @@ class AnnotationBuilder:
             raise ValueError(f"No layer with specified name {layer_name}")
         return layer_idx
 
-    def add_layer(self, layer_name):
-        new_layer = {
-            'name': layer_name,
-            'opacity': 1,
-            'items': []
-        }
+    def add_layer(self, layer_name, new_layer=None):
+        if new_layer is None:
+            new_layer = {
+                'name': layer_name,
+                'opacity': 1,
+                'items': []
+            }
+        else:
+            new_layer = new_layer.copy()
         self._obj['layers'].append(new_layer)
         return self
 
@@ -239,6 +246,7 @@ class AnnotationBuilder:
         obj = copy.deepcopy(self._obj)
         obj['project_name'] = self.project_name
         obj['slide_id'] = self.slide_id
+        obj['layers'] = sorted(obj['layers'], key=lambda l: l['name'])
         obj['layer_names'] = list(self.layers)
         return obj
 
@@ -412,6 +420,8 @@ class AnnotationBuilder:
         return split
 
     def summary_plot(self, bins=8):
+        if plt is None:
+            return "matplotlib is not available"
         lengths = dict((layer_name, []) for layer_name in self._obj['layer_names'])
         areas = dict((layer_name, []) for layer_name in self._obj['layer_names'])
         for layer in self._obj['layers']:
@@ -650,6 +660,17 @@ class AnnotationBuilder:
             self._obj['layers'][self.get_layer_idx(layer['name'])] = scaled_layer
         print(f"Layers were shifted by {(x, y)}")
         return self
+
+    def set_items_attribute(self, layer_idx, attr, value, overwrite=False):
+        layer_name = layer_idx
+        if isinstance(layer_idx, str):
+            layer_idx = self.get_layer_idx(layer_idx)
+        layer = self._obj['layers'][layer_idx]
+        if attr in layer['items'][0] and not overwrite:
+            raise ValueError("Property is already defined on items")
+        for item in layer['items']:
+            item[attr] = value
+        print(f"Added attribute '{attr}' with value: {value} to layer {layer_name}")
 
 
 def pairwise(iterable):

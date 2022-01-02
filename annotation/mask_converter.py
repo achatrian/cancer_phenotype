@@ -4,6 +4,7 @@ Supports:
 AIDA format
 """
 
+
 import copy
 import numpy as np
 from scipy.stats import mode
@@ -11,6 +12,14 @@ from scipy.ndimage import morphology
 import skimage.morphology
 import cv2
 from base.utils import utils, debug
+
+
+def findContours(mask):
+    if int(cv2.__version__.split('.')[0]) == 3:
+        _, contours, h = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE) # cv2.CHAIN_APPROX_TC89_KCOS)
+    else:
+        contours, h = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE) # cv2.CHAIN_APPROX_TC89_KCOS)
+    return contours, h
 
 
 class MaskConverter:
@@ -32,7 +41,7 @@ class MaskConverter:
                 'background': 0
             }
         self.label_interval_map = label_interval_map or {
-            'epithelium': (71, 225),
+            'epithelium': (70, 225),
             'lumen': (225, 255),
             'background': (0, 70)
         }
@@ -80,10 +89,7 @@ class MaskConverter:
             else:
                 value_binary_mask = value_binary_mask[..., 0]  # 1 channel mask for contour finding
 
-            if int(cv2.__version__.split('.')[0]) == 3:
-                _, value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
-            else:
-                value_contours, h = cv2.findContours(value_binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+            value_contours, h = findContours(value_binary_mask)
             value = self.label_value_map[label][1] if isinstance(self.label_value_map[label], (tuple, list)) \
                 else self.label_value_map[label]
             value_labels = [value] * len(value_contours)

@@ -14,11 +14,20 @@ import tqdm
 import numpy as np
 import cv2
 from skimage.morphology import remove_small_objects, remove_small_holes
-from .base_wsi_reader import TiffReader as TReader, IsyntaxReader as IReader
+from .base_wsi_reader import TiffReader as TReader, IsyntaxReader as IReader, OpenSlideReader as OReader
 from base.utils import debug
 
 
 class AdvancedReader:
+
+    def find_best_level(self, target_mpp):
+        best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - target_mpp))
+        best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - target_mpp))
+        assert best_level_x == best_level_y, "This should be the same, unless pixel has different side lengths"
+        read_level = int(best_level_x)  # from np.int64
+        read_mpp = float(self.mpp_x) * self.level_downsamples[read_level]
+        return read_level, read_mpp
+
     def __init__(self, file_name='', opt=None, set_mpp=None):
         r"""
         :param file_name: path to image file
@@ -46,20 +55,8 @@ class AdvancedReader:
         if not self.no_resolution and hasattr(self.opt, 'qc_mpp') and hasattr(self.opt, 'mpp'):
             if self.opt.qc_mpp < self.opt.mpp:
                 raise ValueError(f"Quality control must be done at an equal or greater MPP resolution ({self.opt.qc_mpp} < {self.opt.mpp})")
-            best_level_x = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.mpp))
-            best_level_y = np.argmin(np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.mpp))
-            assert best_level_x == best_level_y, "This should be the same, unless pixel has different side lengths"
-            self.read_level = int(best_level_x)  # from np.int64
-            self.read_mpp = float(self.mpp_x) * self.level_downsamples[self.read_level]
-            # same for quality_control read level
-            best_level_qc_x = np.argmin(
-                np.absolute(np.array(self.level_downsamples) * self.mpp_x - self.opt.qc_mpp)
-            )
-            best_level_qc_y = np.argmin(
-                np.absolute(np.array(self.level_downsamples) * self.mpp_y - self.opt.qc_mpp))
-            assert best_level_qc_x == best_level_qc_y, "This should be the same, unless pixel has different side lengths"
-            self.qc_read_level = int(best_level_qc_x)
-            self.qc_mpp = float(self.mpp_x) * self.level_downsamples[self.qc_read_level]
+            self.read_level, self.read_mpp = self.find_best_level(self.opt.mpp)
+            self.qc_read_level, self.qc_mpp = self.find_best_level(self.opt.qc_mpp)
         else:
             warnings.warn("No mpp or qc_mpp options - cannot perform quality control")
             self.find_tissue_locations = lambda *args: print("No mpp or qc_mpp options - cannot perform quality control")
@@ -82,9 +79,8 @@ class AdvancedReader:
         except FileNotFoundError:
             print("Finding tissue tiles ...")
             tissue_locations = []
-            qc_downsample = int(self.level_downsamples[self.qc_read_level])
-            self.stride = self.opt.patch_size * qc_downsample  # size of read tiles at level 0
-            qc_sizes = (self.opt.patch_size,) * 2  # size of read tiles at level qc_read_level
+            self.stride = round(self.opt.patch_size * self.opt.mpp / (self.mpp_x * self.level_downsamples[self.read_level]))
+            qc_sizes = (round(self.opt.patch_size * self.opt.mpp / (self.mpp_x * self.level_downsamples[self.qc_read_level])),) * 2  # size of read tiles at level qc_read_level
             xs = list(range(0, self.level_dimensions[0][0], self.stride))[:-1]  # dimensions = (width, height)
             ys = list(range(0, self.level_dimensions[0][1], self.stride))[:-1]
             self.tissue_threshold = tissue_threshold
@@ -269,15 +265,26 @@ class WSIReader(AdvancedReader, TReader):
         super().__init__(file_name, opt, set_mpp)
 
 
+class OpenSlideReader(AdvancedReader, OReader):
+
+    def __init__(self, file_name='', opt=None, set_mpp=None):
+        super().__init__(file_name, opt, set_mpp)
+
+
 class IsyntaxReader(AdvancedReader, IReader):
 
     def __init__(self, file_name='', opt=None, set_mpp=None):
         super().__init__(file_name, opt, set_mpp)
 
 
-def make_wsi_reader(file_name='', opt=None, set_mpp=None):
+def make_wsi_reader(file_name='', opt=None, set_mpp=None, openslide=False):
     if Path(file_name).suffix == '.isyntax':
         return IsyntaxReader(file_name, opt, set_mpp)
+    elif Path(file_name).suffix == '.dzi':
+        from dzi_io import DZIIO
+        return DZIIO(file_name)  # opt does nothing here
+    elif openslide:
+        return OpenSlideReader(file_name, opt, set_mpp)
     else:
         return WSIReader(file_name, opt, set_mpp)
 

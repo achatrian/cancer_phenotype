@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 from sklearn.feature_selection import SelectPercentile
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 import h5py
 import umap
@@ -30,6 +31,8 @@ from quant.utils import read_parameter_values
 from quant.viz import get_cluster_examples, make_cluster_grids
 import logging  # disable annoying font messages
 
+
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 logging.getLogger('matplotlib.font_manager').disabled = True
 
@@ -94,7 +97,7 @@ class MCLExperiment(BaseExperiment):
     def modify_commandline_options(cls, parser):
         parser = super().modify_commandline_options(parser)
         parser.add_argument('--segmentation_experiment', type=str, required=True)
-        parser.add_argument('--features_filename', type=str, default='filtered.h5',
+        parser.add_argument('--features_filename', type=str, default='compressed.h5',
                             help="Basename of files storing features")
         parser.add_argument('--outlier_removal', action='store_true')
         parser.add_argument('--isolation_contamination', default='auto',
@@ -138,6 +141,7 @@ class MCLExperiment(BaseExperiment):
                 feature_frames.append(feature_frame)
             print(f"Features for {len(unreadable_slides)} slides could not be read:\n{unreadable_slides}")
             features = pd.concat(feature_frames)
+            features = features.replace([-np.inf, np.inf], np.nan).fillna(0) # .clip(lower=-1e6, upper=1e6)
             features.to_hdf(features_file.parent/f'single_key_{self.args.features_filename[:-3]}.h5', 'features')
         print(f"Features were read (size: {bytes2human(features.memory_usage().sum())})")
         print(f"Data shape: {features.shape}")
@@ -185,8 +189,11 @@ class MCLExperiment(BaseExperiment):
         self.features = features
         # read distance histograms
         distances_dir = self.args.data_dir / 'data' / 'features' / self.args.segmentation_experiment / 'relational'
-        with open(distances_dir/'distance_distributions.json', 'r') as distributions_file:
-            self.distributions = pd.read_json(distributions_file)
+        try:
+            with open(distances_dir/'distance_distributions.json', 'r') as distributions_file:
+                self.distributions = pd.read_json(distributions_file)
+        except FileNotFoundError:
+            raise FileNotFoundError("Run quant.cluster.get_spatial_statistics.py on dataset")
         self.distributions.index.rename('slide_id', inplace=True)
         self.distributions.drop(
             set(self.distributions.index.unique(level='slide_id')) - set(self.features.index.unique(level='slide_id')),
@@ -317,7 +324,7 @@ class MCLExperiment(BaseExperiment):
             np.save(save_dir / 'som_cluster_membership.npy', som_cluster_membership)
         nearest_neighbours = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(self.som.codebook.matrix)
         distance, indices = nearest_neighbours.kneighbors(self.features)  # find nearest SOM codebook for each data-point
-        distance = distance.ravel()
+        # distance = distance.ravel()
         indices = indices.ravel()
         # assign each point to the markov cluster of its nearest codebook
         cluster_assignment = pd.Series(data=[som_cluster_membership[idx] for idx in indices], index=self.features.index)
@@ -381,7 +388,10 @@ class MCLExperiment(BaseExperiment):
         return histograms
 
     def make_prototype_features(self, cluster_assignment):
-        r"""Get representative features for every cluster"""
+        r"""
+        Get representative features for every cluster
+        Columns for median features have name '[feature number, cluster number]'
+        """
         cluster_assignment.name = 'cluster'
         clustered_features = pd.concat((self.features, cluster_assignment), axis=1)
         clustered_features.set_index('cluster', append=True, inplace=True)
@@ -392,65 +402,112 @@ class MCLExperiment(BaseExperiment):
         median_features.sort_index(inplace=True)
         for slide_id, cluster in pd.MultiIndex.from_product((median_features.index.levels[0], clusters)):
             if (slide_id, cluster) not in median_features.index:
-                median_features.append(pd.DataFrame(data=[[0]*20], index=[np.array([slide_id]), np.array([cluster])]),
+                median_features = median_features.append(pd.DataFrame(data=[[0]*20], index=[np.array([slide_id]), np.array([cluster])]),
                                        ignore_index=False)
         median_features.sort_index(inplace=True)
-        median_features = median_features.unstack(level='cluster')
+        median_features = median_features.unstack(level='cluster')  # N_slides x (N_clusters . 20)
         return median_features
 
     def assess_gleason_predictiveness(self, slides_histograms, cluster_assignment, save_dir):
         tqdm.write("Assessing correlation between gleason score and clusters ...")
         # read gleason file
-        gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])
+        try:
+            gleason_table = pd.read_csv(self.args.gleason_file, delimiter='\t', skiprows=lambda x: x in [1, 2])  # TCGA
+            label_set = ('bcr_patient_barcode', 'gleason_pattern_primary', 'gleason_pattern_secondary', 'gleason_score')
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            gleason_table = pd.read_excel(self.args.gleason_file)  # ProMPT
+            label_set = ('SpecimenIdentifier', 'PrimaryGleason', 'SecondaryGleason', 'TotalGleason')
+        patient_label, primary_label, secondary_label, score_label = label_set
         # construct labels for the histogram data-points
         labels = []
         for slide_id, row in slides_histograms.iterrows():
-            subtable = gleason_table[gleason_table['bcr_patient_barcode'].str.startswith(slide_id[:12])]
-            assert (len(subtable) == 1)
-            if subtable['gleason_pattern_primary'].iloc[0] + subtable['gleason_pattern_secondary'].iloc[0] == 7:
-                labels.append('7')
-            # if subtable['gleason_pattern_primary'].iloc[0] == 3 and subtable['gleason_pattern_secondary'].iloc[0] == 4:
-            #     labels.append('3+4')
-            # elif subtable['gleason_pattern_primary'].iloc[0] == 4 and subtable['gleason_pattern_secondary'].iloc[
-            #     0] == 3:
-            #     labels.append('4+3')
-            elif subtable['gleason_score'].iloc[0] == 6:
+            subtable = gleason_table[gleason_table[patient_label].astype(str).str.startswith(slide_id[:12])]
+            if subtable.empty:
+                subtable = gleason_table[gleason_table[patient_label].astype(str).str.startswith(slide_id[:len(slide_id.split('_')[0])])]
+            assert not subtable.empty, "slide id must be present in gleason file"
+            # if subtable[score_label].iloc[0] == 7:
+            #     labels.append('7')
+            if subtable[primary_label].iloc[0] == 3 and subtable[secondary_label].iloc[0] == 4:
+                labels.append('3+4')
+            elif subtable[primary_label].iloc[0] == 4 and subtable[secondary_label].iloc[0] == 3:
+                labels.append('4+3')
+            elif subtable[score_label].iloc[0] == 6:
                 labels.append('low')
             else:
                 labels.append('high')
         prototype_features = self.make_prototype_features(cluster_assignment)
-        slide_features = pd.concat((slides_histograms, prototype_features, self.distributions), axis=1)  # TODO test
+        slides_histograms.columns = pd.Index([f'h{i}' for i in range(len(slides_histograms.columns))])
+        slide_features = pd.concat((slides_histograms, prototype_features, self.distributions), axis=1)
+        slide_features = pd.DataFrame(StandardScaler().fit_transform(slide_features),
+                                      index=slide_features.index, columns=slide_features.columns)  # TODO test
+        slide_features.columns = [str(c) for c in slide_features.columns]  # for reading in older versions of pandas
+        with open(save_dir/'slides_features.json', 'w') as slides_features_file:
+            slide_features.to_json(slides_features_file, orient='split')
+        assert sum(slide_features.columns.duplicated()) == 0, "No duplicated feature names allowed"
         # train to predict gleason from clusters
-        # labels_rfc = [{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels]
-        labels_rfc = np.array([{'low': 0, '7': 1, 'high': 2}[label] for label in labels])
+        labels_rfc = np.array([{'low': 0, '3+4': 1, '4+3': 2, 'high': 3}[label] for label in labels])
+        # labels_rfc = np.array([{'low': 0, '7': 1, 'high': 2}[label] for label in labels])
         # save dim reduction of histograms:
-        dim_reduced = PCA(n_components=2).fit_transform(slides_histograms)
+        dim_reduced = PCA(n_components=2, whiten=True).fit_transform(slides_histograms)
         figure = plt.figure()
-        plt.scatter(dim_reduced[labels_rfc == 0][:, 0], dim_reduced[labels_rfc == 0][:, 1], c='r')
-        plt.scatter(dim_reduced[labels_rfc == 1][:, 0], dim_reduced[labels_rfc == 1][:, 1], c='b')
-        plt.scatter(dim_reduced[labels_rfc == 2][:, 0], dim_reduced[labels_rfc == 2][:, 1], c='g')
+        r = plt.scatter(dim_reduced[labels_rfc == 0][:, 0], dim_reduced[labels_rfc == 0][:, 1], c='r', alpha=0.5)
+        b = plt.scatter(dim_reduced[labels_rfc == 1][:, 0], dim_reduced[labels_rfc == 1][:, 1], c='b', alpha=0.5)
+        g = plt.scatter(dim_reduced[labels_rfc == 2][:, 0], dim_reduced[labels_rfc == 2][:, 1], c='g', alpha=0.5)
+        y = plt.scatter(dim_reduced[labels_rfc == 3][:, 0], dim_reduced[labels_rfc == 3][:, 1], c='y', alpha=0.5)
         plt.title('PCA of histograms')
-        plt.xlabel('cluster #')
-        plt.ylabel('num glands')
+        plt.legend((r, b, g, y), ('6', '3+4', '4+3', '>=8'))
         plt.close()
         figure.savefig(save_dir/'histograms_pca.png')
+        tsned = TSNE(n_components=2).fit_transform(slides_histograms)
+        figure = plt.figure()
+        r = plt.scatter(tsned[labels_rfc == 0][:, 0], tsned[labels_rfc == 0][:, 1], c='r', alpha=0.5)
+        b = plt.scatter(tsned[labels_rfc == 1][:, 0], tsned[labels_rfc == 1][:, 1], c='b', alpha=0.5)
+        g = plt.scatter(tsned[labels_rfc == 2][:, 0], tsned[labels_rfc == 2][:, 1], c='g', alpha=0.5)
+        y = plt.scatter(tsned[labels_rfc == 3][:, 0], tsned[labels_rfc == 3][:, 1], c='y', alpha=0.5)
+        plt.title('TSNE of histograms')
+        plt.legend((r, b, g, y), ('6', '3+4', '4+3', '>=8'))
+        plt.close()
+        figure.savefig(save_dir/'histograms_tsne.png')
+        dim_reduced = PCA(n_components=2, whiten=True).fit_transform(slide_features)
+        figure = plt.figure()
+        r = plt.scatter(dim_reduced[labels_rfc == 0][:, 0], dim_reduced[labels_rfc == 0][:, 1], c='r', alpha=0.5)
+        b = plt.scatter(dim_reduced[labels_rfc == 1][:, 0], dim_reduced[labels_rfc == 1][:, 1], c='b', alpha=0.5)
+        g = plt.scatter(dim_reduced[labels_rfc == 2][:, 0], dim_reduced[labels_rfc == 2][:, 1], c='g', alpha=0.5)
+        y = plt.scatter(dim_reduced[labels_rfc == 3][:, 0], dim_reduced[labels_rfc == 3][:, 1], c='y', alpha=0.5)
+        plt.title('PCA of features')
+        plt.legend((r, b, g, y), ('6', '3+4', '4+3', '>=8'))
+        plt.close()
+        figure.savefig(save_dir/'features_pca.png')
+        tsned = TSNE(n_components=2).fit_transform(slide_features)
+        figure = plt.figure()
+        r = plt.scatter(tsned[labels_rfc == 0][:, 0], tsned[labels_rfc == 0][:, 1], c='r', alpha=0.5)
+        b = plt.scatter(tsned[labels_rfc == 1][:, 0], tsned[labels_rfc == 1][:, 1], c='b', alpha=0.5)
+        g = plt.scatter(tsned[labels_rfc == 2][:, 0], tsned[labels_rfc == 2][:, 1], c='g', alpha=0.5)
+        y = plt.scatter(tsned[labels_rfc == 3][:, 0], tsned[labels_rfc == 3][:, 1], c='y', alpha=0.5)
+        plt.title('TSNE of features')
+        plt.legend((r, b, g, y), ('6', '3+4', '4+3', '>=8'))
+        plt.close()
+        figure.savefig(save_dir/'features_tsne.png')
         scores, rfc_importances, confusion_matrices = [], [], []
         try:
-            average_score = np.load(save_dir/'average_score.npy')
-            average_confusion_matrix = np.load(save_dir/'average_confusion_matrix.npy')
+            scores = np.load(save_dir/'scores.npy')
+            confusion_matrices = np.load(save_dir/'confusion_matrices.npy')
             feature_importances = np.load(save_dir/'feature_importances.npy')
             comparison_labels = np.load(save_dir/'comparison_labels.npy')
             with open(save_dir/'misclassified.json', 'r') as misclassified_file:
                 misclassified = json.load(misclassified_file)
+            with open(save_dir/'best_model.joblib', 'rb') as model_file:
+                rfc = jl.load(model_file)
+            raise FileNotFoundError  # TODO run everything again with 3+4 / 4+3 distinction and then delete this line
         except FileNotFoundError:
             # default is -1 for predictions and -2 for ground truth, so train entries in each column arent't counted as equal
             predictions, ground_truth = np.ones((len(slides_histograms), 100)) * -1, np.ones((len(slides_histograms), 100)) * -2
+            scores, models, confusion_matrices = [], [], []
             for i in range(100):
                 x_train, x_test, y_train, y_test, idx_train, idx_test = train_test_split(slide_features, labels_rfc,
                                                                                          np.arange(len(slide_features)),
                                                                                          train_size=self.args.train_fraction)
                 rfc = XGBClassifier(n_estimators=1000, max_depth=40, subsample=0.9)
-                print(x_train, y_train)
                 rfc.fit(x_train, y_train)
                 y_pred = rfc.predict(x_test)
                 predictions[idx_test, i] = np.array(y_pred)
@@ -458,30 +515,41 @@ class MCLExperiment(BaseExperiment):
                 confusion_matrices.append(confusion_matrix(y_test, y_pred))  # compute the confusion matrix
                 scores.append(rfc.score(x_test, y_test))
                 rfc_importances.append(rfc.feature_importances_)
-            average_score = np.mean(scores)
-            average_confusion_matrix = np.mean(np.stack(confusion_matrices, axis=0), axis=0)
-            print(f"Gleason classification score is {average_score}")
+                models.append(rfc)
+            scores = np.array(scores)
+            best_model = models[int(np.argmax(scores))]
+            confusion_matrices = np.stack(confusion_matrices, axis=0)
+            print(f"Gleason classification score is mean: {np.mean(scores)}, std: {np.std(scores)}, min: {np.min(scores)}, max: {np.max(scores)}")
             print(f"Confusion matrix is:")
-            print(average_confusion_matrix.tolist())  # TODO change to prettyprint once scripts have run
+            print(np.mean(confusion_matrices, axis=0).tolist())  # TODO change to prettyprint once scripts have run
             feature_importances = np.array(list(float(f) for f in np.array(rfc_importances).mean(axis=0)))
+            figure = plt.figure()
+            plt.bar(np.arange(len(feature_importances)), feature_importances)
+            plt.title('feature_importances')
+            plt.close()
+            figure.savefig(save_dir/'feature_importances.png')
             prediction_rates = ((predictions == ground_truth).sum(axis=-1) /
                       np.array([pred[pred != -1].sum() for pred in predictions]))
             misclassified = [slide_id for slide_id, accuracy in zip(tuple(slides_histograms.index), prediction_rates) if accuracy > 0.5]
             # cluster in K means space to assess feature space separation
-            comparison_labels, n = set(), 3
+            comparison_labels, n = set(), len(set(labels_rfc))
             selected = SelectPercentile(
                 lambda X, y: XGBClassifier(n_estimators=100).fit(X, y).feature_importances_,
                 percentile=5*n).fit_transform(slides_histograms, labels_rfc)
-            comparison_labels = KMeans(n_clusters=3).fit_predict(selected)
-            assert set(labels_rfc) == set(comparison_labels)
-            np.save(save_dir/'average_score.npy', average_score)
-            np.save(save_dir/'average_confusion_matrix.npy', average_confusion_matrix)
+            comparison_labels = KMeans(n_clusters=n).fit_predict(selected)
+            np.save(save_dir/'scores.npy', scores)
+            np.save(save_dir/'confusion_matrices.npy', confusion_matrices)
             np.save(save_dir/'feature_importances', feature_importances)
             np.save(save_dir/'comparison_labels', comparison_labels)
             np.save(save_dir/'labels_rfc.npy', labels_rfc)
             with open(save_dir/'misclassified.json', 'w') as misclassified_file:
                 json.dump(misclassified, misclassified_file)
-        return average_score, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified
+            with open(save_dir/'slides_features.json', 'w') as slides_features_file:
+                slide_features.to_json(slides_features_file, orient='split')
+            with open(save_dir/'best_model.joblib', 'wb') as model_file:
+                jl.dump(best_model, model_file)
+        return {'mean': np.mean(scores), 'std': np.std(scores), 'min': np.min(scores), 'max': np.max(scores)}, \
+               np.mean(confusion_matrices, axis=0), feature_importances, comparison_labels, labels_rfc, misclassified
 
     def save_cluster_examples(self, cluster_assignment, som_cluster_membership, save_dir):
         # gather examples from each cluster (exclude very small clusters)
@@ -523,15 +591,15 @@ class MCLExperiment(BaseExperiment):
         self.visualize_markov_clustering(self.run_results_dir, self.run_parameters)
         # computer cluster membership histograms for each slide
         slide_histograms = self.compute_per_slide_cluster_histograms(cluster_assignment, num_clusters, self.run_results_dir)
-        average_score, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
+        scores, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
             self.assess_gleason_predictiveness(slide_histograms, cluster_assignment, self.run_results_dir)
         # gather examples from each cluster
         results.update({
-            'rf_average_gleason_prediction_score': float(average_score),
+            'rf_average_gleason_prediction_score': float(scores['mean']),
+            'rf_gleason_prediction_score': {k: float(v) for k, v in scores.items()},
             'feature_importances': feature_importances.tolist(),
             'adjusted_mutual_information_score': float(adjusted_mutual_info_score(labels_rfc, comparison_labels)),
             'adjusted_rand_score': float(adjusted_rand_score(labels_rfc, comparison_labels)),
-            'average_confusion_matrix': average_confusion_matrix.tolist(),
             'misclassified_slides': list(misclassified)
         })
         with open(self.run_results_dir / 'evaluation_results.json', 'w') as evaluation_results_file:
@@ -617,11 +685,12 @@ class MCLExperiment(BaseExperiment):
             'silhouette_score': silhouette_score(self.features, cluster_assignment)
         }
         slide_histograms = self.compute_per_slide_cluster_histograms(cluster_assignment, num_clusters, dataset_savedir)
-        average_score, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
+        scores, average_confusion_matrix, feature_importances, comparison_labels, labels_rfc, misclassified = \
             self.assess_gleason_predictiveness(slide_histograms, cluster_assignment, dataset_savedir)
         # gather examples from each cluster
         results.update({
-            'rf_average_gleason_prediction_score': float(average_score),
+            'rf_average_gleason_prediction_score': float(scores['mean']),
+            'rf_gleason_prediction_score': {k: float(v) for k, v in scores.items()},
             'feature_importances': feature_importances.tolist(),
             'adjusted_mutual_information_score': float(adjusted_mutual_info_score(labels_rfc, comparison_labels)),
             'adjusted_rand_score': float(adjusted_rand_score(labels_rfc, comparison_labels)),

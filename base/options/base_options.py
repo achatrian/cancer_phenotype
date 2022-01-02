@@ -20,20 +20,32 @@ def remove_args(parser, args):
                 break
 
 
+# def make_conflict_proof(option_setter):
+#     r"""Option setter can add arguments to parser with existing actions with same argument string (BREAKS for python <=3.6)"""
+#     def conflict_proof_option_setter(parser, is_train):
+#         parser_ = copy.deepcopy(parser)  # FIXME fails for python < 3.7
+#         error = True
+#         conflicting_arguments = []
+#         while error:
+#             try:
+#                 remove_args(parser_, conflicting_arguments)
+#                 parser_ = option_setter(parser_, is_train)
+#                 error = False
+#             except argparse.ArgumentError as err:
+#                 conflict_arg = re.search(r'argument (--\w*)', str(err)).groups()[0]
+#                 conflicting_arguments.append(conflict_arg)
+#         remove_args(parser, conflicting_arguments)
+#         return option_setter(parser, is_train)
+#     return conflict_proof_option_setter
+
+
 def make_conflict_proof(option_setter):
-    r"""Option setter can add arguments to parser with existing actions with same argument string"""
+    r"""Option setter can add arguments to parser with existing actions with same argument string (compatible with python <=3.6)"""
     def conflict_proof_option_setter(parser, is_train):
-        parser_ = copy.deepcopy(parser)
-        error = True
-        conflicting_arguments = []
-        while error:
-            try:
-                remove_args(parser_, conflicting_arguments)
-                parser_ = option_setter(parser_, is_train)
-                error = False
-            except argparse.ArgumentError as err:
-                conflict_arg = re.search(r'argument (--\w*)', str(err)).groups()[0]
-                conflicting_arguments.append(conflict_arg)
+        option_strings = set(vars(parser)['_option_string_actions'].keys())
+        temp_parser = option_setter(argparse.ArgumentParser(), is_train)
+        setter_option_strings = set(vars(temp_parser)['_option_string_actions'].keys())
+        conflicting_arguments = list(set.intersection(option_strings, setter_option_strings))
         remove_args(parser, conflicting_arguments)
         return option_setter(parser, is_train)
     return conflict_proof_option_setter
@@ -145,9 +157,9 @@ class BaseOptions:
         str_ids = opt.gpu_ids.split(',')
         opt.gpu_ids = []
         for str_id in str_ids:
-            id = int(str_id)
-            if id >= 0:
-                opt.gpu_ids.append(id)
+            id_ = int(str_id)
+            if id_ >= 0:
+                opt.gpu_ids.append(id_)
         if len(opt.gpu_ids) > 0 and opt.set_visible_devices:
             torch.cuda.set_device(opt.gpu_ids[0])
         if opt.loss_weight:

@@ -1,5 +1,5 @@
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from itertools import chain
 import torch
 from base.utils import utils
@@ -201,8 +201,8 @@ class BaseModel:
     def update_learning_rate(self, per_batch=False):
         for scheduler in self.schedulers:
             if per_batch and hasattr(scheduler, 'batch_step'):
-                scheduler.batch_step()
-            elif hasattr(scheduler, 'step'):
+                scheduler.batch_step()  # for schedulers such as cyclic that require batch updates
+            elif not per_batch and hasattr(scheduler, 'step'):  # TODO test 'not per batch' leads to anted behaviour
                 scheduler.step()
         if not per_batch:
             lr = self.optimizers[0].param_groups[0]['lr']
@@ -298,7 +298,7 @@ class BaseModel:
                 net.load_state_dict(state_dict)
 
     # print network information
-    def print_networks(self, verbose):
+    def print_networks(self, verbose, _recur=True):
         print('---------- Networks initialized -------------')
         for name in self.module_names:
             if isinstance(name, str):
@@ -311,6 +311,13 @@ class BaseModel:
                     # print(net)
                 print(f'[Network {name}] Total number of parameters : {num_params/1e6:.3f} M')
         print('-----------------------------------------------')
+        if _recur:  # TODO test
+            summary_path = os.path.join(self.opt.checkpoints_dir, self.opt.experiment_name, 'networks_summary.txt')
+            if not os.path.exists(summary_path):
+                with open(summary_path, 'w') as summary_file:
+                    with redirect_stdout(summary_file):
+                        self.print_networks(True, _recur=False)
+                    pass
 
     # set requies_grad=False to avoid computation
     def set_requires_grad(self, nets, requires_grad=False, exclude=()):

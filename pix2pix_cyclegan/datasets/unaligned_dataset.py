@@ -92,9 +92,9 @@ class UnalignedDataset(BaseDataset):
                                    iaa.FrequencyNoiseAlpha(
                                        exponent=(-4, 0),
                                        first=iaa.Multiply((0.5, 1.5), per_channel=True),
-                                       second=iaa.ContrastNormalization((0.5, 2.0))
+                                       second=iaa.LinearContrast((0.5, 2.0))
                                    )])),
-                               iaa.WithChannels([0, 1, 2], iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5)),
+                               iaa.WithChannels([0, 1, 2], iaa.LinearContrast((0.5, 2.0), per_channel=0.5)),
                                # improve or worsen the contrast
                                iaa.WithChannels([0, 1, 2], iaa.Grayscale(alpha=(0.0, 1.0))),
                                # move pixels locally around (with random strengths)

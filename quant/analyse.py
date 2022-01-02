@@ -35,7 +35,7 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
     logger = logging.getLogger(__name__)
     opt = get_reader_options(include_path=False)
     slide_id = annotation_path.with_suffix('').name
-    if (feature_dir/(slide_id + '.json')).exists():
+    if (feature_dir/(slide_id + '.json')).exists() and not args.overwrite:
         return 0.0
     logger.info(f"Reading contours for {slide_id} ...")
     contour_struct = read_annotations(args.data_dir, slide_ids=(slide_id,), experiment_name=args.experiment_name)
@@ -52,22 +52,33 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
     reader = make_wsi_reader(slide_path, opt)
     start_processing_time = time.time()
     with Timer('stain_normalization', "Stain normalization took {:0.4f} seconds"):
+        stain_references_dir = Path(args.data_dir, 'data', f'{args.outer_label}:stain_references')
+        experiment = args.experiment_name
+        if args.experiment_name.endswith('nuclei'):
+            experiment = experiment[:-7]
+        elif args.experiment_name.endswith('nuclei_circles'):
+            experiment = experiment[:-15]
         try:
             with open(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
                            'normalizers', f'{args.reference_slide}.pkl'), 'rb') as normalizer_file:
                 macenko_normalizer = pkl.load(normalizer_file)
         except FileNotFoundError:
             macenko_normalizer = StainNormalizer(method='macenko')
-            reference_image = imread(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                          'references', f'{args.reference_slide}.png'))
+
+            try:
+                reference_image = imread(stain_references_dir/'references'/f'{args.reference_slide}.png')  # .readlink() for python >=3.9
+            except FileNotFoundError:
+                reference_image = imread(stain_references_dir/experiment/'references'/f'{args.reference_slide}.png')
             macenko_normalizer.fit(reference_image)
             normalizers_path = Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
                                     'normalizers')
             normalizers_path.mkdir(exist_ok=True, parents=True)
             with open(normalizers_path/f'{args.reference_slide}.pkl', 'wb') as normalizer_file:
                 pkl.dump(macenko_normalizer, normalizer_file)
-        slide_stain_matrix = np.load(Path(args.data_dir, 'data', f'{args.outer_label}:stain_references',
-                                          f'{args.reference_slide}.npy'))
+        try:
+            slide_stain_matrix = np.load(stain_references_dir/f'{args.reference_slide}.npy')
+        except FileNotFoundError:
+            slide_stain_matrix = np.load(stain_references_dir/experiment/f'{args.reference_slide}.npy')
     masker = InstanceMasker(contour_struct[slide_id], args.outer_label, label_values)
     processor = ContourProcessor(masker, reader,
                                  features=[
@@ -81,6 +92,7 @@ def extract_features(annotation_path, slide_path, feature_dir, label_values, arg
                                      gray_cooccurrence,
                                      #orb_descriptor
                                  ],
+                                 mpp=args.mpp,
                                  stain_normalizer=macenko_normalizer,
                                  stain_matrix=slide_stain_matrix)
     try:
@@ -109,8 +121,8 @@ def quantify(args):
     print(f"Quantifying annotated images data in {str(args.data_dir)} using experiment {args.experiment_name} (workers = {args.workers}) ...")
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
-    (args.data_dir/'logs').mkdir(exist_ok=True)
-    fh = logging.FileHandler(args.data_dir/'logs'/f'analyse_quantify_{datetime.now()}.log')
+    (args.data_dir/'data'/'logs').mkdir(exist_ok=True)
+    fh = logging.FileHandler(args.data_dir/'data'/'logs'/f'analyse_quantify_{datetime.now()}.log')
     ch = logging.StreamHandler()  # logging to console for general runtime info
     ch.setLevel(logging.DEBUG)  # if this is set to ERROR, then errors are not printed to log, and vice versa
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -119,6 +131,8 @@ def quantify(args):
     logger.addHandler(ch)
     label_values = {'epithelium': 200, 'lumen': 250, 'nuclei': 50, 'nuclei_circles': 50}
     feature_dir = args.data_dir/'data'/'features'/args.experiment_name
+    if args.experiment_label is not None:
+        feature_dir = feature_dir.with_name(feature_dir.name + '_' + args.experiment_label) # TODO test side effects
     feature_dir.mkdir(exist_ok=True, parents=True)  # for features
     (feature_dir/'data').mkdir(exist_ok=True)  # for other data
     (feature_dir/'relational').mkdir(exist_ok=True)  # for relational data between instances
@@ -126,28 +140,37 @@ def quantify(args):
     annotation_paths = sorted((path for path in (Path(args.data_dir)/'data'/'annotations'/args.experiment_name).iterdir()
                  if (args.overwrite or not (feature_dir/path.name).is_file()) and
                  not path.is_dir() and path.suffix == '.json'), key=lambda path: path.with_suffix('').name)
-    if args.slide_id is not None:  # select subset for debugging
+    if args.debug_slide is not None:  # select subset for debugging
         annotation_paths = [annotation_path for annotation_path in annotation_paths
-                            if annotation_path.with_suffix('').name in args.slide_id]
-    slide_paths_ = list(path for path in Path(args.data_dir).iterdir()
-                       if path.suffix == '.svs' or path.suffix == '.ndpi')
-    slide_paths_ += list(path for path in Path(args.data_dir).glob('*/*.ndpi'))
-    slide_paths_ += list(path for path in Path(args.data_dir).glob('*/*.svs'))
-    slide_paths_ = sorted(slide_paths_, key=lambda path: path.with_suffix('').name)
-    slide_paths = []
+                            if annotation_path.with_suffix('').name in args.debug_slide]
+    image_paths_ = []
+    cases_dir = args.data_dir/'cases'
+    for suffix in args.image_suffix:
+        image_paths_.extend(args.data_dir.glob(f'./*.{suffix}'))
+        image_paths_.extend(cases_dir.glob(f'./*.{suffix}'))
+        if args.recursive_search:
+            image_paths_.extend(args.data_dir.glob(f'*/*.{suffix}'))
+            image_paths_.extend(cases_dir.glob(f'*/*.{suffix}'))
+    if len(image_paths_) == 0:
+        raise ValueError(f"No slides in {args.data_dir}")
+    image_paths_ = sorted(image_paths_, key=lambda path: path.with_suffix('').name)
     # match a slide path to every annotation path. Account for missing annotations by ignoring the corresponding slides
     # assume slides and annotations are in the same order
+    image_paths = []
     i, j = 0, 0
-    while len(slide_paths) != len(annotation_paths):
-        annotation_path, slide_path = annotation_paths[i], slide_paths_[j]
-        if slide_path.with_suffix('').name.startswith(annotation_path.with_suffix('').name):
-            slide_paths.append(slide_path)
-            i += 1
-        j += 1
+    while len(image_paths) != len(annotation_paths):
+        try:
+            annotation_path, slide_path = annotation_paths[i], image_paths_[j]
+            if slide_path.with_suffix('').name.startswith(annotation_path.with_suffix('').name):
+                image_paths.append(slide_path)
+                i += 1
+            j += 1
+        except IndexError:
+            pass
     if args.shuffle_annotations:
-        annotation_paths, slide_paths = shuffle(annotation_paths, slide_paths)
+        annotation_paths, image_paths = shuffle(annotation_paths, image_paths)
     if args.reference_slide is None:
-        args.reference_slide = slide_paths[0].with_suffix('').name
+        args.reference_slide = image_paths[0].with_suffix('').name
     logger.info(f"Using '{args.reference_slide}' as reference slide for stain normalization")
     logger.info(f"Processing {len(annotation_paths)} annotations (overwrite = {args.overwrite}) ...")
     if annotation_paths:
@@ -156,11 +179,11 @@ def quantify(args):
                 processing_times = pool.starmap(
                     extract_features,
                     [(annotation_path, slide_path, feature_dir, label_values, args)
-                     for annotation_path, slide_path in zip(annotation_paths, slide_paths)]
+                     for annotation_path, slide_path in zip(annotation_paths, image_paths)]
                 )
         else:  # run sequentially
             processing_times = []
-            for annotation_path, slide_path in zip(annotation_paths, slide_paths):
+            for annotation_path, slide_path in zip(annotation_paths, image_paths):
                 processing_times.append(extract_features(annotation_path, slide_path, feature_dir, label_values, args))
         logger.info(f"Quantified {len(processing_times)} in {sum(processing_times)/len(processing_times):.2f}s")
     else:
@@ -302,6 +325,7 @@ def add_quantify_args(parser_quantify):
     parser_quantify.add_argument('data_dir', type=Path, help="Directory storing the WSIs + annotations")
     parser_quantify.add_argument('--experiment_name', type=str, required=True,
                                  help="Name of network experiment that produced annotations (annotations are assumed to be stored in subdir with this name)")
+    parser_quantify.add_argument('--mpp', type=float, default=0.25)
     parser_quantify.add_argument('--outer_label', type=str, default='epithelium',
                                  help="Label whose instances are of interest for feature quantification")
     parser_quantify.add_argument('--reference_slide', type=str, default=None)
@@ -310,8 +334,11 @@ def add_quantify_args(parser_quantify):
     parser_quantify.add_argument('--shuffle_annotations', action='store_true',
                                  help="Shuffle processing order. Useful if multiple processing jobs are launched at the same time.")
     parser_quantify.add_argument('--overwrite', action='store_true', help="Whether to overwrite existing feature files")
-    parser_quantify.add_argument('--slide_id', type=str, action='append', help='only process slides with specified ids. Useful for debugging and dividing tasks')
+    parser_quantify.add_argument('--debug_slide', type=str, action='append', help='only process slides with specified ids. Useful for debugging and dividing tasks')
     parser_quantify.add_argument('--max_contours_num', type=int, default=1500, help="Max number of glands in one slide to sample")
+    parser_quantify.add_argument('--experiment_label', type=str, default=None)
+    parser_quantify.add_argument('--image_suffix', type=str, default=['tiff'], action='append', choices=['tiff', 'svs', 'ndpi', 'isyntax'], help="process images with these extension")
+    parser_quantify.add_argument('--recursive_search', action='store_true')
 
 
 def add_compress_args(parser_compress):

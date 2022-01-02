@@ -4,14 +4,14 @@ import warnings
 import json
 import numpy as np
 from base.utils import debug
-from data.contours import contour_to_mask, find_overlap
+from data.contours import contour_to_mask, find_overlap, check_point_overlap
 
 
 class InstanceMasker:
     r"""Use to return multilabel masks for contours."""
 
     def __init__(self, slide_contours: Union[dict, tuple], outer_label: str, label_values: dict,
-                shape=(), contour_to_mask=contour_to_mask):
+                shape=(), contour_to_mask=contour_to_mask, labels_z=('epithelium', 'lumen', 'nuclei', 'nuclei_circles')):
         r"""
         :param slide_contours: dict: layer name -> contours or (contours, labels)
         :param outer_label: contours with this label are assumed to be outermost: masks are built from these contours
@@ -20,6 +20,7 @@ class InstanceMasker:
         :param contour_to_mask:
         """
         self.label_values = label_values
+        self.labels_z = labels_z
         self.outer_label = outer_label
         self.shape = shape
         self.contour_to_mask = partial(contour_to_mask, shape=shape) if shape else contour_to_mask
@@ -30,6 +31,8 @@ class InstanceMasker:
                 self.labels.extend([layer_name] * len(layer_contours))
         else:
             self.contours, self.labels = slide_contours
+        if not self.contours:
+            raise ValueError("Empty contours dataset passed to InstanceMasker")
         # remove contours that are empty or have a single point
         self.checked_contours_indices = tuple(i for i, contour in enumerate(self.contours) if contour.size > 2)
         self.contours = [contour for i, contour, in enumerate(self.contours) if i in self.checked_contours_indices]
@@ -63,6 +66,9 @@ class InstanceMasker:
                       'children_contours': [],
                       'parent_label': self.labels[outer_index],
                       'children_labels': []}
+        # in-paint contours in order according to label, when children have multiple labels
+        label_order = [self.labels_z.index(self.labels[i]) for i in overlap_vect]
+        overlap_vect = [child_index for _, child_index in sorted(zip(label_order, overlap_vect), key=lambda pair: pair[0])]
         for child_index in overlap_vect:
             if not self.labels[child_index] in self.label_values:
                 continue  # skip all contours for whom a paint-in value is unspecified
@@ -70,6 +76,8 @@ class InstanceMasker:
             if h_parent * w_parent > h_child * w_child:  # if parent bigger than child write on previous mask
                 child_contour = (self.contours[child_index]/scaling).astype(np.int32) \
                     if scaling != 1.0 else self.contours[child_index]
+                if not check_point_overlap(parent_contour, child_contour, n_points=3):
+                    continue
                 mask = self.contour_to_mask(child_contour, mask=mask, mask_origin=(x_parent, y_parent),
                                        value=self.label_values[self.labels[child_index]])
                 components['children_contours'].append(self.contours[child_index])

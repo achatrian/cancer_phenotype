@@ -17,9 +17,11 @@ def get_cluster_examples(features, cluster_assignment, image_dir, n_examples=9, 
         clusters = np.unique(cluster_assignment)
     examples = []
     image_dir = Path(image_dir)
-    image_paths = tuple(image_dir.glob('*.ndpi')) + tuple(image_dir.glob('*.svs')) + tuple(image_dir.glob('*.dzi')) \
-                  + tuple(image_dir.glob('*/*.ndpi')) + tuple(image_dir.glob('*/*.svs')) + tuple(
-        image_dir.glob('*/*.dzi'))
+    cases_dir = image_dir/'cases'
+    search_dir = cases_dir if cases_dir.exists() else image_dir
+    image_paths = tuple(search_dir.glob('*.ndpi')) + tuple(search_dir.glob('*.svs')) + tuple(search_dir.glob('*.dzi')) \
+                  + tuple(search_dir.glob('*/*.ndpi')) + tuple(search_dir.glob('*/*.svs')) + tuple(search_dir.glob('*/*.dzi')) \
+                + tuple(search_dir.glob('*.isyntax')) + tuple(search_dir.glob('*/*.isyntax'))
     for i, cluster in enumerate(tqdm(clusters, desc='clusters')):
         x_cluster = features.iloc[(cluster_assignment == cluster).to_numpy().squeeze()]
         examples.append([])
@@ -137,7 +139,7 @@ def get_cluster_examples_per_subset(features, cluster_assignment, image_dir, n_e
     return examples
 
 
-def make_cluster_grids(examples, save_dir, experiment_name, image_size=512):
+def make_cluster_grids(examples, save_dir, experiment_name, image_size=512, details=()):
     r""""""
     save_dir = Path(save_dir, 'clusters_grids')
     save_dir.mkdir(exist_ok=True, parents=True)
@@ -159,10 +161,11 @@ def make_cluster_grids(examples, save_dir, experiment_name, image_size=512):
             cluster_images.append(resized)
         cluster_grid = util.montage(np.array(cluster_images), multichannel=True)
         imageio.imwrite(save_dir / f'cluster{c}.png', cluster_grid)
-    with open(save_dir / 'details.json', 'w') as details_file:
+    with open(save_dir / f'details_{experiment_name}.json', 'w') as details_file:
         json.dump({
             'experiment_name': experiment_name,
-            'type': 'cluster_grid'
+            'type': 'cluster_grid',
+            'details': details
         }, details_file)
     print("Done!")
 

@@ -24,6 +24,7 @@ EPITHELIUM = 200
 LUMEN = 250
 NUCLEI = 50
 
+
 # @memory.cache
 def is_contour(arg):  # specifies contour format
     return isinstance(arg, np.ndarray) and arg.ndim == 3 and arg.shape[2] == 2
@@ -35,12 +36,12 @@ def is_mask(arg, num_classes=0):  # specifies mask format
 
 
 # @memory.cache
-def is_image(arg):  # specifies images format (RGB mapped to [-1, 1])
+def is_image(arg):  # specifies images format
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 3 and arg.shape[2] == 3
 
 
 # @memory.cache
-def is_gray_image(arg):  # specifies gray images format (grayscale mapped to [-1, 1])
+def is_gray_image(arg):  # specifies gray images format
     return isinstance(arg, np.ndarray) and arg.max() <= 255 and arg.min() >= 0 and arg.ndim == 2
 
 
@@ -109,26 +110,30 @@ class MakeFeature:
         'outer_solidity',
         'outer_extent',
         'outer_inertia_eigenval0',
-        'outer_inertia_eigenval1'
+        'outer_inertia_eigenval1',
+        'outer_area'
     ] + list(f'resized_outer_hu_moment{i}' for i in range(7)) + [
         'resized_outer_eccentricity',
         'resized_outer_solidity',
         'resized_outer_extent',
         'resized_outer_inertia_eigenval0',
-        'resized_outer_inertia_eigenval1'
+        'resized_outer_inertia_eigenval1',
+        'resized_outer_area'
     ] + list(f'inner_hu_moment{i}' for i in range(7)) + list(f'inner_weighted_hu_moment{i}' for i in range(7)) + [
         'inner_eccentricity',
         'inner_solidity',
         'inner_extent',
         'inner_inertia_eigenval0',
-        'inner_inertia_eigenval1'
+        'inner_inertia_eigenval1',
+        'inner_area'
     ] + list(f'resized_inner_hu_moment{i}' for i in range(7)) + [
         'resized_inner_eccentricity',
         'resized_inner_solidity',
         'resized_inner_extent',
         'resized_inner_inertia_eigenval0',
-        'resized_inner_inertia_eigenval1'
-    ])
+        'resized_inner_inertia_eigenval1',
+        'resized_inner_area'
+    ] + ['num_inner_regions'])
 def region_properties(mask, image, map_values=((NUCLEI, EPITHELIUM),), normalized_max_side=2048):
     r"""Region props, returns 2 regions max (outer and inner), the biggest by area
     """
@@ -150,9 +155,10 @@ def region_properties(mask, image, map_values=((NUCLEI, EPITHELIUM),), normalize
     else:
         outer_rp = all_rp.pop()
         inner_rp = None
+    num_inner_regions = len(all_rp)
     outer_features = tuple(outer_rp.moments_hu) + tuple(outer_rp.weighted_moments_hu) + \
                      (outer_rp.eccentricity, outer_rp.solidity, outer_rp.extent) + \
-                     tuple(outer_rp.inertia_tensor_eigvals)
+                     tuple(outer_rp.inertia_tensor_eigvals) + (outer_rp.area,)
     # calculate features on normalized segmentation mask for epithelium
     h, w = outer_rp.filled_image.shape[:2]
     resize_factor = normalized_max_side/w if w > h else normalized_max_side/h
@@ -162,11 +168,11 @@ def region_properties(mask, image, map_values=((NUCLEI, EPITHELIUM),), normalize
     r_outer_rp = regionprops((resized_mask > 0).astype(np.uint8))[0]
     outer_features += tuple(r_outer_rp.moments_hu) + \
                      (r_outer_rp.eccentricity, r_outer_rp.solidity, r_outer_rp.extent) + \
-                     tuple(r_outer_rp.inertia_tensor_eigvals)
+                     tuple(r_outer_rp.inertia_tensor_eigvals) + (r_outer_rp.area,)
     if inner_rp:
         inner_features = tuple(inner_rp.moments_hu) + tuple(inner_rp.weighted_moments_hu) + \
                       (inner_rp.eccentricity, inner_rp.solidity, inner_rp.extent) + \
-                      tuple(inner_rp.inertia_tensor_eigvals)
+                      tuple(inner_rp.inertia_tensor_eigvals) + (inner_rp.area,)
         # calculate features on normalized segmentation mask for largest lumen within epithelium
         h, w = inner_rp.filled_image.shape[:2]
         resize_factor = normalized_max_side / w if w > h else normalized_max_side / h
@@ -176,10 +182,10 @@ def region_properties(mask, image, map_values=((NUCLEI, EPITHELIUM),), normalize
         r_inner_rp = regionprops((resized_mask > 0).astype(np.uint8))[0]
         inner_features += tuple(r_inner_rp.moments_hu) + \
                           (r_inner_rp.eccentricity, r_inner_rp.solidity, r_inner_rp.extent) + \
-                          tuple(outer_rp.inertia_tensor_eigvals)
+                          tuple(r_inner_rp.inertia_tensor_eigvals) + (r_inner_rp.area,)
     else:
         inner_features = (0.0,) * len(outer_features)
-    return outer_features + inner_features
+    return outer_features + inner_features + (num_inner_regions,)
 
 
 @MakeFeature(
@@ -291,7 +297,7 @@ def orb_descriptor(gray_image):
 nuclear_features_returns = ['mean_radius', 'std_radius', 'std_kurtosis', 'nuclear_perimeter', 'num_nuclei', 'nuclei_to_tissue_ratio']
 
 
-# nuclear features  TODO test !!!
+# nuclear features
 @MakeFeature(nuclear_features_returns)
 def nuclear_features(mask, image, tissue_value=EPITHELIUM, map_values=((EPITHELIUM, 0), (LUMEN, 0))):
     if image.shape[2] == 3:  # assume RGB
@@ -328,24 +334,23 @@ def nuclear_features(mask, image, tissue_value=EPITHELIUM, map_values=((EPITHELI
     for nuclear_contour in nuclear_contours:
         if nuclear_contour.shape[0] <= 2 or nuclear_contour.ndim == 0 or nuclear_contour is None:
             continue  # skip nuclei that are missing
-        if previous_nuclear_contour is None or previous_nuclear_contour.shape[0] > 2 or previous_nuclear_contour.ndim != 0:
-            continue
+        radii.append(cv2.arcLength(nuclear_contour, True)/2/3.14159)
         # nuclei are not labelled strictly anticlockwise
         centroid = find_centroid(nuclear_contour)
         if len(previous_centroid) == 0:
             previous_centroid = find_centroid(previous_nuclear_contour)
             if len(previous_centroid) == 0:
+                previous_nuclear_contour = nuclear_contour
                 continue
         try:
             nuclear_perimeter += np.linalg.norm(np.array(centroid) -
                                                 np.array(previous_centroid), ord=2)
-        except ValueError as err:  # FIXME nuclear perimeter can sometimes have dimension 0 -- check reason for this
+        except ValueError as err:
             print(err)
             print(nuclear_perimeter)
             continue
         previous_nuclear_contour = nuclear_contour
         previous_centroid = centroid
-        radii.append(cv2.arcLength(nuclear_contour, True)/2/3.14159)
     if len(radii) == 0:
         return (0,)*len(nuclear_features_returns)
     return np.mean(radii), np.std(radii), kurtosis(radii), nuclear_perimeter, len(nuclear_contours), nuclei_to_tissue_ratio

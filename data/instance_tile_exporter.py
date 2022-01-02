@@ -21,7 +21,7 @@ class InstanceTileExporter:
     r"""Extract tiles centered around images component instances.
     If an instance is larger than the given tile size, multiple tiles per instance are extracted"""
 
-    def __init__(self, data_dir, slide_id, experiment_name=None, tile_size=1024, mpp=0.2,
+    def __init__(self, data_dir, slide_id, experiment_name=None, tile_size=None, mpp=None,
                  label_values=(('epithelium', 200), ('lumen', 250)), annotations_dirname=None, partial_id_match=False,
                  set_mpp=None):
         r"""
@@ -39,7 +39,6 @@ class InstanceTileExporter:
         self.slide_id = slide_id
         self.experiment_name = experiment_name
         self.tile_size = tile_size
-        self.mpp = mpp
         self.label_values = dict(label_values)
         self.annotations_dirname = annotations_dirname
         self.partial_id_match = partial_id_match
@@ -51,10 +50,15 @@ class InstanceTileExporter:
             annotations_path = Path(self.data_dir) / 'data' / (
                 annotations_dirname if annotations_dirname is not None else 'annotations') / self.experiment_name
         try:  # compatible openslide formats: {.tiff|.svs|.ndpi}
+            cases_dir = self.data_dir/'cases'
             self.slide_path = next(
                 chain(self.data_dir.glob(f'{self.slide_id}.tiff'), self.data_dir.glob(f'*/{self.slide_id}.tiff'),
                       self.data_dir.glob(f'{self.slide_id}.svs'), self.data_dir.glob(f'*/{self.slide_id}.svs'),
-                      self.data_dir.glob(f'{self.slide_id}.ndpi'), self.data_dir.glob(f'*/{self.slide_id}.ndpi'))
+                      self.data_dir.glob(f'{self.slide_id}.ndpi'), self.data_dir.glob(f'*/{self.slide_id}.ndpi'),
+                      cases_dir.glob(f'{self.slide_id}.tiff'), cases_dir.glob(f'*/{self.slide_id}.tiff'),
+                      cases_dir.glob(f'{self.slide_id}.svs'), cases_dir.glob(f'*/{self.slide_id}.svs'),
+                      cases_dir.glob(f'{self.slide_id}.ndpi'), cases_dir.glob(f'*/{self.slide_id}.ndpi'),
+                      cases_dir.glob(f'{self.slide_id}.isyntax'), cases_dir.glob(f'*/{self.slide_id}.isyntax'))
             )
         except StopIteration:
             if partial_id_match:
@@ -73,8 +77,10 @@ class InstanceTileExporter:
             self.annotation_path = next(annotations_path.glob(f'{self.slide_id}.json'))
         except StopIteration:
             raise FileNotFoundError(f"No annotation matching slide id: {slide_id}")
-        slide_opt = get_reader_options(False, False, args=(f'--mpp={mpp}',))
-        self.slide = make_wsi_reader(self.slide_path, slide_opt, set_mpp=set_mpp)
+        slide_opt = get_reader_options(False, False)
+        self.slide = make_wsi_reader(self.slide_path, slide_opt, set_mpp=set_mpp, openslide=True)
+        self.mpp = mpp or self.slide.mpp_x
+        self.slide.opt.mpp = self.mpp
         if annotations_dirname is not None:
             if experiment_name is not None:
                 contour_struct = read_annotations(self.data_dir, slide_ids=(self.slide_id,),
@@ -94,14 +100,15 @@ class InstanceTileExporter:
         self.center_crop = CenterCrop(self.tile_size)
 
     def export_tiles(self, layer: Union[str, int], save_dir: Union[str, Path], multitile_threshold=1,
-                     min_read_size=None, max_instances=inf, min_mask_fill=0.3, smoothing=100, dilate=30):
+                     min_read_size=None, max_instances=inf, min_mask_fill=0.05, smoothing=100, dilate=30, center=False,
+                     min_size_enforce='one-sided'):
         r"""
         :param multitile_threshold:
         :param layer: layer name of contours to extract images for
         :param save_dir: save directory for images
         :return:
         """
-        save_dir = Path(save_dir) / layer
+        save_dir = Path(save_dir)
         slide_dir = save_dir / self.slide_id
         save_dir.mkdir(exist_ok=True, parents=True)
         slide_dir.mkdir(exist_ok=True)
@@ -118,16 +125,19 @@ class InstanceTileExporter:
             elif self.tile_size:
                 min_size = (self.tile_size,) * 2
             else:
-                min_size = ()
+                min_size = None
             # FIXME doesn't work for mpp different from that of the zoom levels / but it works for patch_size=1024 mpp=1.0 and not for patch_size=512 mpp=1.0
             # TODO design it bottom-up instead of trying random things out
-            image = get_contour_image(contour, self.slide, min_size=min_size, mpp=self.mpp,  min_size_enforce='two-sided')
+            image = get_contour_image(contour, self.slide, min_size=min_size, mpp=self.mpp,  min_size_enforce=min_size_enforce)
             mask, components = masker.get_shaped_mask(i, shape=image.shape, smoothing=smoothing,
-                                                      scaling=self.mpp/self.slide.mpp_x, center=True)
+                                                      scaling=self.mpp/self.slide.mpp_x, center=center)
             mask = cv2.dilate(mask, np.ones((dilate, dilate)))  # pre-dilate to remove jagged boundary from low-res contour extraction
             x, y, w, h = cv2.boundingRect(components['parent_contour'])
             assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
-            images, masks = self.fit_to_size(image, mask, multitile_threshold, min_mask_fill)
+            if self.tile_size is not None:
+                images, masks = self.fit_to_size(image, mask, multitile_threshold, min_mask_fill)
+            else:
+                images, masks = [image], [mask]
             for j, (image, mask) in enumerate(zip(images, masks)):
                 assert image.shape[0:2] == mask.shape[0:2], "Image and mask must be of the same size"
                 name = f'{layer}_{int(x)}_{int(y)}_{int(w)}_{int(h)}' + '_' + ('' if len(images) == 1 else str(j))
@@ -146,7 +156,7 @@ class InstanceTileExporter:
                 'num_images': i
             }, tiles_file)
 
-    def fit_to_size(self, image, mask, multitile_threshold=1, min_mask_fill=0.3):
+    def fit_to_size(self, image, mask, multitile_threshold=1, min_mask_fill=0.05):
         r"""
         Divides up image and corresponding mask into tiles of equal size
         :param image:

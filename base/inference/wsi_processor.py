@@ -1,11 +1,14 @@
 from pathlib import Path
 from tempfile import TemporaryFile
-from functools import partial
 from random import shuffle
 import multiprocessing as mp
+from functools import partial
+from warnings import warn
 from os import remove
+from sys import version_info
 import json
 import warnings
+import math
 import numpy as np
 from imageio import imread
 from tqdm import tqdm
@@ -13,9 +16,14 @@ from skimage.transform import resize
 from openslide import OpenSlideUnsupportedFormatError, OpenSlideError
 import pyvips
 from base.utils.utils import segmap2img
-from data.images.wsi_reader import make_wsi_reader, add_reader_args, get_reader_options
+from data.images.wsi_reader import make_wsi_reader
 from annotation.annotation_builder import AnnotationBuilder
 from base.utils import debug
+
+# from tifffile import __version__ as tifffile_version
+# if version_info[1] < 7 and (int(tifffile_version.split('.')[0]) < 2021 or int(tifffile_version.split('.')[1]) < 7):
+#     warn("Using openslide reader for TIFF images")
+#     make_wsi_reader = partial(make_wsi_reader, openslide=True)
 
 
 def read_tile(locations, queue_out, filename, opt):
@@ -71,7 +79,7 @@ def read_tiles(locations, queue_out, filename0, filename1, opt):
         except OpenSlideError:  # some red tiles in images make script crash with error 'Cannot read raw tile'
             # OpenSlide has latching error semantics: once OpenSlideError is raised, all future operations on the
             # OpenSlide, other than close(), will also raise OpenSlideError.
-            # --> need to reinitialized slides when error is encountered
+            # --> need to reinitialize slides when error is encountered
             slide0, slide1 = make_wsi_reader(filename0, opt, opt.set_mpp), make_wsi_reader(filename1, opt, opt.set_mpp)
             if opt.force_base_level_read:
                 slide0.read_level, slide1.read_level = 0, 0
@@ -85,7 +93,7 @@ def read_tiles(locations, queue_out, filename0, filename1, opt):
         queue_out.put(None)
 
 
-def get_locations_from_tissue_mask(tissue_mask, tissue_mask_patch_size, base_level_patch_size, slide, threshold=0.3):
+def get_locations_from_tissue_mask(tissue_mask, tissue_mask_patch_size, base_level_patch_size, slide, threshold=0.05):
     r"""Find locations in tissue mask where tissue was detected and map them to original slide"""
     if len(set(tissue_mask.flatten().tolist())) != 2:
         raise ValueError("Loaded image is not a binary tissue mask")
@@ -141,7 +149,7 @@ class WSIProcessor:
         self.slide = make_wsi_reader(self.file_name, opt, set_mpp)  # not actually used for reading regions in extract_tiles
         self.shift_and_merge = shift_and_merge
         self.normalize_output = normalize_output
-        self.base_level_patch_size = round(self.opt.patch_size * self.slide.level_downsamples[self.slide.read_level])
+        self.base_level_patch_size = round(self.opt.patch_size * self.opt.mpp/self.slide.mpp[0])
         if tissue_mask is None:
             tile_read_errors = self.slide.find_tissue_locations(self.opt.tissue_threshold, self.opt.saturation_threshold)
             # find tissue locations where to apply function (H&E threshold isn't perfect but it seems to work for desired resolution)
@@ -149,13 +157,14 @@ class WSIProcessor:
                 tissue_locations = self.slide.tissue_locations
                 self.slide = make_wsi_reader(self.file_name, opt, set_mpp)
                 self.slide.tissue_locations = tissue_locations
+            self.tissue_mask = None
         else:
             self.tissue_mask = tissue_mask.astype(np.bool)
             self.tissue_mask_scaling, self.tissue_mask_patch_size = None, None
             if tissue_mask_info is None:
                 raise ValueError("Tissue mask information is missing")
-            self.tissue_mask_scaling = int(tissue_mask_info['level_downsamples'][tissue_mask_info['thumbnail_level']])
-            self.tissue_mask_patch_size = self.base_level_patch_size//self.tissue_mask_scaling
+            self.tissue_mask_scaling = tissue_mask_info['read_mpp']/tissue_mask_info['mpp'][0]
+            self.tissue_mask_patch_size = round(self.base_level_patch_size/self.tissue_mask_scaling)
             self.slide.tissue_locations = get_locations_from_tissue_mask(self.tissue_mask,
                                                                          self.tissue_mask_patch_size,
                                                                          self.base_level_patch_size,
@@ -208,11 +217,10 @@ class WSIProcessor:
                     slide1.read_level = 0
             read_level_patch_size = round(
                 self.opt.patch_size * self.opt.mpp / (slide0.mpp_x * slide0.level_downsamples[slide0.read_level]))
-
             for x, y in locations:
                 try:
                     tile0 = np.array(slide0.read_region((x, y), slide0.read_level, (read_level_patch_size,) * 2))[..., :3]
-                    tile0 = resize(tile0, (self.opt.patch_size,)*2, preserve_range=True).astype(np.uint8)
+                    tile0 = resize(tile0, (self.opt.patch_size,) * 2, preserve_range=True).astype(np.uint8)
                     if slide1 is not None:
                         tile1 = np.array(slide1.read_region((x, y), slide0.read_level, (read_level_patch_size,) * 2))[..., :3]
                         tile1 = resize(tile1, (self.opt.patch_size,) * 2, preserve_range=True).astype(np.uint8)
@@ -273,11 +281,12 @@ class WSIProcessor:
                         if not isinstance(output_tiles, (list, tuple)):
                             output_tiles = [output_tiles]  # one tile case
                         for output_tile, (x_, y_) in zip(output_tiles, input_coordinates):
-                            if self.slide.read_level != 0:
+                            if not math.isclose(self.opt.mpp, self.slide.mpp_x):
                                 output_tile = resize(output_tile, (self.base_level_patch_size,)*2,
                                                       preserve_range=True).astype(np.uint8)
                             if self.tissue_mask is not None:
-                                x_patch, y_patch = x_//self.tissue_mask_scaling, y_//self.tissue_mask_scaling
+                                x_patch, y_patch = round(x_/self.tissue_mask_scaling), \
+                                                   round(y_/self.tissue_mask_scaling)
                                 tissue_patch = self.tissue_mask[y_patch:self.tissue_mask_patch_size+y_patch,
                                                                 x_patch:self.tissue_mask_patch_size+x_patch]
                                 tissue_patch = resize(tissue_patch, (self.base_level_patch_size,)*2, 0)[..., np.newaxis]
@@ -330,11 +339,12 @@ class WSIProcessor:
                             if not isinstance(output_tiles, (list, tuple)):
                                 output_tiles = [output_tiles]  # one tile case
                             for output_tile, (x_, y_) in zip(output_tiles, input_coordinates):
-                                if self.slide.read_level != 0:
+                                if not math.isclose(self.opt.mpp, self.slide.mpp_x):
                                     output_tile = resize(output_tile, (self.base_level_patch_size,)*2,
                                                           preserve_range=True).astype(np.uint8)
                                 if self.tissue_mask is not None:
-                                    x_patch, y_patch = x_ // self.tissue_mask_scaling, y // self.tissue_mask_scaling
+                                    x_patch, y_patch = round(x_/self.tissue_mask_scaling), \
+                                                       round(y_/self.tissue_mask_scaling)
                                     tissue_patch = self.tissue_mask[y_patch:self.tissue_mask_patch_size + y_patch,
                                                                     x_patch:self.tissue_mask_patch_size + x_patch]
                                     tissue_patch = resize(tissue_patch, (self.base_level_patch_size,)*2, 0)[..., np.newaxis]
@@ -361,7 +371,7 @@ class WSIProcessor:
                     offset_tiles = self.extract_tiles(write_locations, str(prob_map_path), str(shifted_prob_map_path))
                     for x, y, input_tile, shifted_input_tile in tqdm(offset_tiles, total=len(write_locations)):
                         merged_tile = self.merge_tiles(input_tile, shifted_input_tile)
-                        if self.slide.read_level != 0:
+                        if not math.isclose(self.opt.mpp, self.slide.mpp_x):
                             merged_tile = resize(merged_tile, (self.base_level_patch_size,) * 2,
                                                  preserve_range=True).astype(np.uint8)
                         merged[y:y + self.base_level_patch_size, x:x + self.base_level_patch_size] = merged_tile
@@ -375,7 +385,6 @@ class WSIProcessor:
 
     @staticmethod
     def merge_tiles(mask0, mask1, overlap=0.5, window=None):
-        x, y = np.meshgrid(np.arange(mask0.shape[1]), np.arange(mask0.shape[0]))
         if window is None:
             def w(x, y):
                 r"""Line increase from 0 to 1 at overlap end, plateau at 1 in center,
@@ -400,7 +409,8 @@ class WSIProcessor:
                 return wx * wy
             window = w
         window = np.vectorize(window)
-        weights0 = np.tile(window(x, y)[..., np.newaxis], (1, 1, 3))
+        xx, yy = np.meshgrid(np.arange(mask0.shape[1]), np.arange(mask0.shape[0]))
+        weights0 = np.tile(window(xx, yy)[..., np.newaxis], (1, 1, 3))
         weights1 = np.ones_like(mask0) - weights0  # complementary, so w0(x, y) + w1(x, y) = 1
         mean_mask = (weights0 * mask0 / 255.0 + weights1 * mask1 / 255.0) / 2
         image = segmap2img(mean_mask)
