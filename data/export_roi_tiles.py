@@ -24,7 +24,8 @@ if __name__ == '__main__':
     parser.add_argument('--tiles_dirname', type=str, default='tiles')
     parser.add_argument('--stop_overwrite', action='store_true')
     parser.add_argument('-ds', '--debug_slide', default=None, action='append')
-    args = parser.parse_args()
+    parser.add_argument('--overwrite_qc', action='store_true')
+    args, unparsed = parser.parse_known_args()
     try:
         # get label directory
         dir_path = next(path for path in (args.data_dir/'data'/args.tiles_dirname).iterdir()

@@ -62,7 +62,7 @@ class ROITileExporter:
             'data_dir': str(data_dir)
         }, set_mpp=set_mpp)
         self.slide.opt.patch_size = self.tile_size
-        self.slide.find_tissue_locations(0.0, 0)
+        self.slide.find_tissue_locations(0.3, 20)
         self.original_tissue_locations = self.slide.tissue_locations
         assert self.original_tissue_locations, "Cannot have 0 tissue locations"
         self.contour_lib = read_annotations(self.data_dir, slide_ids=(self.slide_id,),
@@ -103,6 +103,7 @@ class ROITileExporter:
         tile_contours = tuple(contour for _, contour in sorted(zip(ordering, tile_contours), key=lambda oc: oc[0]))
         labels = tuple(label for _, label in sorted(zip(ordering, labels)))
         for contour, label in zip(tile_contours, labels):
+            # FIXME must paint in order of labelling epithelium and then lumen!!
             try:
                 mask = contour_to_mask(
                     contour, value=self.converter.label_value_map[label], shape=shape, mask=mask, mask_origin=mask_origin

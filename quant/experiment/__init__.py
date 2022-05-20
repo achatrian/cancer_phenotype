@@ -70,12 +70,13 @@ class BaseExperiment:
         Abstract method: saves result and evaluation
         """
 
-    @staticmethod
-    def format_parameters_key(parameters: NamedTuple):
+    def format_parameters_key(self, parameters: NamedTuple, preprocess_only=False):
         if not is_namedtuple(parameters):
             raise ValueError(f"Parameters must be a NamedTuple, not {type(parameters)}")
         parameters_key = ''
         for parameter, value in parameters._asdict().items():
+            if preprocess_only and parameter not in self.preprocess_parameters_names:
+                continue
             parameters_key += f'{parameter}:{value}'
         return parameters_key
 

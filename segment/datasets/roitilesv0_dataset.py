@@ -10,15 +10,15 @@ from base.datasets.base_dataset import BaseDataset, get_augment_seq, RandomCrop
 ia.seed(1)
 
 
-class ROITilesDataset(BaseDataset):
+class ROITilesV0Dataset(BaseDataset):
     r"""Dataset to train on output of data.roi_tile_extractor - multiple instances per image
     """
 
     def __init__(self, opt):
-        super(ROITilesDataset, self).__init__(opt)
+        super(ROITilesV0Dataset, self).__init__(opt)
         self.paths = []
         self.opt.data_dir = Path(self.opt.data_dir)
-        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split.json'  # what if I had wanted to use a different layer? TODO make roi_layer an option field
+        tiles_splits_path = self.opt.data_dir/'data'/'cross_validate'/'tiles_split_v0.json'  # what if I had wanted to use a different layer? TODO make roi_layer an option field
         with open(tiles_splits_path, 'r') as tiles_splits_file:
             tiles_splits = json.load(tiles_splits_file)
         assert tiles_splits['n_splits'] > 0, "Nonzero number of splits"
@@ -57,7 +57,7 @@ class ROITilesDataset(BaseDataset):
         return len(self.paths)
 
     def name(self):
-        return "ROITilesDataset"
+        return "ROITilesV0Dataset"
 
     def setup(self):
         pass

@@ -80,6 +80,7 @@ class AdvancedReader:
             print("Finding tissue tiles ...")
             tissue_locations = []
             self.stride = round(self.opt.patch_size * self.opt.mpp / (self.mpp_x * self.level_downsamples[self.read_level]))
+            assert self.stride == 1024  # TODO delete
             qc_sizes = (round(self.opt.patch_size * self.opt.mpp / (self.mpp_x * self.level_downsamples[self.qc_read_level])),) * 2  # size of read tiles at level qc_read_level
             xs = list(range(0, self.level_dimensions[0][0], self.stride))[:-1]  # dimensions = (width, height)
             ys = list(range(0, self.level_dimensions[0][1], self.stride))[:-1]
@@ -326,6 +327,7 @@ def get_reader_options(include_path=True, include_thresholds=True, args=()):
     if args:
         if isinstance(args, dict):
             args = tuple(f'--{key}={value}' for key, value in args.items())
+            args = ('--overwrite_qc',) + args
         opt, unknown = parser.parse_known_args(args)
     else:
         opt, unknown = parser.parse_known_args()

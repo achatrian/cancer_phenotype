@@ -5,7 +5,6 @@ from collections import namedtuple
 import warnings
 from copy import copy
 import numpy as np
-import pdb
 from scipy.sparse import csr_matrix, isspmatrix_csr
 import joblib as jl
 import pandas as pd
@@ -62,7 +61,7 @@ class MCLExperiment(BaseExperiment):
     def __init__(self, args):
         super().__init__(args)
         self.features, self.inliers = (None,) * 2
-        self.save_dir = self.args.data_dir / 'data' / 'experiments' / (self.name().lower().split('experiment')[0] + self.args.apply_label)
+        self.save_dir = self.args.data_dir / 'data' / 'experiments' / self.name().lower().split('experiment')[0]
         self.save_dir.mkdir(exist_ok=True, parents=True)
         # use json string with parameters values as experiment key
         parameters_args_container = {key: (value if type(value) in {str, int, float, bool} else str(value)) for
@@ -75,18 +74,20 @@ class MCLExperiment(BaseExperiment):
         self.results_key = self.results_key.replace(' ', '_')
         self.results_key = self.results_key.replace('{', '')
         self.results_key = self.results_key.replace('}', '')
-        self.results_dir = self.save_dir / 'results' if args.clustering_dir is None else args.clustering_dir / 'results'
+        self.results_dir = self.save_dir / 'results'
         self.run_results_dir = None  # alternative to h5 saving
         self.results_dir.mkdir(exist_ok=True, parents=True)
+        self.h5_results_file = None
         self.log = {'date': str(datetime.now())}
         self.som = None
         self.run_key = None
         self.clustering, self.clusters, self.matrix = (None,) * 3
         self.distributions = None
-        self.args = args
 
     def __del__(self):
         pass
+        # if self.h5_results_file is not None:
+        #     self.h5_results_file.close()  # ensure hdf5 file gets closed, to prevent corruption of its data
 
     @staticmethod
     def name():
@@ -110,12 +111,16 @@ class MCLExperiment(BaseExperiment):
         parser.add_argument('--train_fraction', type=float, default=0.7, help="fraction of dataset used to train rf for gleason prediction")
         parser.add_argument('--full_histograms', action='store_true', help="whether to normalize cluster histograms before grade classification")
         parser.add_argument('--labels_file', type=Path, default=None)
-        parser.add_argument('--clustering_dir', type=Path, default=None, help="read clustering from other dir when applying")
-        parser.add_argument('--no_cluster_grids', action='store_true')
-        parser.add_argument('--apply_label', type=str, default='')
         return parser
 
     def read_data(self):
+        # NB: one should be careful not to launch two processes that will write to the same results file, as multiple
+        # programmes writing into the file at the same time will damage it irreparably. adding the options key to the
+        # file adds a safeguard, but does not prevent damage in case multiple writers have the same options
+        self.h5_results_file = h5py.File(self.save_dir / 'results' / f'results_{self.results_key}.h5', mode='w',
+                                         libver='latest', swmr=True)
+        h5_results_group = self.h5_results_file.create_group(self.results_key)  # store args
+        # data clean-up; remove outliers
         features_file = self.args.data_dir / 'data' / 'features' / self.args.segmentation_experiment / self.args.features_filename
         try:
             features = pd.read_hdf(features_file.parent / f'single_key_{self.args.features_filename[:-3]}.h5', 'features')
@@ -180,11 +185,13 @@ class MCLExperiment(BaseExperiment):
             self.log.update({'outlier_removal': True, 'num_removed_outliers': n_before - n_after})
         else:
             self.log.update({'outlier_removal': False, 'num_removed_outliers': 0})
+        h5_results_group.create_dataset('features', data=np.array(features))
         self.features = features
         # read distance histograms
         distances_dir = self.args.data_dir / 'data' / 'features' / self.args.segmentation_experiment / 'relational'
         try:
-            self.distributions = pd.read_json(distances_dir/'distance_distributions.json')
+            with open(distances_dir/'distance_distributions.json', 'r') as distributions_file:
+                self.distributions = pd.read_json(distributions_file)
         except FileNotFoundError:
             raise FileNotFoundError("Run quant.cluster.get_spatial_statistics.py on dataset")
         self.distributions.index.rename('slide_id', inplace=True)
@@ -204,15 +211,11 @@ class MCLExperiment(BaseExperiment):
                 finetune_epochs=read_parameter_values(self.args, 'finetune_epochs')[0]
             )
         # train som
-
-        self.som = train_som(self.features, (parameters.map_size, parameters.map_size),
-                             self.args.clustering_dir or self.save_dir,
+        self.som = train_som(self.features, (parameters.map_size, parameters.map_size), self.save_dir,
                              parameters.rough_epochs, parameters.finetune_epochs)
-        np.save((self.args.clustering_dir or self.save_dir)/f'codebook_matrix_{self.format_parameters_key(parameters, True)}.npy',
-                self.som.codebook.matrix)  # for use with python 3.6 in apply.py when joblib format is different and cannot be loaded
         print(f"Codebook shape: {self.som.codebook.matrix.shape}")
 
-    def embed_in_fuzzy_sets(self, parameters, codebooks):
+    def embed_in_fuzzy_sets(self, parameters, codebooks, h5_iteration_group):
         tqdm.write("Computing codebooks embedding ...")
         try:
             self.matrix = np.load(self.run_results_dir / 'simplicial_matrix.npy')
@@ -222,19 +225,29 @@ class MCLExperiment(BaseExperiment):
                 warnings.simplefilter("ignore")
                 self.matrix = umap.umap_.fuzzy_simplicial_set(X=codebooks, n_neighbors=parameters.num_neighbors,
                                                               random_state=np.random.RandomState(0), metric='euclidean')[0]
+                # h5_iteration_group.create_dataset('simplicial_matrix', data=self.matrix.toarray())
                 np.save(self.run_results_dir / 'simplicial_matrix.npy', self.matrix.toarray())
 
-    def markov_cluster(self, parameters):
+    def markov_cluster(self, parameters, h5_iteration_group):
         tqdm.write("Performing Markov Clustering on the codebooks embedding ...")
         try:
-            self.clustering = jl.load(self.run_results_dir / 'clustering.joblib')
-            with open(self.run_results_dir / 'clusters.json', 'r') as clusters_file:
-                self.clusters = json.load(clusters_file)
-            if sum(len(c) for c in self.clusters) != self.matrix.shape[0]:
-                raise FileNotFoundError("Clusters overlap")
+            try:
+                self.clustering = jl.load(self.run_results_dir / 'clustering.joblib')
+                with open(self.run_results_dir / 'clusters.json', 'r') as clusters_file:
+                    self.clusters = json.load(clusters_file)
+                if sum(len(c) for c in self.clusters) != self.matrix.shape[0]:
+                    raise FileNotFoundError("Clusters overlap")
+            except FileNotFoundError:
+                self.clustering = h5_iteration_group['clustering']
+                jl.dump(self.clustering, self.run_results_dir / 'clustering.joblib')
+                self.clusters = [h5_iteration_group[f'cluster{i}'] for i in range(h5_iteration_group['num_clusters'])]
+                if sum(len(c) for c in self.clusters) != self.matrix.shape[0]:
+                    raise KeyError("Clusters overlap")
+                with open(self.run_results_dir / 'clusters.json', 'w') as clusters_file:
+                    json.dump(self.clusters, clusters_file)
             tqdm.write(
                 f"Loaded markov clustering parameters for {parameters.num_neighbors} neighbors and inflation={parameters.inflation}")
-        except FileNotFoundError:
+        except KeyError:
             # RUN MARKOV CLUSTERING
             tqdm.write(f"Running markov clustering for {parameters.num_neighbors} neighbors and inflation={parameters.inflation}")
             if not isspmatrix_csr(self.matrix):
@@ -242,14 +255,16 @@ class MCLExperiment(BaseExperiment):
             self.clustering = mc.run_mcl(self.matrix, inflation=parameters.inflation,
                                          pruning_frequency=self.args.mcl_pruning_frequency,
                                          verbose=True)  # NB mcl.prune breaks with scipy>0.13, see 04/10/2019 log # TODO is this still happening with newer mcl version?
+            h5_iteration_group.create_dataset('clustering', data=self.clustering.toarray())
             jl.dump(self.clustering, self.run_results_dir / 'clustering.joblib')
             self.clusters = mc.get_clusters(self.clustering)
-            self.clusters = self.trim_double_cluster_assignments(self.clusters)
+            self.clusters = self.trim_double_cluster_assignments(self.clusters, h5_iteration_group)
             assigned_nodes = set()  # get_clusters() can assign a node to two clusters
+            h5_iteration_group.create_dataset('num_clusters', data=len(self.clusters))
             with open(self.run_results_dir / 'clusters.json', 'w') as clusters_file:
                 json.dump(self.clusters, clusters_file)
 
-    def trim_double_cluster_assignments(self, clusters):
+    def trim_double_cluster_assignments(self, clusters, h5_iteration_group=None):
         r"""mc.get_clusters() assigns some codebooks to two clusters. Trim doubles away with this function"""
         clusters = [list(c) for c in clusters]  # so that repeated elements can be removed below
         assigned_nodes = set()  # get_clusters() can assign a node to two clusters
@@ -259,6 +274,8 @@ class MCLExperiment(BaseExperiment):
                     clusters[i].remove(ci)
                 assigned_nodes.add(ci)
             cluster_nodes = [int(n) for n in clusters[i]]
+            if h5_iteration_group is not None:
+                h5_iteration_group.create_dataset(f'cluster{i}', data=np.array(cluster_nodes))
         return clusters
 
     def set_run_properites(self, parameters):
@@ -276,11 +293,13 @@ class MCLExperiment(BaseExperiment):
         self.set_run_properites(parameters)
         if parameters is None:
             raise ValueError("parameters cannot be None")
+        h5_results_group = self.h5_results_file[self.results_key]
+        h5_iteration_group = h5_results_group.create_group(self.run_key)
         codebooks = self.som.codebook.matrix
         # simplicial set construction
-        self.embed_in_fuzzy_sets(parameters, codebooks)
+        self.embed_in_fuzzy_sets(parameters, codebooks, h5_iteration_group)
         # markov clustering
-        self.markov_cluster(parameters)
+        self.markov_cluster(parameters, h5_iteration_group)
         tqdm.write(f"Number of clusters: {len(self.clusters)}")
 
     def assign_membership(self, save_dir, parameters):
@@ -303,16 +322,8 @@ class MCLExperiment(BaseExperiment):
             cluster_assignment = pd.read_csv(save_dir / f'cluster_assignment_{self.format_parameters_key(parameters)}.csv',
                                              index_col=[0, 1]).squeeze()
             membership_histogram = np.histogram(cluster_assignment, bins=num_clusters, range=(0, num_clusters))[0]
-            # if len(cluster_assignment) != len(self.features) and self.args.clustering_dir:
-            #     cluster_assignment = pd.read_csv(self.results_dir / f'cluster_assignment_{self.format_parameters_key(parameters)}.csv',
-            #                                      index_col=[0, 1]).squeeze()
         except FileNotFoundError:
-            try:
-                nearest_neighbours = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(self.som.codebook.matrix)
-            except Exception:
-                codebook_matrix = np.load((self.args.clustering_dir or self.save_dir) /
-                                          f'codebook_matrix_{self.format_parameters_key(self.run_parameters, True)}.npy')
-                nearest_neighbours = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(codebook_matrix)
+            nearest_neighbours = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(self.som.codebook.matrix)
             distance, indices = nearest_neighbours.kneighbors(self.features)  # find nearest SOM codebook for each data-point
             # distance = distance.ravel()
             indices = indices.ravel()
@@ -332,12 +343,16 @@ class MCLExperiment(BaseExperiment):
 
     def compute_modularity(self, save_dir):
         try:
-            with open(save_dir / 'evaluation_results.json', 'r') as evaluation_results_file:
-                results = json.load(evaluation_results_file)
-            Q = results['modularity']
-        except FileNotFoundError:
+            try:
+                with open(save_dir / 'evaluation_results.json', 'r') as evaluation_results_file:
+                    results = json.load(evaluation_results_file)
+                Q = results['modularity']
+            except (FileNotFoundError, json.decoder.JSONDecodeError):
+                Q = self.h5_results_file[self.results_key][self.run_key]['modularity']
+        except KeyError:
             Q = mc.modularity(matrix=self.clustering,
                               clusters=self.clusters)  # this step is very long for low inflation
+            self.h5_results_file[self.results_key][self.run_key].create_dataset('modularity', data=Q)
         return Q
 
     def visualize_markov_clustering(self, save_path, parameters):
@@ -475,27 +490,27 @@ class MCLExperiment(BaseExperiment):
         plt.legend((r, b, g, y), ('6', '3+4', '4+3', '>=8'))
         plt.close()
         figure.savefig(save_dir/'features_tsne.png')
-        rfc, scores, rfc_importances, confusion_matrices = None, [], [], []
+        scores, rfc_importances, confusion_matrices = [], [], []
         try:
-            with open(save_dir/'best_model.joblib', 'rb') as model_file:
-                rfc = jl.load(model_file)
             scores = np.load(save_dir/'scores.npy')
             confusion_matrices = np.load(save_dir/'confusion_matrices.npy')
             feature_importances = np.load(save_dir/'feature_importances.npy')
-            comparison_labels = np.load(save_dir/'compar    ison_labels.npy')
+            comparison_labels = np.load(save_dir/'comparison_labels.npy')
             with open(save_dir/'misclassified.json', 'r') as misclassified_file:
                 misclassified = json.load(misclassified_file)
+            with open(save_dir/'best_model.joblib', 'rb') as model_file:
+                rfc = jl.load(model_file)
+            raise FileNotFoundError  # TODO run everything again with 3+4 / 4+3 distinction and then delete this line
         except FileNotFoundError:
             # default is -1 for predictions and -2 for ground truth, so train entries in each column arent't counted as equal
             predictions, ground_truth = np.ones((len(slides_histograms), 100)) * -1, np.ones((len(slides_histograms), 100)) * -2
             scores, models, confusion_matrices = [], [], []
             for i in range(100):
-                x_train, x_test, y_train, y_test, idx_train, idx_test = train_test_split(slides_histograms, labels_rfc,
-                                                                                         np.arange(len(slides_histograms)),
+                x_train, x_test, y_train, y_test, idx_train, idx_test = train_test_split(slide_features, labels_rfc,
+                                                                                         np.arange(len(slide_features)),
                                                                                          train_size=self.args.train_fraction)
-                if rfc is None:
-                    rfc = XGBClassifier(n_estimators=100, max_depth=40, subsample=0.99)
-                    rfc.fit(x_train, y_train)
+                rfc = XGBClassifier(n_estimators=1000, max_depth=40, subsample=0.9)
+                rfc.fit(x_train, y_train)
                 y_pred = rfc.predict(x_test)
                 predictions[idx_test, i] = np.array(y_pred)
                 ground_truth[idx_test, i] = np.array(y_test)
@@ -543,9 +558,7 @@ class MCLExperiment(BaseExperiment):
         membership_numbers = [np.sum(cluster_assignment == p) for p in np.unique(som_cluster_membership)]
         cluster_indices = list(p for p in np.unique(som_cluster_membership) if membership_numbers[p] > 10)
         np.save(save_dir / 'som_cluster_membership.npy', som_cluster_membership)
-        codebook_matrix = np.load((self.args.clustering_dir or self.save_dir) /
-                                  f'codebook_matrix_{self.format_parameters_key(self.run_parameters, True)}.npy')
-        cluster_centers = tuple(codebook_matrix[np.where(som_cluster_membership == i)[0]]
+        cluster_centers = tuple(self.som.codebook.matrix[np.where(som_cluster_membership == i)[0]]
                                 for i in cluster_indices)
         with open(save_dir/'cluster_centers.joblib', 'wb') as cluster_centers_file:
             jl.dump(cluster_centers, cluster_centers_file)  # TODO test
@@ -587,7 +600,6 @@ class MCLExperiment(BaseExperiment):
         results.update({
             'rf_average_gleason_prediction_score': float(scores['mean']),
             'rf_gleason_prediction_score': {k: float(v) for k, v in scores.items()},
-            'average_confusion_matrix': average_confusion_matrix.tolist(),
             'feature_importances': feature_importances.tolist(),
             'adjusted_mutual_information_score': float(adjusted_mutual_info_score(labels_rfc, comparison_labels)),
             'adjusted_rand_score': float(adjusted_rand_score(labels_rfc, comparison_labels)),
@@ -595,8 +607,7 @@ class MCLExperiment(BaseExperiment):
         })
         with open(self.run_results_dir / 'evaluation_results.json', 'w') as evaluation_results_file:
             json.dump(results, evaluation_results_file)
-        if not self.args.no_cluster_grids:
-            self.save_cluster_examples(cluster_assignment, som_cluster_membership, self.run_results_dir)
+        self.save_cluster_examples(cluster_assignment, som_cluster_membership, self.run_results_dir)
         return results
 
     def save_results(self, results):
@@ -627,22 +638,28 @@ class MCLExperiment(BaseExperiment):
         # load som
         best_som_path = self.save_dir / f'model_size:{best_parameters.map_size}_re:{best_parameters.rough_epochs}_fte{best_parameters.finetune_epochs}.joblib'
         self.som = jl.load(best_som_path)
+        self.h5_results_file[self.results_key].create_dataset('codebook_matrix',
+                                                              data=np.array(self.som.codebook.matrix))
         final_results_dir = self.save_dir / 'final_result'
         final_results_dir.mkdir(exist_ok=True, parents=True)
         cluster_assignment, membership_histogram, som_cluster_membership, num_clusters = \
             self.assign_membership(final_results_dir, best_parameters)
         Q = self.compute_modularity(final_results_dir)
         tqdm.write(f"Modularity for inflation={best_parameters.inflation} is {Q}.")
+        h5_results_group = self.h5_results_file[self.results_key]
+        h5_results_group.create_dataset('final_som_cluster_membership', data=som_cluster_membership)
         # save best markov clustering viz
         self.visualize_markov_clustering(final_results_dir, best_parameters)
+        self.h5_results_file[self.results_key].create_dataset('final_num_clusters', data=np.max(som_cluster_membership))
+        h5_results_group.create_dataset('final_simplicial_set_matrix', data=best_result['matrix'])
         for i, cluster_nodes in enumerate(best_result['clusters']):
             cluster_nodes = [int(n) for n in cluster_nodes]
+            h5_results_group.create_dataset(f'final_cluster{i}', data=np.array(cluster_nodes))
         print(f"Final number of clusters: {np.max(som_cluster_membership)}")
         self.log['num_clusters'] = int(np.max(som_cluster_membership))
         save_log(self.log, self.args.data_dir)
         # gather examples from each cluster
-        if not self.args.no_cluster_grids:
-            self.save_cluster_examples(cluster_assignment, som_cluster_membership, final_results_dir)
+        self.save_cluster_examples(cluster_assignment, som_cluster_membership, final_results_dir)
         print("Done!")
 
     def apply(self, parameters):  # apply clustering to dataset
@@ -655,8 +672,7 @@ class MCLExperiment(BaseExperiment):
             self.clusters = json.load(clusters_file)
         self.clusters = self.trim_double_cluster_assignments(self.clusters)
         # load som
-        best_som_path = (self.args.clustering_dir or self.save_dir) \
-                        / f'model_size:{parameters.map_size}_re:{parameters.rough_epochs}_fte{parameters.finetune_epochs}.joblib'
+        best_som_path = self.save_dir / f'model_size:{parameters.map_size}_re:{parameters.rough_epochs}_fte{parameters.finetune_epochs}.joblib'
         self.som = jl.load(best_som_path)
         cluster_assignment, membership_histogram, som_cluster_membership, num_clusters = \
             self.assign_membership(dataset_savedir, parameters)
@@ -686,8 +702,7 @@ class MCLExperiment(BaseExperiment):
         with open(dataset_savedir/'evaluation_results.json', 'w') as evaluation_results_file:
             json.dump(results, evaluation_results_file)
         # gather examples from each cluster
-        if not self.args.no_cluster_grids:
-            self.save_cluster_examples(cluster_assignment, som_cluster_membership, dataset_savedir)
+        self.save_cluster_examples(cluster_assignment, som_cluster_membership, dataset_savedir)
         print("Done!")
 
 

@@ -9,7 +9,7 @@ from scipy.spatial.distance import jensenshannon
 
 
 if __name__ == '__main__':
-    features_dir = Path('/well/rittscher/projects/ProMPT/data/features/combined_mpp1.0_normal_nuclei_circles')
+    features_dir = Path('/well/rittscher/projects/ProMPT/data/features/combined_mpp1.0_normal_nuclei_circles_good_nuc')
     features_paths = list(features_dir.glob('*.json'))
     master_list = pd.read_excel('/well/rittscher/projects/ProMPT/cases/ProMPT_master_list.xlsx', sheet_name='cases')
     master_list = master_list.set_index('SpecimenIdentifier')

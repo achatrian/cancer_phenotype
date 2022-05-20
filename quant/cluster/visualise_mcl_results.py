@@ -9,6 +9,7 @@ import numpy as np
 from quant.utils import to_num
 
 
+
 def make_grids_and_plot_heatmap(evaluation_results, x_param, y_param, z_param, ax=None, fig=None, **fixed_parameters):
     x_param_values = sorted(set(er[x_param] for er in evaluation_results.values()))
     y_param_values = sorted(set(er[y_param] for er in evaluation_results.values()))
@@ -48,14 +49,19 @@ def make_grids_and_plot_heatmap(evaluation_results, x_param, y_param, z_param, a
     ax.set_xlabel(x_param), ax.set_ylabel(y_param), ax.set_title(z_param)
     ax.set_xticks(np.arange(len(x_param_values))), ax.set_yticks(np.arange(len(y_param_values)))
     ax.set_xticklabels(x_param_values), ax.set_yticklabels(y_param_values)
-    ax.set_title(f'{z_param} - ' + ''.join([f'{k}={v}' for k, v in fixed_parameters.items()]))
+    title = f'{z_param} - ' + ''.join([f'{k}={v}' for k, v in fixed_parameters.items()])
+    if len(title) > 30:
+        title = f'{z_param} - \n' + ''.join([f'{k}={v}' for k, v in fixed_parameters.items()])
+    ax.set_title(title)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=Path, help="Directory where data is stored")
     parser.add_argument('--experiment', type=str, help="Experiment type - used to load desired experiment class")
+    parser.add_argument('--font_size', type=int, default=20)
     args = parser.parse_args()
+    plt.rc('font', **{'family': 'normal', 'weight': 'normal', 'size': args.font_size})  # set global font size
     results_dir = args.data_dir / 'data' / 'experiments' / f'{args.experiment}' / 'results'
     visual_result_dir = args.data_dir / 'data' / 'experiments' / f'{args.experiment}' / 'results_viz'
     visual_result_dir.mkdir(exist_ok=True, parents=True)
@@ -70,7 +76,7 @@ if __name__ == '__main__':
         parameters = {n: v for n, v in zip(parameter_names, parameters_values)}
         try:
             with open(result_path/'evaluation_results.json', 'r') as evaluation_file:
-               evaluation_result = json.load(evaluation_file)
+                evaluation_result = json.load(evaluation_file)
         except FileNotFoundError:
             continue
         evaluation_result.update(parameters)

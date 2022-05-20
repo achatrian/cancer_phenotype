@@ -18,9 +18,9 @@ r"""Script for running sequentially a grid search on an experiment over an arbit
 def grid_search(experiment, parameters=None, level=0, shuffle_values=False):
     r"""Function initiating one level of a for loop, corresponding to one parameter in the grid search"""
     if parameters is None:
-        Parameters = namedtuple('Parameters', experiment.parameters_names,
-                                defaults=[None]*len(experiment.parameters_names))
-        parameters = Parameters()
+        Parameters = namedtuple('Parameters', experiment.parameters_names)
+                              #  defaults=[None]*len(experiment.parameters_names))
+        parameters = Parameters(*[None]*(len(experiment.parameters_names)))
     if level < len(experiment.parameters_names):
         # levels 0 to P - 1
         parameter = experiment.parameters_names[level]  # index error if there are no more parameters to assign
@@ -49,10 +49,10 @@ def grid_search(experiment, parameters=None, level=0, shuffle_values=False):
 # TODO merge this function and above and make preprocess search conditional on having any preprocessing parameters
 def preprocess_grid_search(experiment, parameters=None, level=0, shuffle_values=False):
     if parameters is None:
-        Parameters = namedtuple('Parameters', experiment.preprocess_parameters_names + experiment.parameters_names,
-                                defaults=[None] * (len(experiment.preprocess_parameters_names) + len(
-                                             experiment.parameters_names)))
-        parameters = Parameters()
+        Parameters = namedtuple('Parameters', experiment.preprocess_parameters_names + experiment.parameters_names)
+        #defaults=[None] * (len(experiment.preprocess_parameters_names) + len(
+        #    experiment.parameters_names)))
+        parameters = Parameters(*[None]*(len(experiment.preprocess_parameters_names) + len(experiment.parameters_names)))
         # levels 0 to PP - 1
     if level < len(experiment.preprocess_parameters_names):
         parameter = experiment.preprocess_parameters_names[level]

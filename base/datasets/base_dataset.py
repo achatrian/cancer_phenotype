@@ -127,6 +127,8 @@ def get_augment_seq(augment_level):
     def sometimes(aug):
         return iaa.Sometimes(0.5, aug)
 
+    addhue = iaa.AddToHueAndSaturation((-20, 20))
+    addhue.backend = ''  # prevents failure in torch.dataloader TODO test
     if augment_level == 1:
         seq = iaa.Sequential(
             [
@@ -270,7 +272,7 @@ def get_augment_seq(augment_level):
                             iaa.Invert(0.1, per_channel=True),  # invert color channels
                             iaa.Add((-30, 30), per_channel=0.5),
                             # change brightness of images (by -10 to 10 of original value)
-                            iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
+                            addhue,  # change hue and saturation
                             # either change the brightness of the whole images (sometimes
                             # per channel) or change the brightness of subareas
                             iaa.LinearContrast((0.5, 2.0), per_channel=0.5),
@@ -343,7 +345,7 @@ def get_augment_seq(augment_level):
                                 iaa.Invert(0.05, per_channel=True),  # invert color channels
                                 iaa.Add((-10, 10), per_channel=0.5),
                                 # change brightness of images (by -10 to 10 of original value)
-                                iaa.AddToHueAndSaturation((-20, 20)),  # change hue and saturation
+                                addhue,  # change hue and saturation
                                 # either change the brightness of the whole images (sometimes
                                 # per channel) or change the brightness of subareas
                                 iaa.OneOf([

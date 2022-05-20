@@ -7,11 +7,11 @@ from numpy import array
 
 
 if __name__ == '__main__':
-    TARGET_N = 1500
-    master_list_path = Path('/mnt/rescomp/projects/ProMPT/ProMPT_master_list.xlsx')
+    TARGET_N = 2000
+    master_list_path = Path('/mnt/rescomp/projects/ProMPT/data/documents/ProMPT_master_list.xlsx')
     master_list = pd.read_excel(master_list_path)
     slides_list = pd.read_excel(master_list_path, sheet_name='slides')
-    with open('/mnt/rescomp/projects/ProMPT_data/last_biopsy_rp_pairs.json', 'r') as pairs_file:
+    with open('/mnt/rescomp/projects/ProMPT/data/last_biopsy_rp_pairs.json', 'r') as pairs_file:
         last_biopsy_rp_pairs = json.load(pairs_file)
     pairs = list(pair_obj['cases'] for pair_obj in last_biopsy_rp_pairs)
     pairs_dict = dict(pairs)
@@ -81,7 +81,7 @@ if __name__ == '__main__':
         plt.title('errors')
         plt.show()
     sampled_cases = pd.concat(sampled)
-    sampled_cases.to_excel('/mnt/rescomp/users/achatrian/ProMPT_biopsy_vs_rp_cases_sample.xlsx')
+    sampled_cases.to_excel('/mnt/rescomp/users/achatrian/ProMPT_biopsy_vs_rp_cases_sample2.xlsx')
     sampled_gleason_fractions = sampled_cases.groupby('gleason_label').size().to_frame().squeeze()/len(sampled_cases)
     print("Gleason fractions full data:")
     print(gleason_fractions)

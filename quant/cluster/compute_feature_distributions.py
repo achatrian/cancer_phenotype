@@ -16,8 +16,8 @@ r"Compute distribution of extracted features"
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--features_dir', type=Path, default=Path('/well/rittscher/projects/TCGA_prostate/TCGA/data/features/combined_mpp1.0_normal_nuclei_circles'))
-    parser.add_argument('--num_bins', type=int, default=15)
+    parser.add_argument('--features_dir', type=Path, default=Path('/well/rittscher/projects/TCGA_prostate/TCGA/data/features/combined_mpp1.0_normal_nuclei_circles_good_nuc'))
+    parser.add_argument('--num_bins', type=int, default=100)
     args = parser.parse_args()
     features_paths = list(args.features_dir.glob('*.json'))
     slides_ids = []

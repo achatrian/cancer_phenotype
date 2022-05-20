@@ -94,7 +94,7 @@ if __name__ == '__main__':
     if opt.debug_slide is not None and len(opt.debug_slide) > 0:
         image_paths = [path for path in image_paths if path.with_suffix('').name in opt.debug_slide]
         if len(image_paths) == 0:
-            raise ValueError(f"No slides in data dir match debug ids: {opt.slide_id}")
+            raise ValueError(f"No slides in data dir match debug ids: {opt.debug_slide}")
     print(f"{len(image_paths)} images to process (extensions: {set(p.suffix for p in image_paths)})")
     if len(image_paths) == 0:
         print("Hint: check --image_suffix and --recursive_search")
